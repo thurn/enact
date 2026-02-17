@@ -10,11 +10,11 @@ connected hierarchy.
 An unreferenced document is invisible to agents. It won't be discovered
 regardless of its content quality.
 
-## Directory-Per-Document Rule
+## No Loose Files Under `docs/`
 
-No loose documents directly under `docs/` except `index.md`. Every document gets
-its own directory, even if there is only one file in it. This ensures each topic
-has a natural place for future expansion without restructuring.
+No loose documents directly under `docs/` except `index.md`. Documents live in
+topic directories. Multiple related docs can share a directory — the rule is
+about keeping `docs/` clean, not requiring a separate directory per document.
 
 ## Structure
 
@@ -23,7 +23,7 @@ project/
   docs/
     index.md                  # Root index (only file directly under docs/)
     architecture/
-      architecture.md         # Own directory, even for a single doc
+      architecture.md         # Topic directory (can hold one or many docs)
     api/
       api.md                  # Sub-index for API docs, referenced from index.md
       auth.md                 # Referenced from api.md
@@ -66,7 +66,7 @@ following the rules in [writing-descriptions.md](writing-descriptions.md).
 ## Rules
 
 1. **Root index required**: Every `docs/` directory has an `index.md`
-2. **Directory-per-document**: No loose files under `docs/` except `index.md`
+2. **No loose files**: No loose files under `docs/` except `index.md`
 3. **Sub-indexes use descriptive names**: `api/api.md` not `api/index.md`
 4. **Every doc referenced**: Each document appears in exactly one parent with a
    description
@@ -83,7 +83,7 @@ following the rules in [writing-descriptions.md](writing-descriptions.md).
 After any documentation change:
 
 - [ ] New docs have an entry in their parent with a description
-- [ ] New docs are in their own directory (not loose under `docs/`)
+- [ ] New docs are in a topic directory (not loose under `docs/`)
 - [ ] Deleted docs have been removed from all parents
 - [ ] Each entry describes what's inside and when to read it
 - [ ] No document is more than two levels from the root index

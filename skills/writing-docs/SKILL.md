@@ -82,15 +82,15 @@ See [writing-descriptions.md](writing-descriptions.md) for detailed guidance.
 
 ## Document Hierarchy
 
-No loose documents directly under `docs/` except `index.md`. Every document gets
-its own directory, even if there is only one file.
+No loose documents directly under `docs/` except `index.md`. Documents live in
+topic directories, and multiple related docs can share a directory.
 
 ```
 project/
   docs/
     index.md                  # Root index (only file at this level)
     architecture/
-      architecture.md         # Own directory, even for a single doc
+      architecture.md         # Topic directory (can hold one or many docs)
     api/
       api.md                  # Sub-index, referenced from index.md
       auth.md                 # Referenced from api.md
@@ -107,7 +107,7 @@ Rules: root index required, max two levels deep, sub-indexes when a topic has
 |------|--------|
 | Token budget | Main doc under 500 lines; split beyond that |
 | References | Markdown links; one level deep; no nested chains |
-| Directory rule | Every doc in its own directory; no loose files under `docs/` |
+| Directory rule | No loose files directly under `docs/`; group in topic dirs |
 | Long files | TOC at top for files >100 lines |
 | File naming | Descriptive (`form_validation.md`, not `doc2.md`) |
 | Paths | Forward slashes only (`reference/guide.md`) |
@@ -122,7 +122,7 @@ Rules: root index required, max two levels deep, sub-indexes when a topic has
 | Mistake | Fix |
 |---------|-----|
 | Orphaned docs | Add to parent immediately on creation |
-| Loose files under `docs/` | Move into own directory |
+| Loose files under `docs/` | Move into a topic directory |
 | Vague descriptions ("see docs") | State what's inside and when to read |
 | Nested references (A->B->C) | Reference all files from overview, one level deep |
 | Verbose explanations | Remove what the agent already knows |
