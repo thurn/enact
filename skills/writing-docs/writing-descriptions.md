@@ -15,36 +15,40 @@ Two required components:
 
 ## Format
 
+Use a markdown link followed by a colon and description:
+
 ```markdown
-- doc-name.md: [What it covers]. [When to read it].
+- [doc-name.md](topic/doc-name.md): [What it covers]. [When to read it].
 ```
 
 ### Good Examples
 
 ```markdown
-- progressive-disclosure.md: Patterns for splitting content across files so
-  agents load only what's needed. Read when organizing multi-file documentation
-  exceeding 500 lines.
+- [progressive-disclosure.md](progressive-disclosure/progressive-disclosure.md):
+  Patterns for splitting content across files so agents load only what's needed.
+  Read when organizing multi-file documentation exceeding 300 lines.
 
-- billing-api.md: Complete endpoint reference for the billing API including
-  authentication, webhooks, and error codes. Read when implementing or debugging
-  billing features.
+- [billing-api.md](api/billing-api.md): Complete endpoint reference for the
+  billing API including authentication, webhooks, and error codes. Read when
+  implementing or debugging billing features.
 
-- migration-guide.md: Step-by-step database migration procedure with rollback
-  instructions. Read before running any schema migration.
+- [migration-guide.md](guides/migration-guide.md): Step-by-step database
+  migration procedure with rollback instructions. Read before running any
+  schema migration.
 ```
 
 ### Bad Examples
 
 ```markdown
 # Too vague - doesn't say what's inside
-- progressive-disclosure.md: Documentation patterns.
+- [progressive-disclosure.md](progressive-disclosure/progressive-disclosure.md):
+  Documentation patterns.
 
 # No trigger - doesn't say when to read
-- billing-api.md: Billing API reference.
+- [billing-api.md](api/billing-api.md): Billing API reference.
 
 # Restates the filename - adds zero information
-- migration-guide.md: Guide for migrations.
+- [migration-guide.md](guides/migration-guide.md): Guide for migrations.
 ```
 
 ## Choosing Key Terms

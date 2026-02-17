@@ -13,27 +13,31 @@ Unread files cost zero context tokens.
 ## Pattern 1: High-Level Guide with References
 
 The main doc provides overview and quick start. Separate files hold detailed
-reference material.
+reference material. Each document lives in its own directory.
 
 ```
 project/
   docs/
-    index.md              # Overview + quick start + references to detail
-    reference.md          # Detailed API reference
-    examples.md           # Usage examples
-    advanced.md           # Advanced features
+    index.md                  # Overview + quick start + references to detail
+    reference/
+      reference.md            # Detailed API reference
+    examples/
+      examples.md             # Usage examples
+    advanced/
+      advanced.md             # Advanced features
 ```
 
-In the main doc, reference each file with a description:
+In the main doc, reference each file with a markdown link and description:
 
 ```markdown
-- reference.md: Complete method signatures and parameters for the data
-  processing API.
-- examples.md: Common usage patterns with runnable code.
-- advanced.md: Caching, batching, and webhook configuration.
+- [reference.md](reference/reference.md): Complete method signatures and
+  parameters for the data processing API.
+- [examples.md](examples/examples.md): Common usage patterns with runnable code.
+- [advanced.md](advanced/advanced.md): Caching, batching, and webhook
+  configuration.
 ```
 
-Agents load reference.md, examples.md, or advanced.md only when needed.
+Agents load referenced files only when needed.
 
 ## Pattern 2: Domain-Specific Organization
 
@@ -45,9 +49,9 @@ project/
   docs/
     index.md
     reference/
-      finance.md          # Revenue, billing metrics
-      sales.md            # Pipeline, opportunities
-      product.md          # Usage analytics
+      finance.md              # Revenue, billing metrics
+      sales.md                # Pipeline, opportunities
+      product.md              # Usage analytics
 ```
 
 The index references each domain file with a description of its contents. When a
@@ -63,13 +67,14 @@ Show basic content inline. Reference advanced content for specific scenarios.
 Use docx-js for new documents. Basic usage:
 [inline code example]
 
-For tracked changes (redline markup rules and OOXML change-tracking format),
-see redlining.md.
+For tracked changes (redline markup and OOXML change-tracking format), see
+[redlining.md](redlining/redlining.md).
 
-For OOXML internals (raw XML structure and namespace reference), see ooxml.md.
+For OOXML internals (raw XML structure and namespace reference), see
+[ooxml.md](ooxml/ooxml.md).
 ```
 
-Agents read redlining.md or ooxml.md only when the user needs those features.
+Agents read the linked files only when the user needs those features.
 
 ## Rules
 

@@ -29,8 +29,8 @@ Unreferenced docs are invisible to agents. The basic pattern:
 already have. Challenge each paragraph: "Does this justify its token cost?"
 
 **Progressive disclosure**: The overview file points to detail files that agents
-load on demand. Unread files cost zero tokens. See progressive-disclosure.md for
-splitting patterns.
+load on demand. Unread files cost zero tokens. See
+[progressive-disclosure.md](progressive-disclosure.md) for splitting patterns.
 
 **One level deep**: Reference all files directly from the overview. Avoid chains
 (A references B references C) because agents may partially read nested files,
@@ -38,6 +38,27 @@ missing content not near the top.
 
 **Consistent terminology**: Pick one term per concept and use it everywhere.
 Don't alternate between "endpoint/URL/route" or "field/element/control."
+
+## Linking to Documents
+
+Use **markdown links** `[file.md](path/to/file.md)` when referencing documents.
+This is the format Anthropic recommends for progressive disclosure. Claude
+recognizes markdown links as structured file references and reads the target on
+demand when the content becomes relevant.
+
+**In index entries** (description follows the link):
+
+```markdown
+- [architecture.md](architecture/architecture.md): System architecture overview
+  covering service boundaries and data flow. Read when onboarding or planning
+  cross-service features.
+```
+
+**In prose** (inline reference):
+
+```markdown
+For splitting patterns, see [progressive-disclosure.md](progressive-disclosure.md).
+```
 
 ## Writing Descriptions
 
@@ -49,38 +70,44 @@ Two required components:
 
 ```markdown
 # Good: specific content + trigger
-- billing-api.md: Complete endpoint reference for the billing API including
-  auth, webhooks, and error codes. Read when implementing or debugging billing
-  features.
+- [billing-api.md](api/billing-api.md): Complete endpoint reference for the
+  billing API including auth, webhooks, and error codes. Read when implementing
+  or debugging billing features.
 
 # Bad: vague, no trigger
-- billing-api.md: API reference.
+- [billing-api.md](api/billing-api.md): API reference.
 ```
 
-See writing-descriptions.md for detailed guidance and examples.
+See [writing-descriptions.md](writing-descriptions.md) for detailed guidance.
 
 ## Document Hierarchy
+
+No loose documents directly under `docs/` except `index.md`. Every document gets
+its own directory, even if there is only one file.
 
 ```
 project/
   docs/
-    index.md          # Root index - references all top-level docs
-    architecture.md   # Referenced from index.md with description
+    index.md                  # Root index (only file at this level)
+    architecture/
+      architecture.md         # Own directory, even for a single doc
     api/
-      api.md          # Sub-index, referenced from docs/index.md
-      auth.md         # Referenced from api.md
-      billing.md      # Referenced from api.md
+      api.md                  # Sub-index, referenced from index.md
+      auth.md                 # Referenced from api.md
+      billing.md              # Referenced from api.md
 ```
 
 Rules: root index required, max two levels deep, sub-indexes when a topic has
-3+ children. Full details in document-hierarchy.md.
+3+ children. Full details in
+[document-hierarchy.md](document-hierarchy.md).
 
 ## Quick Reference
 
 | Rule | Detail |
 |------|--------|
 | Token budget | Main doc under 500 lines; split beyond that |
-| References | One level deep from overview; no nested chains |
+| References | Markdown links; one level deep; no nested chains |
+| Directory rule | Every doc in its own directory; no loose files under `docs/` |
 | Long files | TOC at top for files >100 lines |
 | File naming | Descriptive (`form_validation.md`, not `doc2.md`) |
 | Paths | Forward slashes only (`reference/guide.md`) |
@@ -88,28 +115,31 @@ Rules: root index required, max two levels deep, sub-indexes when a topic has
 | Deleted docs | Remove all references |
 | Descriptions | Specific content + when to read; never vague |
 | Terminology | One term per concept, consistent throughout |
+| Link format | `[file.md](path)` for refs; `@path` only in CLAUDE.md |
 
 ## Common Mistakes
 
 | Mistake | Fix |
 |---------|-----|
 | Orphaned docs | Add to parent immediately on creation |
+| Loose files under `docs/` | Move into own directory |
 | Vague descriptions ("see docs") | State what's inside and when to read |
 | Nested references (A->B->C) | Reference all files from overview, one level deep |
 | Verbose explanations | Remove what the agent already knows |
 | Inconsistent terms | Pick one term per concept; grep to verify |
 | No TOC on long files | Add TOC at top for files >100 lines |
+| Using `@` in docs | Reserve for CLAUDE.md; use markdown links in docs |
 
 ## Supporting Documents
 
-- progressive-disclosure.md: Patterns for splitting content across files so
-  agents load only what's needed. Read when organizing multi-file documentation
-  exceeding ~300 lines.
+- [progressive-disclosure.md](progressive-disclosure.md): Patterns for splitting
+  content across files so agents load only what's needed. Read when organizing
+  multi-file documentation exceeding ~300 lines.
 
-- writing-descriptions.md: How to write descriptions for document references and
-  index entries. Read when writing index entries or any reference that needs a
-  discovery description.
+- [writing-descriptions.md](writing-descriptions.md): How to write descriptions
+  for document references and index entries. Read when writing index entries or
+  any reference that needs a discovery description.
 
-- document-hierarchy.md: How to structure `docs/index.md` and nested document
-  trees with enforcement rules. Read when setting up new documentation or
-  reorganizing existing docs.
+- [document-hierarchy.md](document-hierarchy.md): How to structure `docs/index.md`
+  and nested document trees with enforcement rules. Read when setting up new
+  documentation or reorganizing existing docs.

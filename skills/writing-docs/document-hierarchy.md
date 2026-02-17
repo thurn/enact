@@ -10,21 +10,28 @@ connected hierarchy.
 An unreferenced document is invisible to agents. It won't be discovered
 regardless of its content quality.
 
+## Directory-Per-Document Rule
+
+No loose documents directly under `docs/` except `index.md`. Every document gets
+its own directory, even if there is only one file in it. This ensures each topic
+has a natural place for future expansion without restructuring.
+
 ## Structure
 
 ```
 project/
   docs/
-    index.md              # Root index - references all top-level docs
-    architecture.md       # Referenced from index.md
+    index.md                  # Root index (only file directly under docs/)
+    architecture/
+      architecture.md         # Own directory, even for a single doc
     api/
-      api.md              # Sub-index for API docs, referenced from index.md
-      auth.md             # Referenced from api.md
-      billing.md          # Referenced from api.md
+      api.md                  # Sub-index for API docs, referenced from index.md
+      auth.md                 # Referenced from api.md
+      billing.md              # Referenced from api.md
     guides/
-      guides.md           # Sub-index for guides, referenced from index.md
-      setup.md            # Referenced from guides.md
-      deployment.md       # Referenced from guides.md
+      guides.md               # Sub-index for guides, referenced from index.md
+      setup.md                # Referenced from guides.md
+      deployment.md           # Referenced from guides.md
 ```
 
 Sub-indexes use descriptive filenames matching their directory (e.g.,
@@ -32,41 +39,43 @@ Sub-indexes use descriptive filenames matching their directory (e.g.,
 
 ## Index Format
 
-Each index references its children with descriptions following the rules in
-writing-descriptions.md.
+Each index references its children using markdown links with descriptions,
+following the rules in [writing-descriptions.md](writing-descriptions.md).
 
 ```markdown
 # Project Documentation
 
 ## Architecture
 
-- architecture.md: System architecture overview covering service boundaries,
-  data flow, and deployment topology. Read when onboarding, planning
-  cross-service features, or debugging inter-service issues.
+- [architecture.md](architecture/architecture.md): System architecture overview
+  covering service boundaries, data flow, and deployment topology. Read when
+  onboarding, planning cross-service features, or debugging inter-service issues.
 
 ## API Reference
 
-- api/api.md: Sub-index for all API documentation covering auth, billing, and
-  user endpoints. Read when working on any API task.
+- [api.md](api/api.md): Sub-index for all API documentation covering auth,
+  billing, and user endpoints. Read when working on any API task.
 
 ## Guides
 
-- guides/guides.md: Sub-index for operational guides including setup,
-  deployment, and troubleshooting. Read when performing ops tasks or onboarding.
+- [guides.md](guides/guides.md): Sub-index for operational guides including
+  setup, deployment, and troubleshooting. Read when performing ops tasks or
+  onboarding.
 ```
 
 ## Rules
 
 1. **Root index required**: Every `docs/` directory has an `index.md`
-2. **Sub-indexes use descriptive names**: `api/api.md` not `api/index.md`
-3. **Every doc referenced**: Each document appears in exactly one parent with a
+2. **Directory-per-document**: No loose files under `docs/` except `index.md`
+3. **Sub-indexes use descriptive names**: `api/api.md` not `api/index.md`
+4. **Every doc referenced**: Each document appears in exactly one parent with a
    description
-4. **Sub-indexes for groups**: Create a sub-index when a topic has 3+ child docs
-5. **Max two levels**: `docs/index.md` -> `topic/topic.md` -> `topic/detail.md`
+5. **Sub-indexes for groups**: Create a sub-index when a topic has 3+ child docs
+6. **Max two levels**: `docs/index.md` -> `topic/topic.md` -> `topic/detail.md`
    — no deeper
-6. **Create reference on creation**: When you write a new doc, immediately add
+7. **Create reference on creation**: When you write a new doc, immediately add
    it to the parent
-7. **Remove reference on deletion**: When you delete a doc, remove it from all
+8. **Remove reference on deletion**: When you delete a doc, remove it from all
    parents
 
 ## Enforcement Checklist
@@ -74,6 +83,7 @@ writing-descriptions.md.
 After any documentation change:
 
 - [ ] New docs have an entry in their parent with a description
+- [ ] New docs are in their own directory (not loose under `docs/`)
 - [ ] Deleted docs have been removed from all parents
 - [ ] Each entry describes what's inside and when to read it
 - [ ] No document is more than two levels from the root index
