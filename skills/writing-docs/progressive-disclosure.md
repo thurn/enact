@@ -64,11 +64,12 @@ Show basic content inline. Reference advanced content for specific scenarios.
 ```markdown
 ## Creating documents
 
-Use docx-js for new documents. Basic usage:
-[inline code example]
+Use docx-js for new documents. The `createDocument()` function in
+`src/documents.ts` handles initialization and returns a `Document`
+handle for further operations.
 
-For tracked changes (redline markup and OOXML change-tracking format), see
-[redlining.md](redlining/redlining.md).
+For tracked changes (redline markup and OOXML change-tracking format),
+see [redlining.md](redlining/redlining.md).
 
 For OOXML internals (raw XML structure and namespace reference), see
 [ooxml.md](ooxml/ooxml.md).

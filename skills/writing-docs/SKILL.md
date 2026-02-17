@@ -28,6 +28,18 @@ Unreferenced docs are invisible to agents. The basic pattern:
 **Conciseness**: The context window is shared. Only add context an agent doesn't
 already have. Challenge each paragraph: "Does this justify its token cost?"
 
+**Prose over code**: Docs should explain what is going on at a high level.
+The code already exists in the repository — do not reiterate it in
+documentation. Assume the reader can read the source when they need
+specifics. Describing critical public APIs, file formats, and protocols is
+fine, but never reproduce implementation logic. Never include pseudocode;
+write in plain text instead.
+
+**Prose over diagrams**: Do not include ASCII diagrams, Mermaid blocks, or
+other diagram formats. Use bullet point summaries to describe flow,
+architecture, and relationships. Bullet lists are easier to maintain, diff,
+and parse than diagrams.
+
 **Progressive disclosure**: The overview file points to detail files that agents
 load on demand. Unread files cost zero tokens. See
 [progressive-disclosure.md](progressive-disclosure.md) for splitting patterns.
@@ -116,6 +128,9 @@ Rules: root index required, max two levels deep, sub-indexes when a topic has
 | Descriptions | Specific content + when to read; never vague |
 | Terminology | One term per concept, consistent throughout |
 | Link format | `[file.md](path)` for refs; `@path` only in CLAUDE.md |
+| No code dumps | Explain at a high level; readers can read the source |
+| No pseudocode | Write in plain text, never pseudocode |
+| No diagrams | Use bullet point summaries instead of diagrams |
 
 ## Common Mistakes
 
@@ -129,6 +144,9 @@ Rules: root index required, max two levels deep, sub-indexes when a topic has
 | Inconsistent terms | Pick one term per concept; grep to verify |
 | No TOC on long files | Add TOC at top for files >100 lines |
 | Using `@` in docs | Reserve for CLAUDE.md; use markdown links in docs |
+| Code blocks in docs | Explain at a high level; don't reproduce source code |
+| Pseudocode | Write in plain text instead |
+| ASCII/Mermaid diagrams | Use bullet point flow summaries instead |
 
 ## Supporting Documents
 
