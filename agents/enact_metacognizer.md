@@ -78,17 +78,19 @@ flaw, skill gap.
 
 ### Step 1: Find the Transcripts
 
-Claude Code stores session transcripts in its session
-directory structure. Use Bash to find transcript files
-for this session:
+Use the `enact-transcripts.py` script (in the project
+`scripts/` directory) to locate all transcripts for this
+session:
 
 ```bash
-ls ~/.claude/projects/*/sessions/*/
+python3 <project_dir>/scripts/enact-transcripts.py \
+  <enact_id>
 ```
 
-Search for transcripts associated with the enact session
-ID. List all transcripts and identify which agent each
-belongs to based on the system prompt content.
+This outputs the orchestrator transcript, all direct
+subagent transcripts, and all team member sessions with
+human-readable labels. Use `--paths` for bare paths
+only (useful for scripting).
 
 ### Step 2: Read the Session Artifacts
 
@@ -146,10 +148,20 @@ Always analyze the Orchestrator transcript separately.
 
 ### Invoking Mini Metacognizers
 
-For each transcript or group, run a `claude -p` command
-via Bash. Pass the enact scratch directory, the
-transcript path(s), and a description of what the agent
-was doing:
+For each transcript or group, first generate a readable
+summary using `summarize-session.py`, then pass that
+summary to a `claude -p` Mini Metacognizer. This is far
+more efficient than having mini metacognizers parse raw
+JSONL transcripts themselves.
+
+**Step A: Generate the summary.**
+
+```bash
+python3 <project_dir>/scripts/summarize-session.py \
+  <transcript_path> > /tmp/summary_<agent_name>.md
+```
+
+**Step B: Feed the summary to a mini metacognizer.**
 
 ```bash
 claude -p "You are a Mini Metacognizer analyzing \
@@ -157,7 +169,9 @@ subagent transcripts from an Enact session.
 
 Session context: <one-line description from PLAN.md>
 
-Analyze this transcript: <transcript_path>
+Here is the transcript summary:
+$(cat /tmp/summary_<agent_name>.md)
+
 The agent was: <agent type, what it was asked to do>
 
 Look for: tool call errors, repeated searches, \
