@@ -128,8 +128,10 @@ Spawn the Task Generator to break the plan into Claude Code tasks. If the Task
 Refiner was selected, spawn it to validate tasks. If QA was selected, spawn the
 QA Scenario Generator after task generation.
 
-Tasks are created as Claude Code tasks (via TaskCreate). Each task includes a
-description, acceptance criteria, and dependencies on other tasks.
+Tasks are created as Claude Code tasks (via TaskCreate). Each task
+includes a description, acceptance criteria, and dependencies on other
+tasks. The Orchestrator never reads task content — it only tracks task
+IDs and passes them to subagents, who read the tasks themselves.
 
 ## Task Pipeline
 
@@ -199,8 +201,10 @@ When spawning any subagent, keep your prompt **minimal**. Provide:
 - The enact scratch directory path (absolute)
 - A brief project summary (1-3 sentences)
 - Any user-specified constraints relevant to this agent
-- Specific information this agent needs that is not in the scratch directory
-  files
+- Specific information this agent needs that is not in the scratch
+  directory files
+- For task-related agents: the Claude Code **task ID** (not the task
+  content — the subagent reads the task itself via TaskGet)
 
 Do NOT write detailed instructions that duplicate or override the agent's own
 definition. Each agent has its own prompt and loads its own skills. Your job is
@@ -211,8 +215,10 @@ to give it the right *inputs*, not to redefine its *behavior*.
 Subagents return **brief** summaries (3-5 lines). You do NOT need their full
 output in your context.
 
-**Do NOT**: read source code files, read detailed review findings, accumulate
-long subagent outputs, or repeat summaries back to the user verbatim.
+**Do NOT**: read task descriptions (pass task IDs to subagents
+instead), read source code files, read detailed review findings,
+accumulate long subagent outputs, or repeat summaries back to the
+user verbatim.
 
 **DO**: track state via ORCHESTRATOR_STATE.md, report brief progress, pass file
 paths between subagents (not file contents), trust that subagents wrote their
