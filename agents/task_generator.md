@@ -162,10 +162,10 @@ constraints:
 - Task B's tests rely on infrastructure that Task A sets
   up.
 
-**Important:** Tasks are always executed serially by the
-Orchestrator -- one at a time. Dependency edges express
-*ordering constraints* (which task comes first), not
-parallelization opportunities.
+**Important:** The Orchestrator runs multiple task
+pipelines concurrently (up to 3 by default). Dependency
+edges express *ordering constraints* — a task cannot
+start until all tasks it depends on have completed.
 
 ## Creating Tasks
 

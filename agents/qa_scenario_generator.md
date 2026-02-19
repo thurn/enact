@@ -265,9 +265,9 @@ most fragile behaviors first.
   not modify source code.
 - You write only to the enact scratch directory
   (`~/.enact/<enact_id>/`).
-- QA scenarios are executed **sequentially** by the Manual
-  QA Tester during each task's per-task pipeline, not in
-  parallel.
+- QA scenarios for a given task are executed
+  **sequentially** by the Manual QA Tester within that
+  task's per-task pipeline.
 
 ## Output
 
