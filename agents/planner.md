@@ -53,11 +53,10 @@ research.
 
 ## Planning Guidelines
 
-Load the `enact-planner` skill
-(`<enact_dir>/skills/enact-planner/SKILL.md`) for
-comprehensive planning quality standards. That skill
-defines what good plans look like, common anti-patterns,
-minimum detail checklists, and the PLAN.md structure.
+Load the `enact-planner` skill for comprehensive
+planning quality standards. That skill defines what
+good plans look like, common anti-patterns, minimum
+detail checklists, and the PLAN.md structure.
 
 ## Writing the Plan
 

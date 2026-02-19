@@ -10,19 +10,12 @@ subagents which work together to accomplish software
 engineering tasks. The Enact Orchestrator coordinates
 their overall efforts.
 
-`<enact_dir>` refers to the Enact project root directory
-resolved by the Orchestrator at session start (see the
-`enact` skill).
-
 When spawning subagents via the Task tool, reference
 each agent by its `name` field as the `subagent_type`
 parameter (e.g., `subagent_type: "feature-coder"`).
 This uses Claude Code's native custom agent system,
 so each agent's frontmatter configuration (model,
-tools, skills) is respected automatically. Agents
-must be discoverable by Claude Code — either placed
-in `.claude/agents/` or made available via the
-`--agents` flag.
+tools, skills) is respected automatically.
 
 ## Default-On Agents
 
@@ -30,7 +23,7 @@ These agents run unless the user explicitly opts out.
 
 ### Surveyors
 
-Definition: <enact_dir>/agents/surveyor.md
+Definition: agents/surveyor.md
 
 Surveyors are the "breadth first" analysis pass in Enact
 planning. They survey the landscape of the problem domain
@@ -40,7 +33,7 @@ survey, identifying areas that require further analysis.
 
 ### Researchers
 
-Definition: <enact_dir>/agents/researcher.md
+Definition: agents/researcher.md
 
 Researchers help research a specific topic, based on a
 research assignment created by a Surveyor. They gather
@@ -50,7 +43,7 @@ results.
 
 ### Synthesizers
 
-Definition: <enact_dir>/agents/synthesizer.md
+Definition: agents/synthesizer.md
 
 Synthesizers combine the results of individual research
 assignments into a cohesive document, RESEARCH.md. This
@@ -62,7 +55,7 @@ greater detail.
 
 ### Planners
 
-Definition: <enact_dir>/agents/planner.md
+Definition: agents/planner.md
 
 Planners help write technical project plans based on
 research findings. They create a
@@ -73,7 +66,7 @@ before writing the plan.
 
 ### Plan Refiners
 
-Definition: <enact_dir>/agents/plan_refiner.md
+Definition: agents/plan_refiner.md
 
 Plan refiners audit technical project plans from a fresh
 perspective, identifying whether the plan stands alone as
@@ -83,7 +76,7 @@ refining can be performed.
 
 ### Task Generators
 
-Definition: <enact_dir>/agents/task_generator.md
+Definition: agents/task_generator.md
 
 Task generators turn a project plan into a list of Claude
 Code tasks, each of which can be completed by a subagent.
@@ -96,7 +89,7 @@ fill knowledge gaps.
 
 ### Task Refiners
 
-Definition: <enact_dir>/agents/task_refiner.md
+Definition: agents/task_refiner.md
 
 Task refiners validate tasks for completeness and
 correctness, ensuring they make sense independently
@@ -104,7 +97,7 @@ without additional context.
 
 ### Feature Coders
 
-Definition: <enact_dir>/agents/feature_coder.md
+Definition: agents/feature_coder.md
 
 Feature coders implement a new feature from a task,
 writing code and tests to specification, but also
@@ -113,7 +106,7 @@ on real world understanding of the project.
 
 ### Code Conformance Reviewers
 
-Definition: <enact_dir>/agents/code_conformance_reviewer.md
+Definition: agents/code_conformance_reviewer.md
 
 Code conformance reviewers ensure code conforms to the
 task specification and project plan. They check to make
@@ -126,7 +119,7 @@ revisions in the "REVISE" case.
 
 ### Code Quality Reviewers
 
-Definition: <enact_dir>/agents/code_quality_reviewer.md
+Definition: agents/code_quality_reviewer.md
 
 Code quality reviewers ensure code is well written. They
 flag opportunities to reduce code duplication, suggest
@@ -136,7 +129,7 @@ to tests.
 
 ### Review Feedback Coders
 
-Definition: <enact_dir>/agents/review_feedback_coder.md
+Definition: agents/review_feedback_coder.md
 
 Review feedback coders implement feedback from code review
 subagents, resolving their issues and then re-validating
@@ -144,7 +137,7 @@ task acceptance criteria.
 
 ### Integration Reviewers
 
-Definition: <enact_dir>/agents/integration_reviewer.md
+Definition: agents/integration_reviewer.md
 
 The integration reviewer is the final stop-the-line audit
 before a project is considered complete. It validates the
@@ -155,7 +148,7 @@ pieces integrate into a working whole.
 
 ### Technical Writers
 
-Definition: <enact_dir>/agents/technical_writer.md
+Definition: agents/technical_writer.md
 
 The technical writer creates and maintains project
 documentation after all tasks complete. It updates
@@ -164,7 +157,7 @@ that could prevent problems in future projects.
 
 ### Enact Metacognizers
 
-Definition: <enact_dir>/agents/enact_metacognizer.md
+Definition: agents/enact_metacognizer.md
 
 The enact metacognizer is a special subagent which is
 responsible for improving Enact itself. It should always
@@ -182,7 +175,7 @@ Orchestrator recommends them via AskUserQuestion.
 
 ### Interviewers
 
-Definition: <enact_dir>/agents/interviewer.md
+Definition: agents/interviewer.md
 
 Interviewer subagents help the user brainstorm solutions
 to a problem, asking questions to clarify the project
@@ -192,7 +185,7 @@ the interview.
 
 ### QA Scenario Generators
 
-Definition: <enact_dir>/agents/qa_scenario_generator.md
+Definition: agents/qa_scenario_generator.md
 
 QA scenario generators run once after task generation.
 They read the project plan and all implementation task
@@ -202,7 +195,7 @@ functionality.
 
 ### Manual QA Testers
 
-Definition: <enact_dir>/agents/manual_qa_tester.md
+Definition: agents/manual_qa_tester.md
 
 Manual QA testers execute QA scenarios for a specific
 implementation task. They walk through a given scenario
@@ -212,7 +205,7 @@ file tasks.
 
 ### Bugfix Coders
 
-Definition: <enact_dir>/agents/bugfix_coder.md
+Definition: agents/bugfix_coder.md
 
 Bugfix coders fix bugs from bug report tasks using a
 reproduce-first methodology: manually reproducing the bug,
@@ -225,7 +218,7 @@ exist.
 
 ### Subject Matter Expert Reviewers
 
-Definition: <enact_dir>/agents/sme_reviewer.md
+Definition: agents/sme_reviewer.md
 
 Subject matter expert reviewers look at changes from the
 perspective of a single subject, on which they have deep
@@ -238,7 +231,7 @@ The Orchestrator spawns them on demand.
 
 ### Merge Conflict Resolvers
 
-Definition: <enact_dir>/agents/merge_conflict_resolver.md
+Definition: agents/merge_conflict_resolver.md
 
 Merge conflict resolvers handle git merge or rebase
 conflicts that arise when integrating task worktrees

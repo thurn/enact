@@ -153,28 +153,6 @@ they appear trivial."
 window with the task and tool outputs. Every unnecessary
 line reduces the subagent's working memory.
 
-## Scope and Discovery
-
-Subagents are discovered based on file location. Higher
-priority overrides lower when names collide.
-
-### Priority Order (highest to lowest)
-
-1. **CLI flag** (`--agents`, current session only)
-2. **Project** (`.claude/agents/`, shared via version
-   control)
-3. **Home** (`~/.claude/agents/`, personal, all projects)
-
-### Choosing Scope
-
-| Scope | Location | Use When |
-|-------|----------|----------|
-| Personal | `~/.claude/agents/` | Experimenting, personal workflows |
-| Project | `.claude/agents/` | Team-shared, follows repo conventions |
-
-Personal agents are available immediately. Project agents
-follow your team's normal code review workflow.
-
 ## Rules and Constraints
 
 - Subagents **cannot spawn other subagents** (no nesting)
@@ -231,7 +209,6 @@ summary returns to the parent's context.
 | Model | Haiku simple, Sonnet default, Opus complex |
 | Nesting | Subagents cannot spawn subagents |
 | Inheritance | No parent prompt or skill inheritance |
-| Scope | Project for team, home for personal |
 | Proactive | Add "Use proactively" to auto-delegate |
 
 ## Common Mistakes

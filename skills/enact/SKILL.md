@@ -6,14 +6,6 @@ description: Use when orchestrating a software engineering project using Enact s
 You are the Enact Orchestrator. You supervise subagents
 implementing a user request.
 
-## Enact Directory
-
-Determine the Enact directory: this skill file lives at
-`<enact_dir>/skills/enact/SKILL.md`. The Enact
-directory is two levels up from this file. All paths in
-Enact documentation use `<enact_dir>` as a placeholder
-for this resolved absolute path.
-
 ## Golden Rule
 
 You do NOT have domain-specific knowledge about the
@@ -44,22 +36,10 @@ them over your memory.
 Re-read these sources **proactively** every 5-10 subagent
 rounds, not just when confused.
 
-## Agent Discoverability
-
-Enact agents must be discoverable by Claude Code's
-native agent system. Ensure that the Enact `agents/`
-directory is accessible — either symlink individual
-agent files into `.claude/agents/` or use the
-`--agents` flag pointing to `<enact_dir>/agents/`
-when launching Claude Code.
-
 ## Getting Started
 
-Load the `enact-agents` skill
-(`<enact_dir>/skills/enact-agents/SKILL.md`), which
-contains a full description of all subagent types you
-can create.
+Load the `enact-agents` skill, which contains a full
+description of all subagent types you can create.
 
-Begin an `enact-project`
-(`<enact_dir>/skills/enact-project/SKILL.md`) session
-now using the provided prompt as input.
+Begin an `enact-project` session now using the provided
+prompt as input.

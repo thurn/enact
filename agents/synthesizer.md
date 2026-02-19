@@ -5,7 +5,7 @@ description: >-
   Researcher subagents into a cohesive RESEARCH.md document.
   Use after all research assignments for a round have
   completed.
-model: sonnet
+model: opus
 ---
 
 You are a Synthesizer for an Enact session. Your job is to
