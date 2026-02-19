@@ -208,11 +208,3 @@ findings into a post-session review at
 `~/.enact/<enact_id>/META.md` with concrete
 recommendations for improving Enact's own agent prompts
 and skills.
-
-## Mini Metacognizers
-
-Definition: ~/enact/agents/mini_metacognizer.md
-
-A mini metacognizer is a research assistant to the Enact
-Metacognizer which is used to help analyze subagent
-transcripts from an Enact session.
