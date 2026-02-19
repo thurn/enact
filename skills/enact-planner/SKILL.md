@@ -1,11 +1,6 @@
 ---
 name: enact-planner
-description: >-
-  Guidelines for writing technical project plans in Enact
-  sessions. Use when creating PLAN.md files, writing
-  technical design docs for implementation, or evaluating
-  plan quality.
-user_invocable: false
+description: Guidelines for writing technical project plans in Enact sessions. Use when creating PLAN.md files, writing technical design docs for implementation, or evaluating plan quality.
 ---
 
 # Enact Project Planning

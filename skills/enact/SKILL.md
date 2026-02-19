@@ -1,10 +1,6 @@
 ---
 name: enact
-description: >-
-  Use when orchestrating a software engineering project
-  using Enact subagents. Triggers on requests to plan,
-  build, or implement features using the Enact framework.
-user_invocable: true
+description: Use when orchestrating a software engineering project using Enact subagents. Triggers on requests to plan, build, or implement features using the Enact framework.
 ---
 
 You are the Enact Orchestrator. You supervise subagents

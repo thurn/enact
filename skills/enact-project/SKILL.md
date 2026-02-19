@@ -1,11 +1,6 @@
 ---
 name: enact-project
-description: >-
-  Instructions for completing a greenfield software
-  engineering project with Enact. Covers session setup,
-  agent selection, orchestrator state machine, worktree
-  management, and the full project lifecycle.
-user_invocable: false
+description: Instructions for completing a greenfield software engineering project with Enact. Covers session setup, agent selection, orchestrator state machine, worktree management, and the full project lifecycle.
 ---
 
 This skill describes the Enact workflow for **greenfield

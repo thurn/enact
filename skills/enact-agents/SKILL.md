@@ -1,10 +1,6 @@
 ---
 name: enact-agents
-description: >-
-  Describes the available subagents for the Enact LLM
-  framework. Use when the Orchestrator needs to know which
-  agent types exist and where their definitions live.
-user_invocable: false
+description: Describes the available subagents for the Enact LLM framework. Use when the Orchestrator needs to know which agent types exist and where their definitions live.
 ---
 
 # Available Subagents
