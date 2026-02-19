@@ -11,10 +11,17 @@ defines the specific project lifecycle.
 ## Session Setup
 
 1. Create an Enact ID via `date +%s`
-2. Resolve the scratch directory path: `~/.enact/<enact_id>/`
+2. Resolve the scratch directory path:
+   `~/.enact/<enact_id>/`
 3. Create the scratch directory with `mkdir -p`
-4. Initialize `<scratch>/ORCHESTRATOR_STATE.md` (see below)
-5. Report the scratch directory to the user immediately
+4. Detect the main branch name:
+   `git symbolic-ref refs/remotes/origin/HEAD |
+   sed 's@^refs/remotes/origin/@@'`
+   If this fails, ask the user. Store as
+   `main_branch` and pass it to every pipeline agent.
+5. Initialize `<scratch>/ORCHESTRATOR_STATE.md` (see
+   below)
+6. Report the scratch directory to the user immediately
 
 ## Agent Selection
 
@@ -52,9 +59,19 @@ them via AskUserQuestion:
 - **Bugfix Coder** — fix bugs found during QA
 - **Subject Matter Expert Reviewers** — domain-specific review passes
 
-Use AskUserQuestion to propose optional agents when the project characteristics
-warrant them. For example: "This project has CLI-exercisable output. Should I
-include QA testing?"
+### Ad-Hoc Agents
+
+These agents are not selected during Agent Selection.
+The Orchestrator spawns them on demand:
+
+- **Merge Conflict Resolver** — spawned during worktree
+  merges when rebase conflicts are too complex to
+  resolve inline.
+
+Use AskUserQuestion to propose optional agents when the
+project characteristics warrant them. For example: "This
+project has CLI-exercisable output. Should I include QA
+testing?"
 
 ## Orchestrator State Machine
 
@@ -156,14 +173,14 @@ Orchestrator worktree lifecycle:
 
 1. **Create** before spawning the Feature Coder:
    `git worktree add ~/.enact/<enact_id>/task_<id>
-   -b enact/<enact_id>/task_<id>`
+   -b enact/<enact_id>/task_<id> <main_branch>`
 2. **Pass the path** to every agent in the pipeline as
    `worktree_dir` (along with `project_dir` for the
    main project directory)
 3. **Rebase** before merging:
    ```
    cd ~/.enact/<enact_id>/task_<id>
-   git fetch <project_dir> main
+   git fetch <project_dir> <main_branch>
    git rebase FETCH_HEAD
    ```
    If conflicts arise, attempt to resolve them inline.
@@ -173,7 +190,7 @@ Orchestrator worktree lifecycle:
 4. **Fast-forward merge** after rebase succeeds:
    ```
    cd <project_dir>
-   git checkout main
+   git checkout <main_branch>
    git merge --ff-only enact/<enact_id>/task_<id>
    ```
 5. **Clean up**: `git worktree remove
@@ -193,7 +210,9 @@ For each task, run these pipeline phases in order:
    feedback
 4. **(Optional) Manual QA Tester** — execute QA scenarios for this task
 5. **(Optional) Bugfix Coder** — fix bugs found during QA
-6. Merge the worktree to main
+6. Merge the worktree to `<main_branch>` and mark the
+   task completed (only the Orchestrator marks tasks
+   completed — pipeline agents do not)
 
 All code review agents return either the single word `PASS` or `REVISE:
 <path_to_review_doc>`.
@@ -230,14 +249,24 @@ Provide:
 - For task-related agents: the Claude Code **task ID**
   (not the task content — the subagent reads the task
   itself via TaskGet)
-- For pipeline agents: `worktree_dir` and `project_dir`
+- For pipeline agents: `worktree_dir`, `project_dir`,
+  and `main_branch`
 
 Reviewers discover changed files themselves via
 `git diff`. You do not need to pass file lists.
 
-Do NOT write detailed instructions that duplicate or override the agent's own
-definition. Each agent has its own prompt and loads its own skills. Your job is
-to give it the right *inputs*, not to redefine its *behavior*.
+Spawn agents by their `name` field as the
+`subagent_type` parameter of the Task tool (e.g.,
+`subagent_type: "feature-coder"`). Claude Code's
+native agent system automatically loads each agent's
+definition, including its configured model, tools,
+and skills.
+
+Do NOT write detailed instructions that duplicate or
+override the agent's own definition. Each agent has
+its own prompt and loads its own skills. Your job is
+to give it the right *inputs*, not to redefine its
+*behavior*.
 
 ## Context Discipline
 

@@ -101,9 +101,10 @@ Build a mapping:
 
 ### Step 4: Read the Implementation
 
-For each resolved task, read the completion notes (from
-TaskGet). Identify the files that were changed. Read the
-code and tests. Verify:
+For each resolved task, read the completion notes from
+`NOTES_<task_id>.md` files in the scratch directory.
+Identify the files that were changed. Read the code and
+tests. Verify:
 - The code does what the task description says.
 - Acceptance criteria are demonstrably met.
 - Tests exist and test the right things.

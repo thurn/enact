@@ -92,8 +92,14 @@ Before writing any code:
 
 ### Phase 2: Test-Driven Development
 
-Follow the Red-Green-Refactor cycle strictly. This is
-non-negotiable.
+TDD is the strong default for all logic-bearing code.
+Follow the Red-Green-Refactor cycle for any code that
+contains logic, branching, or computation. For purely
+declarative or configuration changes (build system
+modifications, wiring/glue code, config files,
+dependency declarations), you may write the change
+first and add tests after — but you must still write
+tests for any observable behavior.
 
 **RED -- Write a Failing Test**
 
@@ -223,10 +229,10 @@ Tester will do thorough evaluation later.
 
 ### Phase 6: Rebase and Commit
 
-Before completing, check for master advances:
+Before completing, check for `<main_branch>` advances:
 
 ```bash
-git fetch <project_dir> master
+git fetch <project_dir> <main_branch>
 git log HEAD..FETCH_HEAD --oneline
 ```
 
@@ -256,7 +262,9 @@ After commit:
      scenarios for this task')
    ```
 
-2. TaskUpdate to set status to "completed"
+Do NOT mark the task as completed — the Orchestrator
+handles task completion after the full per-task
+pipeline finishes (code review, QA, merge).
 
 ## Filing New Tasks
 
@@ -294,8 +302,15 @@ with dependencies if needed, and note the split.
   comments, variable names, commit messages, docstrings,
   or any output that will be checked in. These tools are
   invisible in the final codebase.
-- **Do not skip TDD.** If you wrote production code before
-  writing a failing test, delete the code and start over.
+- **Do not skip TDD for logic-bearing code.** TDD is the
+  strong default for all code that contains logic,
+  branching, or computation. If you wrote production
+  logic before writing a failing test, delete the code
+  and start over. However, purely declarative or
+  configuration changes (build system modifications,
+  wiring/glue code, config files, dependency
+  declarations) may use test-after if TDD does not
+  naturally apply.
 - **Do not claim completion without verification.** Run
   the commands. Read the output. Then claim the result.
 - **Do not silently absorb scope creep.** If the work is

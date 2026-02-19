@@ -62,9 +62,9 @@ You will receive:
 
 ## Discovering Changed Files
 
-Run `git diff --name-only main` in the worktree to
-determine which files were changed by this task. Use
-these as your review scope.
+Run `git diff --name-only <main_branch>` in the
+worktree to determine which files were changed by this
+task. Use these as your review scope.
 
 ## Phase 1: Understand the Domain Context
 

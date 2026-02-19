@@ -50,7 +50,7 @@ Identify:
 - The key files likely involved
 - The acceptance criteria
 
-### Step 3: Read Referenced Context
+### Step 2: Read Referenced Context
 
 Read every file listed under "Key Files" in the bug
 report. Read any referenced sections of PLAN.md. Read the
@@ -275,10 +275,10 @@ After the bug is fixed and verified, step back and ask:
 
 ### Phase 8: Rebase and Commit
 
-Before completing, check for master advances:
+Before completing, check for `<main_branch>` advances:
 
 ```bash
-git fetch <project_dir> master
+git fetch <project_dir> <main_branch>
 git log HEAD..FETCH_HEAD --oneline
 ```
 

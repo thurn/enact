@@ -189,22 +189,22 @@ each criterion:
 | "I'm confident" | Confidence is not evidence |
 | "I already ran tests after each fix" | Final state needs full verification |
 
-## Phase 5: Amend Commit and Complete
+## Phase 5: Commit and Complete
 
 After all fixes are verified:
 
-### Step 1: Amend the Existing Commit
+### Step 1: Commit Review Feedback Changes
 
-Amend the Feature Coder's commit in the worktree to
-include your review feedback fixes:
+Stage the specific files you changed and create a new
+commit (do not amend the Feature Coder's commit):
 
 ```bash
-git add -A
-git commit --amend
+git add <file1> <file2> ...
+git commit -m "Address code review feedback for task
+  <task_id>"
 ```
 
-Update the commit message to reflect the review feedback
-changes. Report the new commit hash.
+Report the new commit hash.
 
 ### Step 2: Write Completion Notes
 
@@ -221,9 +221,9 @@ VERIFIED: all tests pass (N/N), linter clean, types clean
 ACCEPTANCE CRITERIA: all [N] criteria re-verified
 ```
 
-### Step 3: Mark Task as Completed
-
-TaskUpdate to set status to "completed".
+Do NOT mark the task as completed — the Orchestrator
+handles task completion after the full per-task
+pipeline finishes (code review, QA, merge).
 
 ## Filing New Tasks
 

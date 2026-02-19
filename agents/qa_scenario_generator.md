@@ -150,11 +150,10 @@ Design scenarios across these categories as appropriate:
 ## Creating QA Scenarios as Tasks
 
 Create each QA scenario using TaskCreate. Set metadata
-`{"tags": "qa"}` and include the validated task ID in
-the metadata:
+`{"tags": "qa"}`:
 
 ```
-metadata: {"tags": "qa", "validates_task": "<task_id>"}
+metadata: {"tags": "qa"}
 ```
 
 ### QA Scenario Description Format
@@ -222,8 +221,8 @@ If this scenario fails, file a bug task with:
 - Scenarios are generally independent of each other unless
   one creates state that another relies on.
 - QA scenarios should NOT depend on implementation tasks
-  -- the Orchestrator manages scheduling based on the
-  `validates_task` metadata.
+  -- the Orchestrator manages scheduling based on
+  `QA_SCENARIOS.md`.
 
 ## How Many Scenarios
 

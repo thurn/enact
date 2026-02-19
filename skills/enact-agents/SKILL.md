@@ -14,10 +14,15 @@ their overall efforts.
 resolved by the Orchestrator at session start (see the
 `enact` skill).
 
-When spawning subagents via the Task tool, use
-`subagent_type: "general-purpose"` for all agents.
-All agents need file write access for their output
-artifacts.
+When spawning subagents via the Task tool, reference
+each agent by its `name` field as the `subagent_type`
+parameter (e.g., `subagent_type: "feature-coder"`).
+This uses Claude Code's native custom agent system,
+so each agent's frontmatter configuration (model,
+tools, skills) is respected automatically. Agents
+must be discoverable by Claude Code — either placed
+in `.claude/agents/` or made available via the
+`--agents` flag.
 
 ## Surveyors
 
@@ -211,7 +216,7 @@ Definition: <enact_dir>/agents/merge_conflict_resolver.md
 
 Merge conflict resolvers handle git merge or rebase
 conflicts that arise when integrating task worktrees
-back into the main branch. They understand both sides
+back into `<main_branch>`. They understand both sides
 of a conflict and resolve them to preserve the intent
 of both changes, then verify the result passes all
 tests.

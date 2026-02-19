@@ -44,6 +44,15 @@ them over your memory.
 Re-read these sources **proactively** every 5-10 subagent
 rounds, not just when confused.
 
+## Agent Discoverability
+
+Enact agents must be discoverable by Claude Code's
+native agent system. Ensure that the Enact `agents/`
+directory is accessible — either symlink individual
+agent files into `.claude/agents/` or use the
+`--agents` flag pointing to `<enact_dir>/agents/`
+when launching Claude Code.
+
 ## Getting Started
 
 Load the `enact-agents` skill
