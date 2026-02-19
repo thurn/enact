@@ -1,11 +1,6 @@
 ---
 name: enact-plan
-description: >-
-  Use when creating a technical project plan using Enact
-  subagents. Stops after planning — does not generate tasks
-  or write code. Triggers on requests to plan a feature,
-  create a technical design, or write a project plan using
-  Enact.
+description: Use when creating a technical project plan using Enact subagents.
 ---
 
 This skill describes the Enact workflow for **planning
@@ -70,8 +65,8 @@ You are always in one of these states:
 
 | State     | Description                          |
 |-----------|--------------------------------------|
-| INTERVIEW | Optional Interviewer                 |
 | RESEARCH  | Surveyor, Researchers, Synthesizer   |
+| INTERVIEW | Optional Interviewer                 |
 | PLANNING  | Planner, optional Plan Refiner       |
 | COMPLETE  | Plan delivered to output file        |
 
@@ -105,11 +100,6 @@ This is your **primary recovery mechanism**. If your
 context compacts and you lose track, re-read this file to
 fully reconstruct your state.
 
-## Interview Phase
-
-If the Interviewer was selected, spawn it first to
-resolve ambiguities before research begins.
-
 ## Research Phase
 
 Spawn a Surveyor to analyze the problem domain. The
@@ -123,6 +113,13 @@ research files at any time.
 In high-effort mode, multiple survey-research-synthesize
 rounds can be conducted, exploring discovered topics in
 greater detail.
+
+## Interview Phase
+
+If the Interviewer was selected, spawn it after research
+completes. The Interviewer reads RESEARCH.md and uses
+its Open Questions section as starting points for
+clarifying requirements with the user.
 
 ## Planning Phase
 
