@@ -160,21 +160,21 @@ Each Feature Coder works in a git worktree to isolate changes:
 
 ### Per-Task Pipeline
 
-For each task, run these subagents sequentially:
+For each task, run these pipeline phases in order:
 
 1. **Feature Coder** — implement the task in its worktree
-2. **Code Conformance Reviewer** — verify spec conformance
-3. **Code Quality Reviewer** — audit code quality
-4. **(Optional) SME Reviewer** — domain-specific review
-5. **Review Feedback Coder** — if any reviewer returned REVISE, implement
+2. **Code Review** — spawn all applicable reviewers in parallel:
+   - Code Conformance Reviewer
+   - Code Quality Reviewer
+   - (Optional) SME Reviewer
+3. **Review Feedback Coder** — if any reviewer returned REVISE, implement
    feedback
-6. **(Optional) Manual QA Tester** — execute QA scenarios for this task
-7. **(Optional) Bugfix Coder** — fix bugs found during QA
-8. Merge the worktree to main
+4. **(Optional) Manual QA Tester** — execute QA scenarios for this task
+5. **(Optional) Bugfix Coder** — fix bugs found during QA
+6. Merge the worktree to main
 
 All code review agents return either the single word `PASS` or `REVISE:
-<path_to_review_doc>`. Read-only review agents (conformance, quality, SME) can
-run in parallel with each other.
+<path_to_review_doc>`.
 
 After code review (and Review Feedback if needed), check whether QA scenarios
 exist for this task. If they do, spawn the Manual QA Tester. If the tester finds
