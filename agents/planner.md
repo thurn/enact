@@ -53,7 +53,7 @@ research.
 
 ## Planning Guidelines
 
-Load the `enact-planner` skill for comprehensive
+Load the `plan-authoring` skill for comprehensive
 planning quality standards. That skill defines what
 good plans look like, common anti-patterns, minimum
 detail checklists, and the PLAN.md structure.
@@ -62,7 +62,7 @@ detail checklists, and the PLAN.md structure.
 
 Write the technical design to
 `~/.enact/<enact_id>/PLAN.md`, following the
-`enact-planner` guidelines.
+`plan-authoring` guidelines.
 
 ## Output
 
