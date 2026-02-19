@@ -182,7 +182,7 @@ For each task, provide:
   middleware".
 - **description**: The full task description following the
   format below.
-- **metadata**: Use `{"tags": "feature"}` for new
+- **metadata**: Set `{"tags": "feature"}` for new
   functionality, `{"tags": "refactor"}` for
   restructuring, `{"tags": "bugfix"}` for fixes,
   `{"tags": "docs"}` for documentation.

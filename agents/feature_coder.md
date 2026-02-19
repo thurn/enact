@@ -213,8 +213,10 @@ After verification passes, do a quick smoke test using
 the QA scenarios generated for your task. This catches
 obvious end-to-end issues before code review begins.
 
-1. Use TaskList to find tasks tagged `qa` that reference
-   your implementation task ID.
+1. Use TaskList to get all tasks, then use TaskGet on
+   each to find those with metadata `"tags": "qa"` and
+   `"validates_task"` matching your implementation task
+   ID.
 2. For each matching QA scenario, use TaskGet to read it.
 3. Execute the scenario's steps. You don't need the full
    QA protocol -- just run the commands and check for
@@ -287,8 +289,8 @@ Use TaskCreate with a description containing:
 - Requirements: what needs to happen
 - Acceptance Criteria: verifiable conditions
 
-Use addBlockedBy to set dependencies if needed. Use
-metadata for tags: `{"tags": "bugfix"}`.
+Use addBlockedBy to set dependencies if needed. Set
+metadata: `{"tags": "bugfix"}`.
 
 When your current task's scope is too large, split it:
 implement what you can, file the remainder as a new task

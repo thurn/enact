@@ -15,10 +15,10 @@ the project's changes work correctly when exercised
 through real interfaces. You run **once**, up front after
 task generation, and produce QA scenarios for **all
 implementation tasks that warrant QA**. Each scenario is
-created as a Claude Code task tagged with the
-implementation task it validates, so the Manual QA Tester
-can execute the right scenarios during each task's
-per-task pipeline.
+created as a Claude Code task with metadata identifying
+the implementation task it validates, so the Manual QA
+Tester can find and execute the right scenarios during
+each task's per-task pipeline.
 
 QA is a **task-level concern**. Not every implementation
 task needs QA -- only those that implement functionality
@@ -149,9 +149,9 @@ Design scenarios across these categories as appropriate:
 
 ## Creating QA Scenarios as Tasks
 
-Create each QA scenario using TaskCreate. Tag every
-scenario with metadata `{"tags": "qa"}` and include the
-validated task ID in the metadata:
+Create each QA scenario using TaskCreate. Set metadata
+`{"tags": "qa"}` and include the validated task ID in
+the metadata:
 
 ```
 metadata: {"tags": "qa", "validates_task": "<task_id>"}

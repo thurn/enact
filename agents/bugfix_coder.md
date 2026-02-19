@@ -36,16 +36,14 @@ disease.
 
 ### Step 1: Find the Oldest Unblocked Bug Task
 
-Use TaskList to view the task graph. Identify the oldest
-task (lowest ID) that is:
-- Tagged `bugfix`
-- Status `open` (not `in_progress`, `completed`, or
-  `closed`)
-- Not blocked by any uncompleted task
-- Not claimed by another agent
-
 If the Orchestrator has provided a specific task ID, use
-that instead.
+that. Otherwise, use TaskList to get all tasks, then
+use TaskGet on each to find the oldest task (lowest ID)
+that:
+- Has metadata `"tags": "bugfix"`
+- Is not `completed`
+- Is not blocked by any uncompleted task
+- Is not claimed by another agent
 
 ### Step 2: Claim and Read the Task
 
@@ -272,7 +270,7 @@ After the bug is fixed and verified, step back and ask:
      changes, affects multiple components, or is beyond
      the scope of this bugfix, use TaskCreate with a clear
      description of the systemic issue and your
-     recommended approach. Use metadata:
+     recommended approach. Set metadata:
      `{"tags": "hardening"}`.
 
    Choose "fix it now" for targeted improvements (adding
@@ -344,7 +342,7 @@ Use TaskCreate with a description containing:
 - Requirements: what needs to happen
 - Acceptance Criteria: verifiable conditions
 
-Use addBlockedBy for dependencies. Use metadata for tags:
+Use addBlockedBy for dependencies. Set metadata:
 `{"tags": "bugfix"}`.
 
 ## What You Must NOT Do

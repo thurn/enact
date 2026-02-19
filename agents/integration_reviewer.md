@@ -222,14 +222,14 @@ Coder, or other agent to pick up and execute.
 | Integration issue | Integration fix | bugfix |
 | Code review insufficient | Re-review | review |
 
-When filing tasks, use metadata tags:
-`{"tags": "<tag>"}`.
+When filing tasks, set metadata:
+`{"tags": "<tag>"}` using the category from the table
+above.
 
 ### Naming Conventions
 
 - **Titles**: Start with `[ProjectName] Integration:`
   followed by a verb phrase.
-- **Tags**: Use the category tag from the table above.
 
 ## Phase 4: Write the Integration Review Report
 

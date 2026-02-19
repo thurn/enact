@@ -236,7 +236,7 @@ the scope of the review feedback:
 - **Scope that doesn't fit** the current task
 
 Use TaskCreate rather than silently absorbing extra work.
-Use addBlockedBy for dependencies. Use metadata for tags:
+Use addBlockedBy for dependencies. Set metadata:
 `{"tags": "bugfix"}`.
 
 ## What You Must NOT Do
