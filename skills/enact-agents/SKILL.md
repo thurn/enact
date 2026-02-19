@@ -164,7 +164,7 @@ file tasks.
 
 ## Bugfix Coders
 
-Definition: ~/enact/agents/bug_fixer.md
+Definition: ~/enact/agents/bugfix_coder.md
 
 Bugfix coders fix bugs from bug report tasks using a
 reproduce-first methodology: manually reproducing the bug,

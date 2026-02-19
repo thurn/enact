@@ -11,11 +11,7 @@ defines the specific project lifecycle.
 ## Session Setup
 
 1. Create an Enact ID via `date +%s`
-2. Resolve the absolute scratch directory path: run `echo $HOME` and construct
-   the path as `<absolute_home>/.enact/<enact_id>/` (e.g.,
-   `/home/user/.enact/1234567890/`). **Never use `~`** — different agents may
-   have different `$HOME` directories, so `~` can resolve to different
-   filesystem locations. All agents must receive the same absolute path.
+2. Resolve the scratch directory path: `~/.enact/<enact_id>/`
 3. Create the scratch directory with `mkdir -p`
 4. Initialize `<scratch>/ORCHESTRATOR_STATE.md` (see below)
 5. Report the scratch directory to the user immediately
