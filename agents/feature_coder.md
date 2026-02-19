@@ -205,19 +205,18 @@ After verification passes, do a quick smoke test using
 the QA scenarios generated for your task. This catches
 obvious end-to-end issues before code review begins.
 
-1. Use TaskList to get all tasks, then use TaskGet on
-   each to find those with metadata `"tags": "qa"` and
-   `"validates_task"` matching your implementation task
-   ID.
-2. For each matching QA scenario, use TaskGet to read it.
+1. Check `<scratch>/QA_SCENARIOS.md` for QA scenario
+   task IDs that validate your implementation task ID.
+   If the file does not exist or lists no scenarios for
+   your task, skip this phase.
+2. For each matching QA scenario ID, use TaskGet to
+   read the scenario.
 3. Execute the scenario's steps. You don't need the full
    QA protocol -- just run the commands and check for
    crashes, panics, or obviously wrong results.
 4. If a command fails or produces clearly incorrect
    output, fix the issue and re-run verification (Phase
    4) before proceeding.
-5. If no QA scenarios exist for your task, skip this
-   phase.
 
 This is a smoke test, not a full QA pass. The Manual QA
 Tester will do thorough evaluation later.
@@ -255,7 +254,6 @@ After commit:
      types clean
    QA SMOKE: N scenarios ran clean (or 'no QA
      scenarios for this task')
-   COMMIT: <hash>
    ```
 
 2. TaskUpdate to set status to "completed"
@@ -318,9 +316,8 @@ max):
 
 1. Task <ID> ("<title>"): completed / failed / partially
    completed.
-2. Commit hash: <hash>.
-3. New tasks filed: [IDs] or "none".
-4. Concerns: [one line] or "none".
+2. New tasks filed: [IDs] or "none".
+3. Concerns: [one line] or "none".
 
 All details are in `~/.enact/<enact_id>/NOTES_<task_id>.md`.
 The Orchestrator does not need them.

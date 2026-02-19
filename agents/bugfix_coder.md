@@ -34,18 +34,9 @@ disease.
 
 ## Getting Your Task
 
-### Step 1: Find the Oldest Unblocked Bug Task
+The Orchestrator provides your task ID via `task_id`.
 
-If the Orchestrator has provided a specific task ID, use
-that. Otherwise, use TaskList to get all tasks, then
-use TaskGet on each to find the oldest task (lowest ID)
-that:
-- Has metadata `"tags": "bugfix"`
-- Is not `completed`
-- Is not blocked by any uncompleted task
-- Is not claimed by another agent
-
-### Step 2: Claim and Read the Task
+### Step 1: Claim and Read the Task
 
 Use TaskGet to read the full task description. Then:
 - TaskUpdate to set owner to "bugfix-coder"
@@ -320,7 +311,6 @@ After all phases are complete:
    MANUAL VERIFICATION: bug no longer reproduces
    DEEPER ANALYSIS: <one-line summary>
    HARDENING: <implemented X / filed task for Y>
-   COMMIT: <hash>
    ```
 
 2. TaskUpdate to set status to "completed"
@@ -386,8 +376,7 @@ max):
 1. Bug <ID> ("<title>"): fixed / could not reproduce /
    blocked.
 2. Root cause: [one line].
-3. Commit hash: <hash>.
-4. New tasks filed: [IDs] or "none".
+3. New tasks filed: [IDs] or "none".
 
 All details are in
 `~/.enact/<enact_id>/NOTES_<task_id>.md`.

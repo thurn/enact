@@ -57,14 +57,15 @@ You will receive from the Orchestrator:
   (`~/.enact/<enact_id>/`).
 - The **implementation task ID** -- the task whose changes
   you are validating.
+- `worktree_dir`: the path to the git worktree where the
+  implementation lives. Execute all QA commands inside
+  this directory.
 
 ### Step 1: Find QA Scenarios
 
-Use TaskList to get all tasks, then use TaskGet on each
-to find those with metadata `"tags": "qa"` and
-`"validates_task"` matching the implementation task ID
-you were given. Execute all matching QA scenarios, one
-at a time.
+Read `<scratch>/QA_SCENARIOS.md` to find QA scenario task
+IDs that validate the implementation task ID you were
+given. Execute all matching QA scenarios, one at a time.
 
 ### Step 2: Read the Scenario
 

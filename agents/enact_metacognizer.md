@@ -262,7 +262,7 @@ notice your own friction:
 - **Did your mini metacognizers find the right things?**
 
 Write self-improvement recommendations for
-`~/enact/agents/enact_metacognizer.md` with the same
+`<enact_dir>/agents/enact_metacognizer.md` with the same
 specificity you demand for other agents. If your prompt
 told you to do something unhelpful, quote the text and
 propose a replacement.
@@ -353,7 +353,7 @@ repeating? Recommendations being acted on?]
 
 [Problems with your own prompt this session. Specific
 recommendations for changes to
-`~/enact/agents/enact_metacognizer.md`.]
+`<enact_dir>/agents/enact_metacognizer.md`.]
 
 ## The Obligatory Philosophical Musing
 

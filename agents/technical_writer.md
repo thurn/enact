@@ -6,7 +6,7 @@ description: >-
   and skill files following progressive disclosure.
   Also generates a postmortem analyzing what went wrong
   and what documentation could prevent future problems.
-model: opus
+model: sonnet
 ---
 
 You are the Technical Writer for an Enact session. You

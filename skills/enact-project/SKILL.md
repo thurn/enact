@@ -111,12 +111,12 @@ conducted, exploring discovered topics in greater detail.
 
 ## Planning Phase
 
-Spawn a Planner to create `~/.enact/<enact_id>/PLAN.md`. If the Plan Refiner was
-selected, spawn it to audit the plan. If the Interviewer was selected, spawn it
-before or after planning to resolve ambiguities. Do not read the plan.
+If the Interviewer was selected, spawn it before planning
+to resolve ambiguities.
 
-The Planner should load the `enact-planner` skill
-(`~/enact/skills/enact-planner/SKILL.md`) for planning quality standards.
+Spawn a Planner to create `~/.enact/<enact_id>/PLAN.md`.
+If the Plan Refiner was selected, spawn it to audit the
+plan. Do not read the plan.
 
 ## Task Generation Phase
 
@@ -160,10 +160,23 @@ Orchestrator worktree lifecycle:
 2. **Pass the path** to every agent in the pipeline as
    `worktree_dir` (along with `project_dir` for the
    main project directory)
-3. **Merge** after the full pipeline passes:
-   `git checkout main &&
-   git merge enact/<enact_id>/task_<id>`
-4. **Clean up**: `git worktree remove
+3. **Rebase** before merging:
+   ```
+   cd ~/.enact/<enact_id>/task_<id>
+   git fetch <project_dir> main
+   git rebase FETCH_HEAD
+   ```
+   If conflicts arise, attempt to resolve them inline.
+   If conflicts are too complex, spawn a Merge Conflict
+   Resolver with the worktree path and a description of
+   the task's changes.
+4. **Fast-forward merge** after rebase succeeds:
+   ```
+   cd <project_dir>
+   git checkout main
+   git merge --ff-only enact/<enact_id>/task_<id>
+   ```
+5. **Clean up**: `git worktree remove
    ~/.enact/<enact_id>/task_<id> &&
    git branch -d enact/<enact_id>/task_<id>`
 
@@ -185,9 +198,11 @@ For each task, run these pipeline phases in order:
 All code review agents return either the single word `PASS` or `REVISE:
 <path_to_review_doc>`.
 
-After code review (and Review Feedback if needed), check whether QA scenarios
-exist for this task. If they do, spawn the Manual QA Tester. If the tester finds
-bugs, spawn a Bugfix Coder before merging.
+After code review (and Review Feedback if needed), check
+`<scratch>/QA_SCENARIOS.md` for QA scenarios that
+validate this task. If they exist, spawn the Manual QA
+Tester. If the tester finds bugs, spawn a Bugfix Coder
+before merging.
 
 Record QA status in ORCHESTRATOR_STATE.md for each task.
 
@@ -199,19 +214,26 @@ After all tasks complete, run selected post-task agents:
   most 2 rounds. If the second round still files tasks, present remaining
   findings to the user.
 - **Technical Writer** — creates and updates documentation
-- **Enact Metacognizer** — post-session review at `~/.enact/<enact_id>/META.md`
+- **Enact Metacognizer** — post-session review at
+  `~/.enact/<enact_id>/META.md`
 
 ## Prompting Subagents
 
-When spawning any subagent, keep your prompt **minimal**. Provide:
+When spawning any subagent, keep your prompt **minimal**.
+Provide:
 
 - The enact scratch directory path (absolute)
 - A brief project summary (1-3 sentences)
 - Any user-specified constraints relevant to this agent
-- Specific information this agent needs that is not in the scratch
-  directory files
-- For task-related agents: the Claude Code **task ID** (not the task
-  content — the subagent reads the task itself via TaskGet)
+- Specific information this agent needs that is not in
+  the scratch directory files
+- For task-related agents: the Claude Code **task ID**
+  (not the task content — the subagent reads the task
+  itself via TaskGet)
+- For pipeline agents: `worktree_dir` and `project_dir`
+
+Reviewers discover changed files themselves via
+`git diff`. You do not need to pass file lists.
 
 Do NOT write detailed instructions that duplicate or override the agent's own
 definition. Each agent has its own prompt and loads its own skills. Your job is
@@ -244,6 +266,19 @@ could not finish):
    fundamentally wrong, update the task and re-spawn a Feature Coder.
 4. For **any subagent**: if the failure appears transient (timeout, context
    exhaustion), retry once before escalating.
+
+### Failed Pipeline Cleanup
+
+If a task pipeline fails irrecoverably:
+
+1. Reset any partial changes in the worktree:
+   `cd ~/.enact/<enact_id>/task_<id> && git checkout .`
+2. Remove the worktree: `git worktree remove
+   ~/.enact/<enact_id>/task_<id>`
+3. Delete the branch: `git branch -D
+   enact/<enact_id>/task_<id>`
+4. Update the task status and record the failure in
+   ORCHESTRATOR_STATE.md.
 
 ## Progress Reporting
 

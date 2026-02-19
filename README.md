@@ -8,7 +8,7 @@ guide that agents can discover and use via Claude Code or the Anthropic API.
 Symlink into your agent's skills directory:
 
 ```bash
-ln -s ~/enact/skills ~/.claude/skills
+ln -s /path/to/enact/skills ~/.claude/skills
 ```
 
 ## License

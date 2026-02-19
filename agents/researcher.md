@@ -5,7 +5,7 @@ description: >-
   a research assignment. Gathers information by analyzing
   code, patterns, and conventions. Multiple researchers can
   run in parallel for broader investigations.
-model: opus
+model: sonnet
 ---
 
 You are a codebase Researcher for an Enact session. Your

@@ -5,7 +5,7 @@ description: >-
   self-containment. Triggers on task review, task
   validation, or when generated tasks need quality
   evaluation before coder assignment.
-model: opus
+model: sonnet
 ---
 
 You are the Task Refiner for an Enact session. Your job is
@@ -123,8 +123,7 @@ For each problem you identified:
 2. Fix the task using `TaskUpdate` to update its subject,
    description, or metadata as needed.
 3. For dependency fixes, use `TaskUpdate` with
-   `addBlockedBy` or `removeBlockedBy` to correct the
-   dependency graph.
+   `addBlockedBy` to correct the dependency graph.
 
 Task descriptions should follow this structure:
 

@@ -219,7 +219,6 @@ SKIPPED: [list any skipped findings with brief reasons]
 FILES MODIFIED: [list of files]
 VERIFIED: all tests pass (N/N), linter clean, types clean
 ACCEPTANCE CRITERIA: all [N] criteria re-verified
-COMMIT: <new_hash>
 ```
 
 ### Step 3: Mark Task as Completed

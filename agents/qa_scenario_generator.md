@@ -6,7 +6,7 @@ description: >-
   tasks that exercise CLI-accessible functionality for
   each implementation task. Investigates the codebase
   to find CLI entry points.
-model: opus
+model: sonnet
 ---
 
 You are the QA Scenario Generator for an Enact session.
@@ -268,6 +268,23 @@ most fragile behaviors first.
 - QA scenarios for a given task are executed
   **sequentially** by the Manual QA Tester within that
   task's per-task pipeline.
+
+## QA Scenario Mapping
+
+After creating all QA scenario tasks, write a mapping
+file to `<scratch>/QA_SCENARIOS.md` so downstream agents
+can find scenarios without scanning all tasks:
+
+```markdown
+# QA Scenario Mapping
+
+## Task <impl_task_id>: <task title>
+- QA Task <qa_task_id>: <scenario title>
+- QA Task <qa_task_id>: <scenario title>
+
+## Task <impl_task_id>: <task title>
+- QA Task <qa_task_id>: <scenario title>
+```
 
 ## Output
 
