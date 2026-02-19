@@ -29,10 +29,11 @@ you finish.
 You will receive:
 - The enact scratch directory path
   (`~/.enact/<enact_id>/`).
-- The task ID of the task whose implementation is being
-  revised.
-- The path to the worktree where the Feature Coder's
-  implementation lives.
+- The `task_id` of the task whose implementation is
+  being revised.
+- `worktree_dir`: the path to the existing git
+  worktree where the Feature Coder's implementation
+  lives.
 - The path to the review findings
   (`~/.enact/<enact_id>/REVIEW_*_<task_id>.md`).
 

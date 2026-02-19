@@ -67,21 +67,23 @@ description. Read any referenced sections of PLAN.md.
 Understand the existing code patterns before writing
 anything.
 
-## Git Worktree Setup
+## Git Worktree
 
-The Orchestrator provides `project_dir` and `task_id`.
+The Orchestrator provides `worktree_dir` (the path to
+an already-created git worktree for this task),
+`project_dir` (the main project directory), and
+`task_id`.
+
+Change into the worktree directory before starting
+work:
 
 ```bash
-cd <project_dir>
-project_name=$(basename <project_dir>)
-git worktree add \
-  ../${project_name}-task-<task_id> \
-  -b task-<task_id> master
-cd ../${project_name}-task-<task_id>
+cd <worktree_dir>
 ```
 
 All implementation work happens inside this worktree.
-Do not modify the main worktree.
+Do not modify the main worktree. Do not create
+additional worktrees.
 
 ## Implementation Process
 

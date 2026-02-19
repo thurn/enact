@@ -150,15 +150,26 @@ for one task completes, check whether:
 
 ### Git Worktrees
 
-Each Feature Coder works in a git worktree to isolate changes:
+Each task's pipeline runs in a single git worktree that
+the Orchestrator creates and manages. All agents in
+that task's pipeline (Feature Coder, reviewers, Review
+Feedback Coder, QA Tester, Bugfix Coder) share the
+same worktree. No agent creates or removes worktrees.
 
-1. Before spawning a Feature Coder, create a worktree: `git worktree add
-   ~/.enact/<enact_id>/task_<id> -b enact/<enact_id>/task_<id>`
-2. Tell the Feature Coder to work in the worktree path
-3. After code review passes (and optional QA), merge: `git checkout main && git
-   merge enact/<enact_id>/task_<id>`
-4. Clean up: `git worktree remove ~/.enact/<enact_id>/task_<id> && git branch -d
-   enact/<enact_id>/task_<id>`
+Orchestrator worktree lifecycle:
+
+1. **Create** before spawning the Feature Coder:
+   `git worktree add ~/.enact/<enact_id>/task_<id>
+   -b enact/<enact_id>/task_<id>`
+2. **Pass the path** to every agent in the pipeline as
+   `worktree_dir` (along with `project_dir` for the
+   main project directory)
+3. **Merge** after the full pipeline passes:
+   `git checkout main &&
+   git merge enact/<enact_id>/task_<id>`
+4. **Clean up**: `git worktree remove
+   ~/.enact/<enact_id>/task_<id> &&
+   git branch -d enact/<enact_id>/task_<id>`
 
 ### Per-Task Pipeline
 
