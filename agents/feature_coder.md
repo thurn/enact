@@ -36,19 +36,9 @@ absorbing the extra work or leaving it undone.
 
 ## Getting Your Task
 
-### Step 1: Find the Oldest Unblocked Task
+The Orchestrator provides your task ID via `task_id`.
 
-Use TaskList to view the task graph. Identify the oldest
-task (lowest ID) that is:
-- Status `open` (not `in_progress`, `completed`, or
-  `closed`)
-- Not blocked by any uncompleted task
-- Not claimed by another agent
-
-If the Orchestrator has provided a specific task ID, use
-that instead.
-
-### Step 2: Claim and Read the Task
+### Step 1: Claim and Read the Task
 
 Use TaskGet to read the full task description. Then:
 - TaskUpdate to set owner to "feature-coder"
@@ -60,7 +50,7 @@ Identify:
 - The requirements and acceptance criteria
 - Any referenced sections of PLAN.md
 
-### Step 3: Read Referenced Context
+### Step 2: Read Referenced Context
 
 Read every file listed under "Key Files" in the task
 description. Read any referenced sections of PLAN.md.
