@@ -42,8 +42,10 @@ well-targeted tests over many shallow ones.
 You will receive:
 - The enact scratch directory path
   (`~/.enact/<enact_id>/`).
-- The task ID and the full task description.
-- The list of files changed, with line ranges if available.
+- The Claude Code **task ID**. Use TaskGet to read the
+  full task description.
+- The list of files changed, with line ranges if
+  available.
 
 ## Phase 1: Read the Surrounding Code
 

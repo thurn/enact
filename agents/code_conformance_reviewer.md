@@ -45,10 +45,12 @@ required behavior.
 You will receive:
 - The enact scratch directory path
   (`~/.enact/<enact_id>/`).
-- The task ID and the full task description (including
-  context, requirements, and acceptance criteria).
+- The Claude Code **task ID**. Use TaskGet to read the
+  full task description (including context, requirements,
+  and acceptance criteria).
 - The path to PLAN.md.
-- The list of files changed, with line ranges if available.
+- The list of files changed, with line ranges if
+  available.
 
 ## Phase 1: Understand the Specification
 
