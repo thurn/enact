@@ -155,11 +155,19 @@ tasks are available, spawn the next task's pipeline immediately. Each
 task's per-task pipeline still runs its steps sequentially within its
 own git worktree.
 
-Track active task pipelines in ORCHESTRATOR_STATE.md. When a subagent
-for one task completes, check whether:
-1. The current task's pipeline has a next step — if so, spawn it.
-2. A concurrency slot is free and unblocked tasks remain — if so,
-   start a new task pipeline.
+Task dependencies enforce code visibility: a blocked
+task does not start until its dependencies are merged
+to `<main_branch>`, which is when their code becomes
+visible. This is by design — each worktree branches
+from the current `<main_branch>`, so dependent code
+must be merged first.
+
+Track active task pipelines in ORCHESTRATOR_STATE.md.
+When a subagent for one task completes, check whether:
+1. The current task's pipeline has a next step — if so,
+   spawn it.
+2. A concurrency slot is free and unblocked tasks
+   remain — if so, start a new task pipeline.
 
 ### Git Worktrees
 
@@ -214,8 +222,9 @@ For each task, run these pipeline phases in order:
    task completed (only the Orchestrator marks tasks
    completed — pipeline agents do not)
 
-All code review agents return either the single word `PASS` or `REVISE:
-<path_to_review_doc>`.
+All code review agents return either the single word
+`PASS` or
+`REVISE: REVIEW_<reviewer_type>_<task_id>.md`.
 
 After code review (and Review Feedback if needed), check
 `<scratch>/QA_SCENARIOS.md` for QA scenarios that
@@ -229,10 +238,16 @@ Record QA status in ORCHESTRATOR_STATE.md for each task.
 
 After all tasks complete, run selected post-task agents:
 
-- **Integration Reviewer** — validates the entire pipeline end-to-end. Runs at
-  most 2 rounds. If the second round still files tasks, present remaining
-  findings to the user.
-- **Technical Writer** — creates and updates documentation
+- **Integration Reviewer** — validates the entire
+  pipeline end-to-end. Runs at most 2 rounds. If the
+  second round still files tasks, present remaining
+  findings to the user. Corrective tasks filed by the
+  Integration Reviewer follow the standard per-task
+  pipeline: the Orchestrator re-enters TASK_PIPELINE
+  state, creates worktrees, runs coders, code review,
+  and merges back to main.
+- **Technical Writer** — creates and updates
+  documentation
 - **Enact Metacognizer** — post-session review at
   `~/.enact/<enact_id>/META.md`
 

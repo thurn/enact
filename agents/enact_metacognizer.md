@@ -44,7 +44,7 @@ You will receive:
   (e.g., `/home/user/.enact/<enact_id>/`). Use this exact
   path for all file operations -- never substitute `~` or
   any other shorthand.
-- The session ID (UUID) of the parent Enact session.
+- The enact ID of the parent Enact session.
 - The project directory path.
 
 ## Transcript Analysis Reference
@@ -100,8 +100,6 @@ narrative arc:
 1. `PLAN.md` -- what was planned
 2. `RESEARCH.md` -- what was learned (if present)
 3. `QA_<task_id>.md` -- per-task QA results (if any)
-4. `POSTMORTEM.md` -- what the technical writer found
-   (if present)
 
 ### Step 3: Pipeline Compliance Check
 

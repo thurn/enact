@@ -287,11 +287,15 @@ final steps (technical writing, metacognizer).
 ### If you filed tasks:
 
 Report to the Orchestrator that integration review found
-issues. The Orchestrator should:
-1. Run the appropriate agents to address the filed tasks.
-2. Run code review on any new changes.
-3. Schedule another Integration Reviewer round after all
-   corrective tasks are resolved.
+issues. Corrective tasks follow the standard per-task
+pipeline: the Orchestrator creates a new worktree for
+each task, runs the appropriate coder (Feature Coder or
+Bugfix Coder), runs code review, and merges back to
+main. The Orchestrator re-enters TASK_PIPELINE state
+for these tasks, then:
+1. Runs code review on any new changes.
+2. Schedules another Integration Reviewer round after
+   all corrective tasks are resolved.
 
 Integration Review runs at most **2 rounds**. If the
 second round still files tasks, the Orchestrator should

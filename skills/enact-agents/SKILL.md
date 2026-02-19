@@ -24,7 +24,11 @@ must be discoverable by Claude Code — either placed
 in `.claude/agents/` or made available via the
 `--agents` flag.
 
-## Surveyors
+## Default-On Agents
+
+These agents run unless the user explicitly opts out.
+
+### Surveyors
 
 Definition: <enact_dir>/agents/surveyor.md
 
@@ -34,7 +38,7 @@ and search for "what questions do we need to ask?". They
 create research assignments based on this high level
 survey, identifying areas that require further analysis.
 
-## Researchers
+### Researchers
 
 Definition: <enact_dir>/agents/researcher.md
 
@@ -44,7 +48,7 @@ information by analyzing the codebase. Starting multiple
 researchers in parallel is always encouraged for best
 results.
 
-## Synthesizers
+### Synthesizers
 
 Definition: <enact_dir>/agents/synthesizer.md
 
@@ -56,17 +60,7 @@ modes of operation, several survey-research-synthesize
 rounds can be conducted, exploring discovered topics in
 greater detail.
 
-## Interviewers
-
-Definition: <enact_dir>/agents/interviewer.md
-
-Interviewer subagents help the user brainstorm solutions
-to a problem, asking questions to clarify the project
-objectives and gather information. They investigate the
-codebase directly to fill knowledge gaps discovered during
-the interview.
-
-## Planners
+### Planners
 
 Definition: <enact_dir>/agents/planner.md
 
@@ -77,7 +71,7 @@ technical design doc describing the project. They
 investigate the codebase directly to fill knowledge gaps
 before writing the plan.
 
-## Plan Refiners
+### Plan Refiners
 
 Definition: <enact_dir>/agents/plan_refiner.md
 
@@ -87,7 +81,7 @@ a complete description of the task to achieve. In some
 modes of operation multiple iterations of planning and
 refining can be performed.
 
-## Task Generators
+### Task Generators
 
 Definition: <enact_dir>/agents/task_generator.md
 
@@ -100,7 +94,7 @@ judgement to make implementation choices as work
 continues. They can investigate the codebase directly to
 fill knowledge gaps.
 
-## Task Refiners
+### Task Refiners
 
 Definition: <enact_dir>/agents/task_refiner.md
 
@@ -108,17 +102,7 @@ Task refiners validate tasks for completeness and
 correctness, ensuring they make sense independently
 without additional context.
 
-## QA Scenario Generators
-
-Definition: <enact_dir>/agents/qa_scenario_generator.md
-
-QA scenario generators run once after task generation.
-They read the project plan and all implementation task
-descriptions, then generate manual QA scenarios for
-implementation tasks that have CLI-exercisable
-functionality.
-
-## Feature Coders
+### Feature Coders
 
 Definition: <enact_dir>/agents/feature_coder.md
 
@@ -127,7 +111,7 @@ writing code and tests to specification, but also
 exercising independent judgement to make decisions based
 on real world understanding of the project.
 
-## Code Conformance Reviewers
+### Code Conformance Reviewers
 
 Definition: <enact_dir>/agents/code_conformance_reviewer.md
 
@@ -140,25 +124,17 @@ single word `PASS` or
 a code review document with a description of needed
 revisions in the "REVISE" case.
 
-## Code Quality Reviewers
+### Code Quality Reviewers
 
 Definition: <enact_dir>/agents/code_quality_reviewer.md
 
 Code quality reviewers ensure code is well written. They
 flag opportunities to reduce code duplication, suggest
-refactorings, and audit tests for quality. They operate on
-a "less code is better" principle, which also applies to
-tests.
+refactorings, and audit tests for quality. They operate
+on a "less code is better" principle, which also applies
+to tests.
 
-## Subject Matter Expert Reviewers
-
-Definition: <enact_dir>/agents/sme_reviewer.md
-
-Subject matter expert reviewers look at changes from the
-perspective of a single subject, on which they have deep
-expertise, and suggest changes based on their knowledge.
-
-## Review Feedback Coders
+### Review Feedback Coders
 
 Definition: <enact_dir>/agents/review_feedback_coder.md
 
@@ -166,7 +142,65 @@ Review feedback coders implement feedback from code review
 subagents, resolving their issues and then re-validating
 task acceptance criteria.
 
-## Manual QA Testers
+### Integration Reviewers
+
+Definition: <enact_dir>/agents/integration_reviewer.md
+
+The integration reviewer is the final stop-the-line audit
+before a project is considered complete. It validates the
+entire pipeline end-to-end: that the plan matched the
+original prompt, tasks fully covered the plan,
+implementation is correct, testing is sufficient, and the
+pieces integrate into a working whole.
+
+### Technical Writers
+
+Definition: <enact_dir>/agents/technical_writer.md
+
+The technical writer creates and maintains project
+documentation after all tasks complete. It updates
+existing documents and identifies documentation gaps
+that could prevent problems in future projects.
+
+### Enact Metacognizers
+
+Definition: <enact_dir>/agents/enact_metacognizer.md
+
+The enact metacognizer is a special subagent which is
+responsible for improving Enact itself. It should always
+be included in every Enact session. It runs Mini
+Metacognizers to read transcripts, and synthesizes their
+findings into a post-session review at
+`~/.enact/<enact_id>/META.md` with concrete
+recommendations for improving Enact's own agent prompts
+and skills.
+
+## Default-Off Agents
+
+These agents run only when the user requests them or the
+Orchestrator recommends them via AskUserQuestion.
+
+### Interviewers
+
+Definition: <enact_dir>/agents/interviewer.md
+
+Interviewer subagents help the user brainstorm solutions
+to a problem, asking questions to clarify the project
+objectives and gather information. They investigate the
+codebase directly to fill knowledge gaps discovered during
+the interview.
+
+### QA Scenario Generators
+
+Definition: <enact_dir>/agents/qa_scenario_generator.md
+
+QA scenario generators run once after task generation.
+They read the project plan and all implementation task
+descriptions, then generate manual QA scenarios for
+implementation tasks that have CLI-exercisable
+functionality.
+
+### Manual QA Testers
 
 Definition: <enact_dir>/agents/manual_qa_tester.md
 
@@ -176,7 +210,7 @@ using the command line interface, and optionally exercise
 autonomy to search for additional production problems and
 file tasks.
 
-## Bugfix Coders
+### Bugfix Coders
 
 Definition: <enact_dir>/agents/bugfix_coder.md
 
@@ -189,28 +223,20 @@ either implementing hardening directly or filing a task to
 address architectural issues that allowed the bug to
 exist.
 
-## Integration Reviewers
+### Subject Matter Expert Reviewers
 
-Definition: <enact_dir>/agents/integration_reviewer.md
+Definition: <enact_dir>/agents/sme_reviewer.md
 
-The integration reviewer is the final stop-the-line audit
-before a project is considered complete. It validates the
-entire pipeline end-to-end: that the plan matched the
-original prompt, tasks fully covered the plan,
-implementation is correct, testing is sufficient, and the
-pieces integrate into a working whole.
+Subject matter expert reviewers look at changes from the
+perspective of a single subject, on which they have deep
+expertise, and suggest changes based on their knowledge.
 
-## Technical Writers
+## Ad-Hoc Agents
 
-Definition: <enact_dir>/agents/technical_writer.md
+These agents are not selected during Agent Selection.
+The Orchestrator spawns them on demand.
 
-The technical writer creates and maintains project
-documentation after all tasks complete. It updates
-existing documents and also functions in a 'postmortem'
-capacity: what went wrong during this project, and what
-documentation could have existed to prevent this problem?
-
-## Merge Conflict Resolvers
+### Merge Conflict Resolvers
 
 Definition: <enact_dir>/agents/merge_conflict_resolver.md
 
@@ -220,16 +246,3 @@ back into `<main_branch>`. They understand both sides
 of a conflict and resolve them to preserve the intent
 of both changes, then verify the result passes all
 tests.
-
-## Enact Metacognizers
-
-Definition: <enact_dir>/agents/enact_metacognizer.md
-
-The enact metacognizer is a special subagent which is
-responsible for improving Enact itself. It should always
-be included in every Enact session. It runs Mini
-Metacognizers to read transcripts, and synthesizes their
-findings into a post-session review at
-`~/.enact/<enact_id>/META.md` with concrete
-recommendations for improving Enact's own agent prompts
-and skills.
