@@ -19,9 +19,19 @@ defines the specific project lifecycle.
    sed 's@^refs/remotes/origin/@@'`
    If this fails, ask the user. Store as
    `main_branch` and pass it to every pipeline agent.
-5. Initialize `<scratch>/ORCHESTRATOR_STATE.md` (see
+5. Clean up stale worktrees from previous sessions:
+   ```
+   git worktree list
+   ```
+   For any worktrees matching `~/.enact/*/task_*`,
+   remove them:
+   ```
+   git worktree remove --force <path>
+   git branch -D <branch>
+   ```
+6. Initialize `<scratch>/ORCHESTRATOR_STATE.md` (see
    below)
-6. Report the scratch directory to the user immediately
+7. Report the scratch directory to the user immediately
 
 ## Agent Selection
 
@@ -93,7 +103,7 @@ After each subagent completes:
 3. Determine the next subagent based on the state machine and Claude Code task
    statuses
 4. Spawn it with `run_in_background: true`
-5. DO NOT POLL. End your turn and wait for a completion notification.
+5. **End your turn and wait.** See Critical Rules.
 
 ## ORCHESTRATOR_STATE.md
 
@@ -163,7 +173,15 @@ from the current `<main_branch>`, so dependent code
 must be merged first.
 
 Track active task pipelines in ORCHESTRATOR_STATE.md.
-When a subagent for one task completes, check whether:
+Before spawning new task pipelines, verify the active
+worktree count with `git worktree list` — do not rely
+solely on ORCHESTRATOR_STATE.md for concurrency
+tracking.
+
+Process completions **one at a time**, in notification
+order. This prevents merge conflicts from concurrent
+fast-forward attempts. When a subagent completes:
+
 1. The current task's pipeline has a next step — if so,
    spawn it.
 2. A concurrency slot is free and unblocked tasks
@@ -191,10 +209,10 @@ Orchestrator worktree lifecycle:
    git fetch <project_dir> <main_branch>
    git rebase FETCH_HEAD
    ```
-   If conflicts arise, attempt to resolve them inline.
-   If conflicts are too complex, spawn a Merge Conflict
-   Resolver with the worktree path and a description of
-   the task's changes.
+   Prefer resolving conflicts yourself rather than
+   spawning an agent — only spawn a Merge Conflict
+   Resolver if conflicts are too complex to resolve
+   inline.
 4. **Fast-forward merge** after rebase succeeds:
    ```
    cd <project_dir>
@@ -209,8 +227,13 @@ Orchestrator worktree lifecycle:
 
 For each task, run these pipeline phases in order:
 
-1. **Feature Coder** — implement the task in its worktree
-2. **Code Review** — spawn all applicable reviewers in parallel:
+1. **Feature Coder** — implement the task in its
+   worktree. The Feature Coder must rebase onto
+   `<main_branch>` before reporting complete (fetching
+   from `<project_dir>`) to reduce merge conflicts at
+   merge time.
+2. **Code Review** — spawn all applicable reviewers in
+   parallel:
    - Code Conformance Reviewer
    - Code Quality Reviewer
    - (Optional) SME Reviewer
@@ -336,9 +359,62 @@ After all tasks complete:
 
 ## Context Recovery
 
-If you are ever uncertain about the project state, re-read:
+If you are ever uncertain about the project state
+(e.g. after context compaction), run these steps
+before doing anything else:
 
-1. `~/.enact/<enact_id>/ORCHESTRATOR_STATE.md`
-2. Claude Code task statuses (via TaskList/TaskGet)
+1. `git worktree list` — shows which worktrees
+   currently exist. Any `task_*` worktree means an
+   agent is (or was) working on that task.
+2. `TaskList` — shows task statuses.
+3. Cross-reference worktrees with task statuses:
+   - `in_progress` + worktree exists → agent is likely
+     still running; wait for its completion notification
+   - `in_progress` + no worktree → agent finished but
+     wasn't merged; check for the branch with
+     `git branch --list 'enact/*/task_*'` and merge if
+     it exists, or reset the task to `pending` if gone
+   - `pending` + worktree exists → task was spawned but
+     not marked in_progress (treat as in_progress)
+4. Re-read `~/.enact/<enact_id>/ORCHESTRATOR_STATE.md`
 
-Do this **proactively** every 5-10 subagent rounds, not just when confused.
+Do NOT spawn new agents until you have confirmed the
+active worktree count is below the concurrency limit.
+
+Do this **proactively** every 5-10 subagent rounds,
+not just when confused.
+
+## Critical Rules
+
+### Waiting for Agents (MOST IMPORTANT)
+
+After launching background agents, you MUST **stop
+generating immediately**. Do not send any tool calls,
+do not write any messages, do not attempt to check on
+the agents. End your turn. The system will deliver a
+notification when each agent finishes.
+
+**Do NOT do any of the following while waiting:**
+
+- Do NOT call `Bash` with `sleep` + `tail` to poll
+- Do NOT call `Read` on the agent's output file
+- Do NOT call `TaskOutput` — this can KILL running
+  background agents when interrupted
+- Do NOT write a polling loop or repeated checks
+- Do NOT send any message — just stop and wait
+
+The correct pattern:
+1. Launch agents with `run_in_background: true`
+2. Optionally send a short status message to the user
+3. **End your turn. Do nothing else.**
+
+### Other Rules
+
+- **ALL** Task tool invocations MUST use
+  `run_in_background: true`
+- NEVER use the `resume` parameter to continue
+  agents — always spawn fresh agents
+- NEVER read large files yourself — let agents read
+  what they need
+- Launch multiple agents in parallel when possible
+  (single message, multiple Task calls)
