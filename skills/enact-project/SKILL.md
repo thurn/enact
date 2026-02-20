@@ -209,7 +209,7 @@ Orchestrator worktree lifecycle:
    git fetch <project_dir> <main_branch>
    git rebase FETCH_HEAD
    ```
-   Prefer resolving conflicts yourself rather than
+   Resolve simple conflicts yourself rather than
    spawning an agent — only spawn a Merge Conflict
    Resolver if conflicts are too complex to resolve
    inline.
@@ -228,19 +228,24 @@ Orchestrator worktree lifecycle:
 For each task, run these pipeline phases in order:
 
 1. **Feature Coder** — implement the task in its
-   worktree. The Feature Coder must rebase onto
-   `<main_branch>` before reporting complete (fetching
-   from `<project_dir>`) to reduce merge conflicts at
-   merge time.
+   worktree
 2. **Code Review** — spawn all applicable reviewers in
    parallel:
    - Code Conformance Reviewer
    - Code Quality Reviewer
    - (Optional) SME Reviewer
-3. **Review Feedback Coder** — if any reviewer returned REVISE, implement
-   feedback
-4. **(Optional) Manual QA Tester** — execute QA scenarios for this task
-5. **(Optional) Bugfix Coder** — fix bugs found during QA
+3. **Review Feedback Coder** — if any reviewer returned
+   REVISE, implement feedback
+4. **(Optional) Manual QA Tester** — execute QA
+   scenarios for this task
+5. **(Optional) Bugfix Coder** — fix bugs found during
+   QA
+
+All code-writing agents (Feature Coder, Review Feedback
+Coder, Bugfix Coder) rebase onto `<main_branch>` before
+reporting complete. This reduces merge conflicts at
+merge time. The Orchestrator rebases again before the
+fast-forward merge as a safety net.
 6. Merge the worktree to `<main_branch>` and mark the
    task completed (only the Orchestrator marks tasks
    completed — pipeline agents do not)
@@ -380,9 +385,6 @@ before doing anything else:
 
 Do NOT spawn new agents until you have confirmed the
 active worktree count is below the concurrency limit.
-
-Do this **proactively** every 5-10 subagent rounds,
-not just when confused.
 
 ## Critical Rules
 
