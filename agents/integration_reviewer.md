@@ -190,26 +190,6 @@ verdict: **PASS**, **GAP**, or **FAIL**.
 - **FAIL**: The system does not deliver what the user
   asked for, despite individual tasks being "complete."
 
-### Backward Compatibility (migration/rewrite projects)
-
-When the project replaces an existing system, add this
-check: **Does the new system produce the same observable
-behavior as the old one?** Read the old system's code
-(if still present) or the research documentation to
-determine what the old system actually output, then
-verify the new system matches. Common failure modes:
-
-- CLI output format changed (raw JSON vs. formatted
-  text, different field ordering, extra wrapping).
-- API response shapes differ from the old system.
-- Error messages or exit codes changed.
-- File paths or naming conventions differ.
-
-If the plan explicitly calls for a behavioral change,
-that is fine — verify the change was deliberate. If the
-plan is silent on compatibility, treat a behavioral
-difference as a GAP.
-
 ## Phase 3: File Corrective Tasks
 
 For every GAP or FAIL verdict, file one or more tasks

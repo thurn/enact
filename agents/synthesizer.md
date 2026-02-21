@@ -113,16 +113,7 @@ concrete examples with file paths when possible.]
 ## Open Questions
 [Anything unresolved that the Interviewer or Planner
 should address. Be specific — each question should state
-what decision it blocks and what information is needed.
-
-For migration/rewrite tasks: questions about what the
-new system should output or how it should behave are
-almost always answerable by reading what the old system
-does. Resolve these yourself by cross-referencing the
-research findings. Only escalate behavioral questions
-to the Planner when the old system's behavior is
-genuinely unclear or when you have evidence that the
-user wants to change it.]
+what decision it blocks and what information is needed.]
 ```
 
 ### Writing Guidelines

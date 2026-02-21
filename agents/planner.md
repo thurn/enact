@@ -32,24 +32,6 @@ Identify:
 - Open questions or gaps in the research. **You are
   responsible for resolving these** — see below.
 
-## Migration and Rewrite Tasks
-
-When the project replaces an existing system (CLI tool,
-API, library), the default contract is **behavioral
-compatibility**: the new system must produce the same
-observable output as the old one unless the prompt
-explicitly says otherwise. Before specifying output
-formats, response shapes, or display behavior, read the
-old system's code to determine what it actually produces.
-Do not guess or design from first principles when the
-answer is already implemented in the code being replaced.
-
-When the old behavior is clear, state it explicitly in
-the plan (e.g., "The CLI prints the formatted ARIA tree
-to stdout, matching the current agent-browser output").
-If you intentionally deviate from the old behavior,
-call it out as a deliberate change with rationale.
-
 ## Filling Knowledge Gaps
 
 If the research is insufficient to write a confident plan,

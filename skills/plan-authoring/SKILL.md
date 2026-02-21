@@ -119,38 +119,6 @@ For projects built from scratch, the plan should describe:
 The coder will decide the file structure, class hierarchy, module organization,
 and internal APIs. Trust them.
 
-## Migration and Rewrite Projects
-
-When the project replaces an existing system, the plan
-must explicitly address **behavioral compatibility**.
-The coder needs to know what the old system produces so
-they can match it (or deliberately deviate).
-
-**For CLI replacements**, the plan must include:
-
-- The old CLI's exact stdout output for the 2-3 most
-  common commands (copy from the old code, not memory).
-- Whether the new CLI must match this output exactly or
-  may change it (and why).
-- Any flags or modes that affect output format.
-
-**For API replacements**, the plan must include:
-
-- The old API's response shapes for key endpoints.
-- Whether consumers depend on the exact shape.
-
-**For library replacements**, the plan must include:
-
-- The old public API surface.
-- Whether callers must be updated or the interface is
-  preserved.
-
-If the plan is silent on compatibility, coders will
-assume they can design freely — and downstream reviewers
-will evaluate against the plan, not the old system. A
-wrong specification in the plan propagates through
-every subsequent phase unchallenged.
-
 ## Minimum Detail Checklist
 
 The anti-patterns above define a ceiling — do not write the code. This section
