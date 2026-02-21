@@ -78,12 +78,12 @@ flaw, skill gap.
 
 ### Step 1: Find the Transcripts
 
-Use the `enact-transcripts.py` script (in the project
-`scripts/` directory) to locate all transcripts for this
+Use the `enact-transcripts.py` script (installed to
+`~/.claude/scripts/`) to locate all transcripts for this
 session:
 
 ```bash
-python3 <project_dir>/scripts/enact-transcripts.py \
+python3 ~/.claude/scripts/enact-transcripts.py \
   <enact_id>
 ```
 
@@ -155,7 +155,7 @@ JSONL transcripts themselves.
 **Step A: Generate the summary.**
 
 ```bash
-python3 <project_dir>/scripts/summarize-session.py \
+python3 ~/.claude/scripts/summarize-session.py \
   <transcript_path> > /tmp/summary_<agent_name>.md
 ```
 
