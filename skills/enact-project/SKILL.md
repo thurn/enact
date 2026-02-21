@@ -43,6 +43,9 @@ These agents run unless the user explicitly opts out:
 - **Synthesizer** — combines research into RESEARCH.md
 - **Planner** — writes PLAN.md technical design
 - **Plan Refiner** — audit complex plans
+- **Plan Approval** — user reviews and approves plan
+  before task generation (Orchestrator behavior, not a
+  subagent)
 - **Task Generator** — breaks plan into Claude Code tasks
 - **Task Refiner** — validate task completeness
 - **Feature Coders** — implement tasks (concurrently, in git worktrees)
@@ -86,6 +89,7 @@ You are always in one of these states:
 |-----------------|--------------------------------------|
 | RESEARCH        | Surveyor, Researchers, Synthesizer   |
 | PLANNING        | Planner, optional Refiner/Interview  |
+| PLAN_APPROVAL   | User reviews and approves plan       |
 | TASK_GENERATION | Task Generator, optional refinement  |
 | TASK_PIPELINE   | Per-task: Coder, Review, opt. QA     |
 | POST_TASK       | Integration, Meta pipeline, Writer   |
@@ -138,6 +142,34 @@ ambiguities.
 
 Spawn a Planner to create `~/.enact/<enact_id>/PLAN.md`. If the Plan Refiner was
 selected, spawn it to audit the plan. Do not read the plan.
+
+## Plan Approval Phase
+
+After the plan (and optional refinement) is complete,
+pause for user approval before generating tasks. This
+is **on by default** — skip this phase only if the user
+explicitly requested no plan approval during agent
+selection.
+
+1. Enter the `PLAN_APPROVAL` state and update
+   ORCHESTRATOR_STATE.md
+2. Use AskUserQuestion to present the plan for review:
+   - Tell the user the plan is at
+     `~/.enact/<enact_id>/PLAN.md`
+   - Offer options: "Approve plan and proceed to task
+     generation" or "Suggest changes to the plan"
+3. If the user approves: transition to TASK_GENERATION
+4. If the user suggests changes:
+   a. Spawn a new **Planner** with the user's feedback
+      and a note that it should revise the existing
+      plan at `~/.enact/<enact_id>/PLAN.md`
+   b. If Plan Refiner was selected, spawn it to audit
+      the revised plan
+   c. Return to step 2 (ask for approval again)
+
+Do NOT implement plan changes yourself. Always delegate
+revision to a Planner subagent. The approval loop
+repeats until the user is satisfied.
 
 ## Task Generation Phase
 
