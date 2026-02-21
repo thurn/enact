@@ -29,7 +29,8 @@ Identify:
 - What exists today and what needs to change.
 - Decisions already made during the interview.
 - Conventions and patterns in the codebase.
-- Open questions or gaps in the research.
+- Open questions or gaps in the research. **You are
+  responsible for resolving these** — see below.
 
 ## Filling Knowledge Gaps
 
@@ -42,10 +43,33 @@ read tools. Common reasons to research further:
   works* at the level needed to plan around it.
 - A dependency or integration point is mentioned but not
   examined.
+- RESEARCH.md lists open questions that affect the plan.
 
 Keep supplementary research focused and minimal. You are
 validating and filling gaps, not redoing the initial
 research.
+
+### Resolving Open Questions
+
+You own every open question in RESEARCH.md. For each one:
+
+1. **Answer it yourself** if the combined research plus
+   your own investigation provides enough information.
+   Most open questions from researchers can be resolved
+   by cross-referencing findings or reading a few more
+   files.
+2. **Use AskUserQuestion** if the question is genuinely
+   ambiguous — i.e., it involves a product decision, user
+   preference, or tradeoff that cannot be resolved by
+   reading code. This should be rare.
+3. **Carry it forward** in the plan's Open Questions
+   section only if it cannot affect the plan's design
+   and is safe to defer to implementation time.
+
+Do not pass RESEARCH.md open questions through to the
+plan unexamined. If an open question appears in your
+plan, you should be able to explain why it could not be
+resolved at planning time.
 
 ## Planning Guidelines
 
