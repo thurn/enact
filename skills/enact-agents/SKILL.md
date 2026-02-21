@@ -146,19 +146,6 @@ original prompt, tasks fully covered the plan,
 implementation is correct, testing is sufficient, and the
 pieces integrate into a working whole.
 
-### Technical Writers
-
-Definition: agents/technical_writer.md
-
-The technical writer runs after metacognition completes.
-It reads mini-metacognizer findings and META.md to
-conduct postmortem analysis, identifying documentation
-gaps that caused problems during the session. It
-maintains cohesive documentation under `docs/<topic>/`
-in the Enact project directory — not per-project docs,
-but a growing knowledge base that helps agents across
-all future projects.
-
 ### Meta-Surveyors
 
 Definition: agents/meta_surveyor.md
@@ -189,6 +176,19 @@ findings into a post-session review at
 recommendations for improving Enact's own agent prompts
 and skills. It should always be included in every Enact
 session as the final step of the metacognition phase.
+
+### Technical Writers
+
+Definition: agents/technical_writer.md
+
+The technical writer runs after metacognition completes.
+It reads mini-metacognizer findings and META.md to
+conduct postmortem analysis, identifying documentation
+gaps that caused problems during the session. It
+maintains cohesive documentation under `docs/<topic>/`
+in the Enact project directory — not per-project docs,
+but a growing knowledge base that helps agents across
+all future projects.
 
 ## Default-Off Agents
 

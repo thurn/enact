@@ -53,13 +53,11 @@ task results) and identify knowledge worth preserving:
 - Conventions established that should be standard
 - Architectural decisions with broad applicability
 
-Only capture knowledge that generalizes. Per-project
-details belong in that project's own docs, not here.
+Only capture knowledge that is generally important.
 
 ## Documentation Structure
 
-All documentation lives under `docs/` in the Enact
-project directory. Structure:
+All documentation lives under `docs/`. Structure:
 
 ```
 docs/
@@ -136,7 +134,6 @@ Prioritize:
 Do NOT:
 - Create a document for every project that runs
 - Duplicate information already in agent prompts
-- Write documentation that only applies to one project
 - Add content that agents can infer from the code
 - Create README files, rules files, or skill files
 
