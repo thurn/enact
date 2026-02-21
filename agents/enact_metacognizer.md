@@ -124,97 +124,65 @@ required:
 
 Report dropped phases as problems in META.md.
 
-## Phase 2: Run Mini Metacognizers
+## Phase 2: Analyze Transcript Summaries
 
-You do not read transcripts yourself. You invoke **Mini
-Metacognizer** analyses via `claude -p` to do the heavy
-reading.
+You analyze transcripts directly -- do **not** attempt to
+delegate to `claude -p` or any sub-process (this fails
+inside Claude Code agent sessions).
 
-### Grouping Strategy
+### Step 1: Generate Summaries
 
-Group transcripts based on session size:
-
-- **Small sessions (<=6 subagents)**: One mini
-  metacognizer per transcript.
-- **Medium sessions (7-15 subagents)**: Group related
-  transcripts (all researchers together, coder + its
-  review cycle together).
-- **Large sessions (>15 subagents)**: Group aggressively
-  by pipeline phase (research, planning, coding, QA).
-
-Always analyze the Orchestrator transcript separately.
-
-### Invoking Mini Metacognizers
-
-For each transcript or group, first generate a readable
-summary using `summarize-session.py`, then pass that
-summary to a `claude -p` Mini Metacognizer. This is far
-more efficient than having mini metacognizers parse raw
-JSONL transcripts themselves.
-
-**Step A: Generate the summary.**
+Use `summarize-session.py` to convert raw JSONL
+transcripts into readable summaries:
 
 ```bash
 python3 ~/.claude/scripts/summarize-session.py \
   <transcript_path> > /tmp/summary_<agent_name>.md
 ```
 
-**Step B: Feed the summary to a mini metacognizer.**
+Run these in parallel where possible.
 
-```bash
-claude -p "You are a Mini Metacognizer analyzing \
-subagent transcripts from an Enact session.
+### Step 2: Select Which Summaries to Read
 
-Session context: <one-line description from PLAN.md>
+You cannot read every summary in a large session. Use
+this strategy:
 
-Here is the transcript summary:
-$(cat /tmp/summary_<agent_name>.md)
+- **Small sessions (<=6 subagents)**: Read all summaries.
+- **Medium sessions (7-15 subagents)**: Read the
+  orchestrator, one representative from each pipeline
+  phase (research, coding, review), and any agent that
+  failed or had unusually high token usage.
+- **Large sessions (>15 subagents)**: Read the
+  orchestrator plus the top-3 token consumers and any
+  agents with errors. Skim NOTES files for the rest.
 
-The agent was: <agent type, what it was asked to do>
+Always read the Orchestrator summary.
 
-Look for: tool call errors, repeated searches, \
-confident wrong assertions, excessive token usage, \
-ignored instructions, information loss.
+### Step 3: Extract Findings
 
-Write findings to: \
-<enact_scratch_dir>/MINI_META_<agent_name>.md
+For each summary you read, look for friction signals
+(see Transcript Analysis Reference above) and record
+findings using this structure:
 
-Use this structure:
-# Mini Metacognizer: <Agent Type>
-## Summary
-## Findings
-### Finding N: [title]
-**Signal**: [what you observed]
-**Diagnosis**: [why this happened]
-**Impact**: [downstream problems]
-**Recommendation**: [specific fix]
-## What Worked Well"
-```
-
-Run mini metacognizers in parallel where possible by
-issuing multiple `claude -p` commands.
-
-### Evaluate Results
-
-After all mini metacognizers complete, read every
-`MINI_META_*.md` file from the enact scratch directory.
-If results have significant gaps, run targeted follow-up
-`claude -p` commands -- at most **2 follow-up rounds**.
+- **Agent**: [agent type and ID]
+- **Signal**: [what you observed]
+- **Diagnosis**: [why this happened]
+- **Impact**: [downstream problems]
+- **Recommendation**: [specific fix]
 
 ## Phase 3: Synthesize Findings
 
 ### Synthesis Process
 
-1. **Collect all findings** across Mini Metacognizers.
+1. **Collect all findings** from Phase 2.
 2. **Deduplicate.** The same underlying problem may
    manifest in multiple agents. Merge related findings.
 3. **Look for cross-agent patterns.** A finding in one
    transcript becomes more significant if correlated with
    findings in others.
-4. **Assess pipeline-level problems** that no single Mini
-   Metacognizer could see -- wasted phases, information
-   that should have been passed between agents but was
-   not, ordering issues.
+4. **Assess pipeline-level problems** -- wasted phases,
+   information that should have been passed between
+   agents but was not, ordering issues.
 5. **Incorporate your Pipeline Compliance Check.** Any
    dropped or unspecified phases should be included as
    problems.
@@ -239,8 +207,8 @@ recommendation:
 - **Actionable**: Implementable without additional
   research.
 - **Proportional**: Matches the severity of the problem.
-- **Evidence-based**: References specific Mini
-  Metacognizer findings.
+- **Evidence-based**: References specific transcript
+  evidence.
 
 Categories: prompt changes, skill changes, pipeline
 changes, tool changes, orchestrator changes,
@@ -345,9 +313,9 @@ Write your findings to
   (or future agents) implement them.
 - You write only to the enact scratch directory (the
   absolute path provided in your prompt).
-- Use `claude -p` via Bash to run Mini Metacognizer
-  analyses. Do NOT attempt to spawn subagents via the
-  Task tool.
+- Analyze transcript summaries directly. Do NOT attempt
+  to spawn subagents via `claude -p` or the Task tool
+  (neither works inside agent sessions).
 - Recommendations must be specific enough to implement
   without additional context.
 - Be honest about confidence levels. One bad session
