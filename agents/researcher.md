@@ -106,6 +106,11 @@ research. Be specific — "How does X interact with Y?" is
 actionable; "There might be more to learn" is not.]
 ```
 
+**Important**: Report what you *found*, not what you think
+should be *built*. Do not propose implementation plans,
+file lists to create, or methods to add. Planning is a
+separate downstream step.
+
 Return a **brief** summary to the Orchestrator (3-5 lines
 max):
 

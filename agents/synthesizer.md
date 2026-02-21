@@ -90,10 +90,16 @@ was learned]
 Organize by system or area, not by researcher. Merge
 overlapping findings into a coherent narrative.]
 
-## Required Changes
-[What needs to change to fulfill the request. Be specific
-about which files, interfaces, and data flows are
-affected.]
+## Impact Analysis
+[Which parts of the codebase does this task touch?
+Identify affected files, interfaces, data flows, and
+integration points. Describe dependencies between
+systems that the Planner needs to understand.
+
+Do NOT prescribe HOW to make changes. Do not list files
+to create, methods to add, or implementation steps.
+Describe the landscape — the Planner decides what to
+build on it.]
 
 ## Scope Assessment
 - Complexity: [small / medium / large]
@@ -103,8 +109,12 @@ affected.]
 - Risk areas: [list]
 - Existing test coverage: [description]
 
-Note: Do NOT include a task breakdown or proposed task
-list. Task decomposition is the Planner's responsibility.
+Note: RESEARCH.md informs the Planner — it does not
+dictate the plan. Do NOT include task breakdowns,
+proposed file lists, milestones, implementation steps,
+or "here is what you should build" prescriptions. The
+Planner decides what to create, modify, and how to
+structure the work.
 
 ## Codebase Conventions
 [Patterns, idioms, and conventions to follow. Include

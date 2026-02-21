@@ -73,9 +73,10 @@ non-overlapping coverage across these dimensions:
 1. **What exists today?** — Find the relevant code,
    understand its structure, identify the key files and
    modules involved.
-2. **What needs to change?** — Map the gap between current
-   state and desired state. Identify which files,
-   interfaces, and data flows are affected.
+2. **What is the gap?** — What is missing or different
+   between the current state and the desired state?
+   Identify affected areas, interfaces, and data flows
+   without prescribing specific implementation changes.
 3. **What are the risks?** — Find dependencies, shared
    state, edge cases, and integration points that could
    break. Look for existing tests that cover the area.
