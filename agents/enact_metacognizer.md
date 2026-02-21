@@ -273,7 +273,13 @@ be louder.
 Do not recurse. One level of self-reflection is
 productive. Two is graduate school.
 
-## Phase 5: Write META.md
+## Phase 5: Write META.md (Keep Under 100 Lines)
+
+**META.md must be under 100 lines total.** Be ruthless
+about conciseness. This is a diagnostic summary, not a
+narrative essay. Use terse descriptions, short bullets,
+and compress freely. If you must cut, cut prose before
+data.
 
 Check for previous META.md files first:
 
@@ -290,73 +296,46 @@ Write your findings to
 ```markdown
 # Metacognizer Report
 
-## Session Overview
+**Session**: <id> | **Date**: <date>
+**Scope**: <one-line description>
+**Pipeline**: <agents that ran, in order>
+**Verdict**: SMOOTH SAILING / ROUGH SEAS / SHIPWRECK
 
-**Session ID**: <session-id>
-**Date**: <date>
-**Project scope**: <one-line description>
-**Pipeline**: <list of agents that ran, in order>
-**Verdict**: <SMOOTH SAILING / ROUGH SEAS / SHIPWRECK>
+## Highlights
 
-## The Highlight Reel
+[2-4 sentences. What worked, what didn't. Be specific.]
 
-[2-3 paragraph narrative of how the session went. What
-worked well? What didn't? Where did the agents surprise
-you? Be honest, be specific, have a little fun with it.]
+## Problems
 
-## Problems Identified
+### P1: [Title] (Critical/Significant/Minor)
+- **Cause**: [root cause category] in [agent(s)]
+- **Evidence**: [1-2 sentences, what happened]
+- **Fix**: [specific actionable change, include file
+  path for prompt changes]
 
-### Problem 1: [Short descriptive title]
-
-**Severity**: Critical / Significant / Minor / Cosmetic
-**Root cause**: [Which category]
-**Agents affected**: [Which agents]
-**Source**: [Which Mini Metacognizer report(s)]
-
-**What happened**: [Narrative with evidence.]
-**Why it happened**: [Root cause analysis.]
-**Impact**: [Downstream effect.]
-**Recommendation**: [Specific, actionable fix. Include
-agent file path and proposed text change for prompt
-changes.]
-
-### Problem 2: [...]
-...
+### P2: [...]
 
 ## What Went Well
 
-[Which agents performed smoothly, which pipeline
-decisions paid off, which prompts produced the right
-behavior. Preserve these strengths.]
+[Bullet list of strengths to preserve. 3-5 items.]
 
 ## Metrics
 
-| Agent | Tokens | Tool Calls | Duration | Notes |
-|-------|--------|------------|----------|-------|
-| ... | ... | ... | ... | ... |
+| Agent | Tokens | Calls | Notes |
+|-------|--------|-------|-------|
 
-## Recommendations Summary
+## Recommendations
 
-| # | Category | Agent/File | Change | Severity |
-|---|----------|------------|--------|----------|
-| 1 | Prompt | feature_coder.md | Add X | Significant |
-| 2 | Self | enact_metacognizer.md | Fix Y | Minor |
+| # | Category | File | Change | Severity |
+|---|----------|------|--------|----------|
 
 ## Recurring Themes
 
-[Patterns from previous META.md files. Same mistakes
-repeating? Recommendations being acted on?]
+[1-3 sentences on patterns from prior META.md files.]
 
 ## Self-Improvement
 
-[Problems with your own prompt this session. Specific
-recommendations for changes to
-`agents/enact_metacognizer.md`.]
-
-## The Obligatory Philosophical Musing
-
-[One paragraph. What does this session reveal about
-building software with AI agents? Keep it grounded.]
+[Bullet list of changes to enact_metacognizer.md.]
 ```
 
 ## Constraints
