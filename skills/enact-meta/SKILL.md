@@ -8,146 +8,136 @@ description: >-
   improving agent prompts after an Enact run.
 ---
 
-# Implement Metacognizer Recommendations
+# Improving Enact After a Session
 
-Apply META.md findings from the most recent Enact
-session to improve agent prompts, skills, and pipeline
-design.
+Make targeted changes to Enact agents, skills, or
+pipeline design, grounded in evidence from the most
+recent session.
 
 ## The Golden Rule
 
-**Every edit must trace to specific evidence.** Do not
-make speculative improvements. Each change must
-reference a META.md recommendation number, a
-mini-metacognizer finding, or a recurring theme across
-sessions.
+**The user's prompt drives direction; session evidence
+drives grounding.** The user tells you *what* to
+change. Session artifacts tell you *why* it matters
+and *how* agents actually behaved. Never apply META.md
+recommendations uncritically — the user decides what
+to act on.
 
-## Discovering the Session
+## Workflow
 
-Find the most recent Enact session:
+### 1. Understand the Request
+
+Read the user's prompt carefully. They may ask to:
+- Fix a specific problem they observed
+- Implement a META.md recommendation they agree with
+- Rework an agent's behavior based on session results
+- Change pipeline structure or agent selection
+- Address a pattern across multiple sessions
+
+### 2. Gather Evidence
+
+Find the most recent session and read artifacts that
+are relevant to the user's request:
 
 ```bash
 ls -t ~/.enact/*/META.md | head -1
 ```
 
-If no META.md exists, abort — there is nothing to
-implement.
+**Session artifacts** (in `~/.enact/<id>/`):
 
-Read these files in order:
+| File | Use for |
+|------|---------|
+| `META.md` | Synthesized findings and recommendations |
+| `meta/*_result.md` | Detailed per-batch findings |
+| `meta/*.md` (not *_result) | Assignment context |
+| `ORCHESTRATOR_STATE.md` | Pipeline overview |
+| `PLAN.md` | What the session was building |
+| `REVIEW_*.md` | Code review findings |
+| `INTEGRATION_REVIEW.md` | End-to-end audit |
 
-1. `~/.enact/<id>/META.md` — the synthesized report
-2. `~/.enact/<id>/meta/*_result.md` — mini-metacognizer
-   findings (skim for detail behind recommendations)
-3. `~/.enact/<id>/ORCHESTRATOR_STATE.md` — pipeline
-   overview and session config
+**Transcripts** — use when you need to see what an
+agent actually did. See
+[session-reference.md](session-reference.md) for
+transcript tools, friction signals, and diagnosis
+patterns.
 
-## Checking Prior Implementation
+Read only what is relevant. If the user says "fix the
+conformance reviewer," you need META.md findings about
+conformance and maybe a transcript summary — not the
+full research phase.
 
-Multiple sessions may have META.md files. Read all of
-them:
+### 3. Diagnose Before Editing
 
-```bash
-ls ~/.enact/*/META.md
-```
+Before changing any file, state:
+- **What went wrong** (specific agent behavior)
+- **Why** (root cause from evidence)
+- **What change fixes it** (targeted edit)
 
-Check each META.md's "Recurring Themes" section for
-recommendations that keep reappearing. Prioritize
-these — they indicate systemic problems that previous
-sessions identified but nobody fixed.
+If the evidence is ambiguous, investigate further
+using `summarize-session.py` on relevant agent
+transcripts before proposing edits.
 
-## Triage Recommendations
+### 4. Make Changes
 
-From META.md's Recommendations table, classify each:
+**Agent prompts**: `agents/<agent_name>.md`
+**Skills**: `skills/<skill-name>/SKILL.md`
+**Pipeline**: `skills/enact-project/SKILL.md` and
+`skills/enact-agents/SKILL.md`
 
-- **Implement now**: Specific prompt/skill edits with
-  a clear target file and change description.
-- **Needs investigation**: Recommendation is vague or
-  requires reading transcripts to understand the
-  problem. Use `summarize-session.py` to investigate
-  before editing.
-- **Skip**: Recommendation is model-limitation,
-  already implemented, or not reproducible.
-
-Process recommendations in severity order: Critical
-first, then Significant, then Minor.
-
-## Making Changes
-
-### Agent Prompt Edits
-
-Agent definitions live at:
-`/path/to/enact/agents/<agent_name>.md`
-
-When editing an agent prompt:
-
-1. Read the full agent file first.
-2. Make the minimal edit that addresses the
-   recommendation. Do not refactor surrounding text.
+For every edit:
+1. Read the full target file first.
+2. Make the minimal change that addresses the problem.
 3. Verify the file stays under 500 lines and is
    line-wrapped at 80 characters.
+4. When changing pipeline behavior, check that agent
+   prompts referencing that behavior stay consistent.
 
-### Skill Edits
+### 5. Check Prior Sessions
 
-Skills live at:
-`/path/to/enact/skills/<skill-name>/SKILL.md`
-
-Same rules: read first, minimal edit, respect limits.
-
-### Pipeline Design Changes
-
-Pipeline logic lives in:
-- `skills/enact-project/SKILL.md` — orchestrator
-  state machine and per-task pipeline
-- `skills/enact-agents/SKILL.md` — agent descriptions
-  and selection defaults
-
-For pipeline changes, also update any agent prompts
-that reference the changed pipeline behavior.
-
-## Verification Checklist
-
-After all edits:
-
-1. Every edited file is under 500 lines.
-2. Every edited file is line-wrapped at 80 characters.
-3. No edit introduced contradictions with other agent
-   prompts or skills.
-4. Each edit is traceable to a specific META.md
-   recommendation or mini-metacognizer finding.
+If multiple sessions exist (`ls ~/.enact/*/META.md`),
+skim prior META.md files for recurring themes. A
+recommendation that appears in multiple sessions is
+stronger evidence. A recommendation that was already
+addressed but reappears indicates the fix was
+insufficient.
 
 ## What NOT to Do
 
-- Do NOT rewrite agent prompts from scratch. Make
-  targeted insertions or modifications.
-- Do NOT implement recommendations marked as
-  "fundamental model limitation" — these cannot be
-  fixed with prompt changes.
-- Do NOT add speculative improvements beyond what
-  META.md recommends. Enact sessions are the testing
-  ground for changes; untested changes are noise.
-- Do NOT edit META.md or any file in `~/.enact/`.
-  Session artifacts are read-only historical records.
+- Do NOT apply all META.md recommendations. The user
+  decides what to act on.
+- Do NOT rewrite prompts from scratch. Targeted edits.
+- Do NOT make speculative improvements the user did
+  not ask for.
+- Do NOT edit files in `~/.enact/`. Session artifacts
+  are read-only historical records.
 
 ## Quick Reference
 
 | Rule | Detail |
 |------|--------|
-| Source of truth | META.md recommendations table |
-| Detail source | meta/*_result.md findings |
+| Direction | User prompt, not META.md table |
+| Evidence | Session artifacts and transcripts |
 | Agent prompts | agents/<name>.md |
 | Skills | skills/<name>/SKILL.md |
 | Pipeline | skills/enact-project/SKILL.md |
 | Line limit | 500 lines per file |
 | Line wrap | 80 characters |
-| Edit style | Minimal, targeted, traceable |
+| Edit style | Minimal, targeted, evidence-grounded |
 
 ## Common Mistakes
 
 | Mistake | Fix |
 |---------|-----|
-| Editing without reading full file | Always Read first |
-| Speculative improvements | Trace every edit to evidence |
-| Ignoring recurring themes | Prioritize repeat findings |
-| Rewriting entire sections | Minimal targeted edits |
-| Skipping verification | Check line count and wrapping |
-| Editing session artifacts | ~/.enact/ is read-only |
+| Applying all META.md blindly | User decides scope |
+| Editing without reading file | Always Read first |
+| No evidence for change | Cite specific findings |
+| Rewriting entire sections | Targeted insertions |
+| Ignoring prior sessions | Check recurring themes |
+
+## Supporting Documents
+
+- [session-reference.md](session-reference.md):
+  How to find and read session transcripts, friction
+  signal taxonomy, and root cause diagnosis patterns.
+  Read when investigating agent behavior beyond what
+  META.md provides.
