@@ -155,18 +155,36 @@ documentation after all tasks complete. It updates
 existing documents and identifies documentation gaps
 that could prevent problems in future projects.
 
+### Meta-Surveyors
+
+Definition: agents/meta_surveyor.md
+
+Meta-surveyors start the metacognition phase by
+discovering all session transcripts, performing pipeline
+compliance checks, and creating analysis assignments
+for parallel Mini-Metacognizers. They follow the same
+surveyor pattern as research surveyors.
+
+### Mini-Metacognizers
+
+Definition: agents/mini_metacognizer.md
+
+Mini-metacognizers analyze a batch of transcripts based
+on an assignment from the Meta-Surveyor. They run
+summarize-session.py, extract friction signals, and
+write structured findings. Multiple mini-metacognizers
+run in parallel, one per assignment.
+
 ### Enact Metacognizers
 
 Definition: agents/enact_metacognizer.md
 
-The enact metacognizer is a special subagent which is
-responsible for improving Enact itself. It should always
-be included in every Enact session. It runs Mini
-Metacognizers to read transcripts, and synthesizes their
+The enact metacognizer synthesizes Mini-Metacognizer
 findings into a post-session review at
 `~/.enact/<enact_id>/META.md` with concrete
 recommendations for improving Enact's own agent prompts
-and skills.
+and skills. It should always be included in every Enact
+session as the final step of the metacognition phase.
 
 ## Default-Off Agents
 

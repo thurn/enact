@@ -56,7 +56,11 @@ These agents run unless the user explicitly opts out:
 - **Review Feedback Coders** — implement review feedback
 - **Integration Reviewer** — end-to-end validation
 - **Technical Writer** — documentation updates
-- **Enact Metacognizer** — post-session self-improvement
+- **Meta-Surveyor** — discovers transcripts, creates
+  analysis assignments
+- **Mini-Metacognizers** — parallel transcript analysis
+- **Enact Metacognizer** — synthesizes findings into
+  META.md
 
 ### Default-Off Agents
 
@@ -93,7 +97,7 @@ You are always in one of these states:
 | PLANNING        | Planner, optional Refiner/Interview  |
 | TASK_GENERATION | Task Generator, optional refinement  |
 | TASK_PIPELINE   | Per-task: Coder, Review, opt. QA     |
-| POST_TASK       | Integration, Writer, Metacognizer    |
+| POST_TASK       | Integration, Writer, Meta pipeline   |
 | COMPLETE        | All work done                        |
 
 After each subagent completes:
@@ -276,8 +280,19 @@ After all tasks complete, run selected post-task agents:
   and merges back to main.
 - **Technical Writer** — creates and updates
   documentation
-- **Enact Metacognizer** — post-session review at
-  `~/.enact/<enact_id>/META.md`
+- **Metacognition Phase** — 3-step pipeline:
+  1. Spawn a **Meta-Surveyor**, wait for it to
+     complete. It discovers transcripts, checks
+     pipeline compliance, and writes analysis
+     assignments to `<scratch>/meta/<N>.md`.
+  2. List `<scratch>/meta/*.md` (exclude
+     `*_result.md`). Spawn one
+     **Mini-Metacognizer** per assignment file in
+     parallel, wait for all to complete. Each writes
+     `<scratch>/meta/<N>_result.md`.
+  3. Spawn the **Enact Metacognizer** (synthesizer),
+     wait for it to complete. It reads all result
+     files and writes `~/.enact/<enact_id>/META.md`.
 
 ## Prompting Subagents
 
