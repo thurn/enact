@@ -148,9 +148,9 @@ too small -- combine it with the task that uses it.
 ### Task Ordering and Dependencies
 
 Tasks are defined in a logical order -- foundational
-first. Use explicit dependency declarations via
-`addBlockedBy` when creating tasks to express ordering
-constraints:
+first. Use the `blocked_by` field in each task file's
+YAML frontmatter to express ordering constraints (e.g.,
+`blocked_by: [1, 2]`):
 - Task B reads or modifies files that Task A creates or
   modifies.
 - Task B uses types, interfaces, or functions that Task A
@@ -165,25 +165,29 @@ start until all tasks it depends on have completed.
 
 ## Creating Tasks
 
-Use the `TaskCreate` tool to create each task directly.
-Do NOT write intermediate files -- create tasks one at a
-time using the tool.
+For each task, run
+`python3 ~/.claude/scripts/enact-tasks.py <scratch>/tasks next-id`
+via Bash to get the next available ID. Then use Write to
+create the task file at
+`<scratch>/tasks/task_<id>.md` with YAML frontmatter and
+the markdown body. Do NOT write intermediate files --
+create task files one at a time.
 
 ### Task Fields
 
-For each task, provide:
-- **subject**: Start with the project name in brackets.
-  Use imperative mood. Be specific. Bad: "Implement
-  feature". Good: "[AuthV2] Add JWT token validation
-  middleware".
-- **description**: The full task description following the
-  format below.
-- **metadata**: Set `{"tags": "feature"}` for new
-  functionality, `{"tags": "refactor"}` for
-  restructuring, `{"tags": "bugfix"}` for fixes,
-  `{"tags": "docs"}` for documentation.
-- **addBlockedBy**: List of task IDs that must complete
-  before this task can start.
+Each task file has YAML frontmatter and a markdown body:
+- **id**: The numeric ID from the `next-id` command.
+- **status**: Set to `pending`.
+- **owner**: Set to `""` (empty string).
+- **tags**: Set to `feature` for new functionality,
+  `refactor` for restructuring, `bugfix` for fixes,
+  `docs` for documentation.
+- **blocked_by**: List of task IDs that must complete
+  before this task can start (e.g., `[1, 2]`).
+- **H1 heading**: Start with the project name in
+  brackets. Use imperative mood. Be specific. Bad:
+  "Implement feature". Good: "[AuthV2] Add JWT token
+  validation middleware".
 
 ### Task Description Format
 
@@ -238,11 +242,12 @@ why it matters.]
 1. Read PLAN.md and investigate the codebase.
 2. Design the task graph (what tasks, what order, what
    dependencies).
-3. Create the first task with `TaskCreate`.
-4. Create subsequent tasks with `TaskCreate`, using
-   `addBlockedBy` to reference the IDs of tasks they
+3. Create the first task file with `next-id` + Write.
+4. Create subsequent task files, setting `blocked_by`
+   in frontmatter to reference the IDs of tasks they
    depend on.
-5. Verify the task list with `TaskList`.
+5. Verify with
+   `python3 ~/.claude/scripts/enact-tasks.py <scratch>/tasks list`.
 
 ## Common Mistakes to Avoid
 
@@ -281,8 +286,8 @@ max):
 - You are **read-only** with respect to the codebase. Do
   not modify source code.
 - You write only to the enact scratch directory
-  (`~/.enact/<enact_id>/`) and create tasks via
-  `TaskCreate`.
+  (`~/.enact/<enact_id>/`) and create task files in
+  `<scratch>/tasks/`.
 - Aim for **3-12 tasks** per session. Fewer than 3
   suggests the project should be a single coding session,
   not an Enact pipeline.

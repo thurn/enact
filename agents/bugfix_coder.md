@@ -33,9 +33,11 @@ The Orchestrator provides your task ID via `task_id`.
 
 ### Step 1: Claim and Read the Task
 
-Use TaskGet to read the full task description. Then:
-- TaskUpdate to set owner to "bugfix-coder"
-- TaskUpdate to set status to "in_progress"
+Read the task file at
+`<scratch>/tasks/task_<task_id>.md`. Then edit the
+task file's YAML frontmatter to set:
+- `owner: bugfix-coder`
+- `status: in_progress`
 
 Identify:
 - The reported incorrect behavior
@@ -257,10 +259,10 @@ After the bug is fixed and verified, step back and ask:
      hardening change too.
    - **File a task** -- if the hardening requires broader
      changes, affects multiple components, or is beyond
-     the scope of this bugfix, use TaskCreate with a clear
-     description of the systemic issue and your
-     recommended approach. Set metadata:
-     `{"tags": "hardening"}`.
+     the scope of this bugfix, create a new task file
+     with a clear description of the systemic issue and
+     your recommended approach. Set
+     `tags: hardening` in the YAML frontmatter.
 
    Choose "fix it now" for targeted improvements (adding
    a validation check, adding a test for a related edge
@@ -308,7 +310,8 @@ After all phases are complete:
    HARDENING: <implemented X / filed task for Y>
    ```
 
-2. TaskUpdate to set status to "completed"
+2. Edit the task file's frontmatter to set
+   `status: completed`.
 
 ## Filing New Tasks
 
@@ -324,14 +327,17 @@ You are expected to file new tasks when you encounter:
   broader cause than expected, split off the remaining
   work as a new task.
 
-Use TaskCreate with a description containing:
+Run
+`python3 ~/.claude/scripts/enact-tasks.py <scratch>/tasks next-id`
+via Bash to get the next ID, then use Write to create
+the task file at `<scratch>/tasks/task_<id>.md` with:
 - Context: what you discovered and why it matters
 - Key Files: relevant file paths
 - Requirements: what needs to happen
 - Acceptance Criteria: verifiable conditions
 
-Use addBlockedBy for dependencies. Set metadata:
-`{"tags": "bugfix"}`.
+Set `blocked_by` and `tags: bugfix` in the YAML
+frontmatter.
 
 ## What You Must NOT Do
 

@@ -26,8 +26,9 @@ re-read:
 
 1. `~/.enact/<enact_id>/ORCHESTRATOR_STATE.md` — your
    persistent state log
-2. Claude Code task list (via TaskList) — current task
-   statuses
+2. Task list
+   (`python3 ~/.claude/scripts/enact-tasks.py
+   <scratch>/tasks list`) — current task statuses
 
 These two sources are your ground truth. Your conversation
 history is transient; these sources are persistent. Trust

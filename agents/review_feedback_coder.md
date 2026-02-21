@@ -50,8 +50,8 @@ description, and the recommended fix.
 
 ### Step 2: Read the Task
 
-Use TaskGet with the task ID to read the full task
-description. Understand:
+Read the task file at
+`<scratch>/tasks/task_<task_id>.md`. Understand:
 - The original requirements and acceptance criteria.
 - The Feature Coder's completion notes (read
   `~/.enact/<enact_id>/NOTES_<task_id>.md`).
@@ -132,7 +132,7 @@ have subtle ripple effects.
 ### Step 1: Identify All Verification Commands
 
 Gather verification commands from:
-- The task's acceptance criteria (from TaskGet)
+- The task's acceptance criteria (from the task file)
 - The test suite for affected files
 - Linters, type checkers, and build commands relevant to
   the codebase
@@ -247,9 +247,12 @@ the scope of the review feedback:
   missed
 - **Scope that doesn't fit** the current task
 
-Use TaskCreate rather than silently absorbing extra work.
-Use addBlockedBy for dependencies. Set metadata:
-`{"tags": "bugfix"}`.
+Run
+`python3 ~/.claude/scripts/enact-tasks.py <scratch>/tasks next-id`
+via Bash to get the next ID, then use Write to create
+the task file at `<scratch>/tasks/task_<id>.md`.
+Set `blocked_by` and `tags: bugfix` in the YAML
+frontmatter.
 
 ## What You Must NOT Do
 

@@ -56,12 +56,14 @@ You will receive:
 - The enact scratch directory path
   (`~/.enact/<enact_id>/`).
 - The path to `~/.enact/<enact_id>/PLAN.md`.
-- Instructions to use TaskList to view tasks.
+- The tasks directory path (`<scratch>/tasks/`).
 
 ## Before You Start
 
-Read `PLAN.md` thoroughly. Use TaskList to see all
-implementation tasks. As you read, identify:
+Read `PLAN.md` thoroughly. Run
+`python3 ~/.claude/scripts/enact-tasks.py <scratch>/tasks list`
+via Bash to see all implementation tasks. As you read,
+identify:
 
 - **Which tasks have CLI-exercisable output** -- tasks
   that add or modify CLI commands, API endpoints,
@@ -144,12 +146,12 @@ Design scenarios across these categories as appropriate:
 
 ## Creating QA Scenarios as Tasks
 
-Create each QA scenario using TaskCreate. Set metadata
-`{"tags": "qa"}`:
-
-```
-metadata: {"tags": "qa"}
-```
+For each QA scenario, run
+`python3 ~/.claude/scripts/enact-tasks.py <scratch>/tasks next-id`
+via Bash to get the next available ID. Then use Write
+to create the task file at
+`<scratch>/tasks/task_<id>.md` with `tags: qa` in the
+YAML frontmatter.
 
 ### QA Scenario Description Format
 
@@ -211,8 +213,9 @@ If this scenario fails, file a bug task with:
 
 ### Dependencies Between QA Scenarios
 
-- If a CLI wrapper must be created first, use
-  addBlockedBy to make other QA scenarios depend on it.
+- If a CLI wrapper must be created first, set
+  `blocked_by` in the frontmatter to make other QA
+  scenarios depend on it.
 - Scenarios are generally independent of each other unless
   one creates state that another relies on.
 - QA scenarios should NOT depend on implementation tasks

@@ -63,8 +63,8 @@ given. Execute all matching QA scenarios, one at a time.
 
 ### Step 2: Read the Scenario
 
-Use TaskGet to read the full scenario description
-carefully.
+Read the QA scenario task file at
+`<scratch>/tasks/task_<scenario_id>.md` carefully.
 
 ### Step 3: Build Deep Context
 
@@ -73,8 +73,9 @@ Before executing anything, read and understand:
 1. **The project plan.** Read `PLAN.md` in the enact
    scratch directory. Understand how this task fits into
    the project.
-2. **The implementation task.** Use TaskGet to understand
-   what was built and why.
+2. **The implementation task.** Read the implementation
+   task file at `<scratch>/tasks/task_<task_id>.md` to
+   understand what was built and why.
 3. **The scenario description.** Understand what this
    scenario is testing and what "success" means -- not
    just the checklist, but the underlying intent.
@@ -181,8 +182,11 @@ ARE required to go beyond the script.
 
 ### Phase 6: File Bug Tasks
 
-For every BUG or CONCERN finding, file a new task using
-TaskCreate with metadata `{"tags": "bugfix"}`.
+For every BUG or CONCERN finding, run
+`python3 ~/.claude/scripts/enact-tasks.py <scratch>/tasks next-id`
+via Bash to get the next ID, then use Write to create
+the bug task file at `<scratch>/tasks/task_<id>.md`
+with `tags: bugfix` in the frontmatter.
 
 Title: `[ProjectName] Bug: <concise description>`
 
@@ -276,7 +280,8 @@ BUGS_FILED: <list of bug task IDs, or 'none'>
 SUMMARY: <one-line summary of findings>
 ```
 
-Then use TaskUpdate to mark the QA scenario as resolved.
+Then edit the QA scenario task file's frontmatter to
+set `status: completed`.
 
 ## Judgment Calls
 

@@ -41,9 +41,10 @@ required behavior.
 You will receive:
 - The enact scratch directory path
   (`~/.enact/<enact_id>/`).
-- The Claude Code **task ID**. Use TaskGet to read the
-  full task description (including context, requirements,
-  and acceptance criteria).
+- The task file path
+  (`<scratch>/tasks/task_<id>.md`). Read this file
+  for the full task description (including context,
+  requirements, and acceptance criteria).
 - The path to PLAN.md.
 - `worktree_dir`: the path to the git worktree where the
   implementation lives.

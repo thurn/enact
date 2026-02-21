@@ -47,9 +47,10 @@ meaningful assignments — do not deep-read.
 transcripts, so no Mini-Metacognizer will ever notice
 them — only you can catch this.
 
-Use TaskList to see what tasks were created and their
-statuses. Compare against what the project scope
-required:
+Run `python3 ~/.claude/scripts/enact-tasks.py
+<scratch>/tasks list` via Bash to see what tasks were
+created and their statuses. Compare against what the
+project scope required:
 
 1. List every agent type that should have run.
 2. List every agent type that actually has a transcript.

@@ -24,8 +24,11 @@ in the task, not a gap in your knowledge.
 
 ## Phase 1: Review the Tasks
 
-Use `TaskList` to view all tasks. Then use `TaskGet` for
-each task to read its full description.
+Run `python3 ~/.claude/scripts/enact-tasks.py
+<scratch>/tasks list` via Bash to view all tasks.
+Then read each task file at
+`<scratch>/tasks/task_<id>.md` for the full
+description.
 
 Evaluate every task against these criteria:
 
@@ -116,10 +119,12 @@ alongside the codebase to inform your fixes.
 For each problem you identified:
 1. Look for the missing information in the plan, research,
    and codebase.
-2. Fix the task using `TaskUpdate` to update its subject,
-   description, or metadata as needed.
-3. For dependency fixes, use `TaskUpdate` with
-   `addBlockedBy` to correct the dependency graph.
+2. Fix the task by editing the task file directly —
+   Edit the YAML frontmatter for metadata changes
+   (status, owner, tags) and Edit the markdown body
+   for subject or description changes.
+3. For dependency fixes, edit the `blocked_by` field
+   in the task file's YAML frontmatter.
 
 Task descriptions should follow this structure:
 
@@ -159,8 +164,9 @@ section.]
 - [ ] Linter passes: `[specific command]`
 ```
 
-Verify the final state with `TaskList` after applying all
-fixes.
+Verify the final state with
+`python3 ~/.claude/scripts/enact-tasks.py
+<scratch>/tasks list` after applying all fixes.
 
 If you found no significant problems, leave tasks
 unchanged.
@@ -183,8 +189,8 @@ max):
 - You are **read-only** with respect to the codebase. Do
   not modify source code.
 - You write only to the enact scratch directory
-  (`~/.enact/<enact_id>/`) and update tasks via
-  `TaskUpdate`.
+  (`~/.enact/<enact_id>/`), including task files in
+  `<scratch>/tasks/`.
 - Do not restructure the task graph or add/remove tasks.
   Make targeted fixes to address specific gaps in
   existing task descriptions and dependencies.

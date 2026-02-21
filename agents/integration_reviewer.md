@@ -80,9 +80,11 @@ ask:
 
 ### Step 3: Read the Tasks
 
-Use TaskList and TaskGet to read the full task graph. For
-each task, read the full description, notes, and status.
-Build a mapping:
+Run
+`python3 ~/.claude/scripts/enact-tasks.py <scratch>/tasks list`
+via Bash to see all tasks. Then read individual task
+files at `<scratch>/tasks/task_<id>.md` for full
+descriptions, notes, and status. Build a mapping:
 
 - **Plan section -> Task(s)** — which tasks implement each
   part of the plan?
@@ -193,9 +195,12 @@ verdict: **PASS**, **GAP**, or **FAIL**.
 
 ## Phase 3: File Corrective Tasks
 
-For every GAP or FAIL verdict, file one or more tasks
-using TaskCreate describing what needs to be fixed. Use
-addBlockedBy to set appropriate dependencies. These tasks
+For every GAP or FAIL verdict, run
+`python3 ~/.claude/scripts/enact-tasks.py <scratch>/tasks next-id`
+via Bash to get the next ID, then use Write to create
+task files at `<scratch>/tasks/task_<id>.md` describing
+what needs to be fixed. Set `blocked_by` in the YAML
+frontmatter for appropriate dependencies. These tasks
 should be specific enough for a Feature Coder, Bugfix
 Coder, or other agent to pick up and execute.
 
@@ -218,9 +223,8 @@ Coder, or other agent to pick up and execute.
 | Integration issue | Integration fix | bugfix |
 | Code review insufficient | Re-review | review |
 
-When filing tasks, set metadata:
-`{"tags": "<tag>"}` using the category from the table
-above.
+When filing tasks, set `tags` in the YAML frontmatter
+using the category from the table above.
 
 ### Naming Conventions
 

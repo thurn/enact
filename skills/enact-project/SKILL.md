@@ -13,6 +13,8 @@ defines the specific project lifecycle.
 1. Create an Enact ID via `date +%s`
 2. Resolve the scratch directory path: `~/.enact/<enact_id>/`
 3. Create the scratch directory with `mkdir -p`
+   Also create the tasks directory:
+   `mkdir -p <scratch>/tasks`
 4. Detect the main branch name: `git symbolic-ref refs/remotes/origin/HEAD | sed
    's@^refs/remotes/origin/@@'` If this fails, ask the user. Store as
    `main_branch` and pass it to every pipeline agent.
@@ -46,7 +48,7 @@ These agents run unless the user explicitly opts out:
 - **Plan Approval** — user reviews and approves plan
   before task generation (Orchestrator behavior, not a
   subagent)
-- **Task Generator** — breaks plan into Claude Code tasks
+- **Task Generator** — breaks plan into tasks
 - **Task Refiner** — validate task completeness
 - **Feature Coders** — implement tasks (concurrently, in git worktrees)
 - **Code Conformance Reviewers** — verify implementation matches spec
@@ -99,8 +101,8 @@ After each subagent completes:
 
 1. Read the subagent's return message (brief — details are in files)
 2. Update ORCHESTRATOR_STATE.md
-3. Determine the next subagent based on the state machine and Claude Code task
-   statuses
+3. Determine the next subagent based on the state
+   machine and task statuses
 4. Spawn it with `run_in_background: true`
 5. **End your turn and wait.** See Critical Rules.
 
@@ -121,8 +123,8 @@ Include:
 - A checklist of all completed pipeline steps
 
 This is your **primary recovery mechanism**. If your context compacts and you
-lose track, re-read this file and Claude Code task statuses to fully reconstruct
-your state.
+lose track, re-read this file and task statuses to
+fully reconstruct your state.
 
 ## Research Phase
 
@@ -173,14 +175,16 @@ repeats until the user is satisfied.
 
 ## Task Generation Phase
 
-Spawn the Task Generator to break the plan into Claude Code tasks. If the Task
+Spawn the Task Generator to break the plan into tasks. If the Task
 Refiner was selected, spawn it to validate tasks. If QA was selected, spawn the
 QA Scenario Generator after task generation.
 
-Tasks are created as Claude Code tasks (via TaskCreate). Each task includes a
-description, acceptance criteria, and dependencies on other tasks. The
-Orchestrator never reads task content — it only tracks task IDs and passes them
-to subagents, who read the tasks themselves.
+Tasks are markdown files in `<scratch>/tasks/`.
+Each task includes a description, acceptance criteria,
+and dependencies on other tasks. The Orchestrator never
+reads task content — it only tracks task IDs and passes
+task file paths to subagents, who read the task files
+directly.
 
 ## Task Pipeline
 
@@ -255,8 +259,10 @@ All code-writing agents (Feature Coder, Review Feedback Coder, Bugfix Coder)
 rebase onto `<main_branch>` before reporting complete. This reduces merge
 conflicts at merge time. The Orchestrator rebases again before the fast-forward
 merge as a safety net.
-6. Merge the worktree to `<main_branch>` and mark the task completed (only the
-   Orchestrator marks tasks completed — pipeline agents do not)
+6. Merge the worktree to `<main_branch>` and mark the
+   task completed by editing its frontmatter to set
+   `status: completed` (only the Orchestrator does
+   this — pipeline agents do not)
 
 All code review agents return either the single word `PASS` or `REVISE:
 REVIEW_<reviewer_type>_<task_id>.md`.
@@ -302,8 +308,9 @@ When spawning any subagent, keep your prompt **minimal**. Provide:
 - Any user-specified constraints relevant to this agent
 - Specific information this agent needs that is not in the scratch directory
   files
-- For task-related agents: the Claude Code **task ID** (not the task content —
-  the subagent reads the task itself via TaskGet)
+- For task-related agents: the task file path
+  (`<scratch>/tasks/task_<id>.md`) — the subagent
+  reads the task file directly
 - For pipeline agents: `worktree_dir`, `project_dir`, and `main_branch`
 
 Reviewers discover changed files themselves via `git diff`. You do not need to
@@ -323,8 +330,9 @@ to give it the right *inputs*, not to redefine its *behavior*.
 Subagents return **brief** summaries (3-5 lines). You do NOT need their full
 output in your context.
 
-**Do NOT**: read task descriptions (pass task IDs to subagents instead), read
-source code files, read detailed review findings, accumulate long subagent
+**Do NOT**: read task descriptions (pass task file
+paths to subagents instead), read source code files,
+read detailed review findings, accumulate long subagent
 outputs, or repeat summaries back to the user verbatim.
 
 **DO**: track state via ORCHESTRATOR_STATE.md, report brief progress, pass file
@@ -372,7 +380,8 @@ compaction), run these steps before doing anything else:
 
 1. `git worktree list` — shows which worktrees currently exist. Any `task_*`
    worktree means an agent is (or was) working on that task.
-2. `TaskList` — shows task statuses.
+2. `python3 ~/.claude/scripts/enact-tasks.py
+   <scratch>/tasks list` — shows task statuses.
 3. Cross-reference worktrees with task statuses:
    - `in_progress` + worktree exists → agent is likely still running; wait for
      its completion notification

@@ -110,10 +110,13 @@ documentation would have prevented those struggles.
 
 ### Step 3: Read Project Context
 
-Skim PLAN.md to understand what was built. Use TaskList
-and TaskGet to see completed tasks. You do not need to
-read source code — focus on what knowledge the session
-produced that is worth capturing.
+Skim PLAN.md to understand what was built. Run
+`python3 ~/.claude/scripts/enact-tasks.py
+<scratch>/tasks list --status completed` via Bash to
+see completed tasks, and read individual task files
+at `<scratch>/tasks/task_<id>.md` for details. You do
+not need to read source code — focus on what knowledge
+the session produced that is worth capturing.
 
 ### Step 4: Identify Improvements
 

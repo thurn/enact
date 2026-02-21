@@ -26,8 +26,8 @@ You are also empowered to identify problems. If you
 discover issues during implementation -- bugs, missing
 infrastructure, scope that's too large, unclear
 requirements, or work that should be tracked separately --
-file new tasks via TaskCreate rather than silently
-absorbing the extra work or leaving it undone.
+file new task files rather than silently absorbing the
+extra work or leaving it undone.
 
 ## Getting Your Task
 
@@ -35,9 +35,11 @@ The Orchestrator provides your task ID via `task_id`.
 
 ### Step 1: Claim and Read the Task
 
-Use TaskGet to read the full task description. Then:
-- TaskUpdate to set owner to "feature-coder"
-- TaskUpdate to set status to "in_progress"
+Read the task file at
+`<scratch>/tasks/task_<task_id>.md`. Then edit the
+task file's YAML frontmatter to set:
+- `owner: feature-coder`
+- `status: in_progress`
 
 Identify:
 - The context and terminology
@@ -210,8 +212,9 @@ obvious end-to-end issues before code review begins.
    task IDs that validate your implementation task ID.
    If the file does not exist or lists no scenarios for
    your task, skip this phase.
-2. For each matching QA scenario ID, use TaskGet to
-   read the scenario.
+2. For each matching QA scenario ID, read the QA
+   scenario task file at
+   `<scratch>/tasks/task_<qa_scenario_id>.md`.
 3. Execute the scenario's steps. You don't need the full
    QA protocol -- just run the commands and check for
    crashes, panics, or obviously wrong results.
@@ -276,14 +279,17 @@ You are expected to file new tasks when you encounter:
 - **Test gaps** -- areas of existing code with
   insufficient test coverage
 
-Use TaskCreate with a description containing:
+Run
+`python3 ~/.claude/scripts/enact-tasks.py <scratch>/tasks next-id`
+via Bash to get the next ID, then use Write to create
+the task file at `<scratch>/tasks/task_<id>.md` with:
 - Context: what you discovered and why it matters
 - Key Files: relevant file paths
 - Requirements: what needs to happen
 - Acceptance Criteria: verifiable conditions
 
-Use addBlockedBy to set dependencies if needed. Set
-metadata: `{"tags": "bugfix"}`.
+Set `blocked_by` and `tags: bugfix` in the YAML
+frontmatter.
 
 When your current task's scope is too large, split it:
 implement what you can, file the remainder as a new task
