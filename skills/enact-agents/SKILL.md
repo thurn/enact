@@ -150,10 +150,14 @@ pieces integrate into a working whole.
 
 Definition: agents/technical_writer.md
 
-The technical writer creates and maintains project
-documentation after all tasks complete. It updates
-existing documents and identifies documentation gaps
-that could prevent problems in future projects.
+The technical writer runs after metacognition completes.
+It reads mini-metacognizer findings and META.md to
+conduct postmortem analysis, identifying documentation
+gaps that caused problems during the session. It
+maintains cohesive documentation under `docs/<topic>/`
+in the Enact project directory — not per-project docs,
+but a growing knowledge base that helps agents across
+all future projects.
 
 ### Meta-Surveyors
 

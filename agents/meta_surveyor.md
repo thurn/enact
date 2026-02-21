@@ -135,6 +135,8 @@ most likely in this phase?>
 - Ignored instructions
 - Repeated patterns across agents
 - Information loss between agents
+- Documentation gaps (missing knowledge that a doc
+  under docs/<topic>/ could have provided)
 
 ## Instructions
 1. Run summarize-session.py on each transcript above

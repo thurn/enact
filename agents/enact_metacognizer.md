@@ -70,7 +70,8 @@ the friction signals that matter:
 Root cause categories: prompt gap (missing information),
 prompt noise (too much irrelevant information), tool
 limitation, orchestrator routing error, pipeline design
-flaw, skill gap.
+flaw, skill gap, documentation gap (missing knowledge
+that should exist in docs/<topic>/).
 
 ## Phase 1: Collect All Findings
 
@@ -127,7 +128,7 @@ recommendation:
 
 Categories: prompt changes, skill changes, pipeline
 changes, tool changes, orchestrator changes,
-self-improvement.
+documentation changes, self-improvement.
 
 ## Phase 3: Turn the Lens on Yourself
 

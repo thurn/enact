@@ -60,6 +60,11 @@ the reference list in your assignment:
 - **Information loss between agents**: Context that one
   agent had but the next agent lacked, indicating a
   handoff gap.
+- **Documentation gaps**: Agent lacked knowledge that
+  should have been available in project documentation
+  (e.g., patterns, conventions, tool usage, integration
+  points). Flag cases where a doc under `docs/<topic>/`
+  could have prevented the problem.
 
 ## Step 3: Record Findings
 
@@ -71,7 +76,7 @@ For each friction signal found, record:
 - **Diagnosis**: Why this happened
 - **Root Cause**: One of: prompt gap, prompt noise,
   tool limitation, orchestrator routing error, pipeline
-  design flaw, skill gap
+  design flaw, skill gap, documentation gap
 - **Impact**: Downstream problems caused
 - **Severity**: Critical / Significant / Minor
 - **Recommendation**: Specific, actionable fix
@@ -120,6 +125,11 @@ Structure your result file as:
 ## Cross-Agent Patterns
 [Patterns observed across multiple agents in this
 batch. These are especially valuable for synthesis.]
+
+## Documentation Gaps
+[Knowledge that agents lacked which should exist in
+docs/<topic>/. What doc would have prevented the
+problem? Be specific about the topic and content.]
 
 ## Pipeline Compliance Notes
 [Echo any compliance issues from your assignment that
