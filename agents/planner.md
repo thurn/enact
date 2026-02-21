@@ -57,7 +57,9 @@ You own every open question in RESEARCH.md. For each one:
    your own investigation provides enough information.
    Most open questions from researchers can be resolved
    by cross-referencing findings or reading a few more
-   files.
+   files — especially questions about what a system
+   should output, which are answered by reading what the
+   existing system actually produces.
 2. **Use AskUserQuestion** if the question is genuinely
    ambiguous — i.e., it involves a product decision, user
    preference, or tradeoff that cannot be resolved by

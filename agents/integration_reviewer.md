@@ -65,7 +65,8 @@ Understand what the user actually asked for. Note:
 - The stated goal and motivation.
 - Explicit requirements and constraints.
 - Implicit expectations (things a reasonable user would
-  assume).
+  assume — e.g., a replacement system should produce the
+  same observable output as the system it replaces).
 - What was NOT asked for (scope boundaries).
 
 ### Step 2: Read the Plan
