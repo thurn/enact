@@ -86,6 +86,15 @@ Write the technical design to
 `~/.enact/<enact_id>/PLAN.md`, following the
 `plan-authoring` guidelines.
 
+**The plan is a standalone document, not a response.**
+Never reference the prompt, RESEARCH.md, INTERVIEW.md,
+or any other input in the plan text. Do not write "The
+original prompt asks for X" or "Research findings show
+Y" or "As the user described." State requirements and
+design decisions directly, as if you already know the
+project. The plan should read as a self-contained
+technical design, not as a summary of your inputs.
+
 ## Output
 
 Return a **brief** summary to the Orchestrator (3-5 lines

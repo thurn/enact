@@ -296,7 +296,12 @@ with dependencies if needed, and note the split.
   orchestrators, or any internal framework in code
   comments, variable names, commit messages, docstrings,
   or any output that will be checked in. These tools are
-  invisible in the final codebase.
+  invisible in the final codebase. This also means no
+  references to plan phases, gate numbers, pipeline
+  steps, or verification stages — e.g., "(validated by
+  Gate 0)", "Phase 2 implementation", "per PLAN.md
+  section 3." The code must read as if no plan, task
+  system, or orchestration framework ever existed.
 - **Do not skip TDD for logic-bearing code.** TDD is the
   strong default for all code that contains logic,
   branching, or computation. If you wrote production

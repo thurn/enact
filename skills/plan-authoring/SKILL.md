@@ -33,6 +33,14 @@ useful as *pointers for further reading*, but the plan itself must contain every
 specification the coder needs. If the plan were the only document the coder
 received, they should still be able to build the project.
 
+**No meta-references to inputs.** The plan is a standalone design document, not
+a response to a prompt. Never reference the documents you used to write it:
+"The original prompt asks for X," "RESEARCH.md indicates Y," "As described in
+the interview," "The user requested Z." These phrases leak process into the
+artifact. Instead, state the requirement directly: "The system must do X."
+The plan should read as if it were written by someone who already knows the
+project, not as if it is summarizing or responding to another document.
+
 **Context-rich.** Link to every relevant file, module, interface, and
 convention. Use absolute file paths with line numbers where useful (e.g.,
 `src/auth/middleware.ts:42`). The coder will use these as starting points.
@@ -88,6 +96,10 @@ These are signs the plan has gone too far:
   structure. Describe the logical components and their responsibilities.
 - **Delegating to other documents.** "See design.md for the display format" is
   not a plan — it is a pointer. The plan must contain the specification itself.
+- **Referencing inputs or process.** "The original prompt specifies X," "Based
+  on the research findings," "The user's requirements state Y." The plan is a
+  standalone artifact. State requirements directly without attributing them to
+  the documents that informed the plan.
 
 ## What IS Appropriate in Code Blocks
 

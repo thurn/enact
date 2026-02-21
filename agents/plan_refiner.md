@@ -61,6 +61,20 @@ right level of detail? Specifically flag:
   organization.
 - Test boilerplate or setUp/tearDown code.
 
+**No meta-references** -- The plan must be a standalone
+design document. Flag any language that references the
+inputs used to create it:
+- "The original prompt asks for X"
+- "Research findings indicate Y"
+- "As described in the interview"
+- "The user requested Z"
+- "Based on the requirements document"
+
+These phrases mean the planner wrote a response to
+their inputs rather than a standalone artifact. The fix
+is to state the requirement directly without
+attribution.
+
 If the plan contains these anti-patterns, that is a
 **significant problem** -- not a minor style issue.
 Over-specification wastes context window space and

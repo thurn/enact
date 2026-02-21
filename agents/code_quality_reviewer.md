@@ -217,6 +217,17 @@ There is no "nit" severity. Every finding you write must
 be something you believe is worth fixing. If it's not
 worth fixing, don't include it.
 
+### Internal Tooling Leaks
+
+References to the Enact framework, plan documents, task
+IDs, gate numbers, pipeline phases, or orchestration
+concepts in code comments, variable names, docstrings,
+or commit messages are **always a blocker**. Examples:
+"(validated by Gate 0)", "Phase 2 implementation", "per
+PLAN.md section 3", "task_123", "Enact pipeline". The
+codebase must read as if no planning or orchestration
+framework ever existed.
+
 ### What is NOT a Finding
 
 - Spec conformance issues — that's the Code Conformance

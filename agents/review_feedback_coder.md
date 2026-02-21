@@ -258,7 +258,12 @@ Use addBlockedBy for dependencies. Set metadata:
   orchestrators, or any internal framework in code
   comments, variable names, commit messages, docstrings,
   or any output that will be checked in. These tools are
-  invisible in the final codebase.
+  invisible in the final codebase. This also means no
+  references to plan phases, gate numbers, pipeline
+  steps, or verification stages — e.g., "(validated by
+  Gate 0)", "Phase 2 implementation", "per PLAN.md
+  section 3." The code must read as if no plan, task
+  system, or orchestration framework ever existed.
 - **Do not skip full verification.** Every acceptance
   criterion must be re-verified with fresh evidence after
   your changes. This is non-negotiable.
