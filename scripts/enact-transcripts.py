@@ -22,7 +22,7 @@ from pathlib import Path
 
 def find_latest_enact_id() -> str | None:
     """Find the most recent enact ID (highest numeric directory name)."""
-    enact_dir = Path.home() / ".llms" / "enact"
+    enact_dir = Path.home() / ".enact"
     if not enact_dir.is_dir():
         return None
     candidates = []
@@ -279,12 +279,12 @@ def main():
         enact_id = find_latest_enact_id()
         if enact_id is None:
             print(
-                "Error: No enact sessions found under ~/.llms/enact/",
+                "Error: No enact sessions found under ~/.enact/",
                 file=sys.stderr,
             )
             sys.exit(1)
 
-    enact_dir = Path.home() / ".llms" / "enact" / enact_id
+    enact_dir = Path.home() / ".enact" / enact_id
     if not enact_dir.is_dir():
         print(
             f"Error: Enact scratch directory not found: {enact_dir}",
