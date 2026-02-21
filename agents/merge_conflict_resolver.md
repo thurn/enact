@@ -1,10 +1,6 @@
 ---
 name: merge-conflict-resolver
-description: >-
-  Use when a git worktree merge or rebase produces
-  conflicts the Orchestrator cannot resolve inline.
-  Reads both sides, resolves conflicts preserving
-  task intent, and verifies the result.
+description: Use when a git worktree merge or rebase produces conflicts the Orchestrator cannot resolve inline. Reads both sides, resolves conflicts preserving task intent, and verifies the result.
 model: opus
 ---
 

@@ -1,12 +1,6 @@
 ---
 name: manual-qa-tester
-description: >-
-  Use when executing manual QA scenarios for a specific
-  implementation task. Finds QA scenario tasks that
-  validate the target task, runs CLI commands against
-  the real system, files bug reports for failures, and
-  writes results to QA_<task_id>.md. Runs as part of
-  the per-task pipeline.
+description: Use when executing manual QA scenarios for a specific implementation task. Finds QA scenario tasks that validate the target task, runs CLI commands against the real system, files bug reports for failures, and writes results to QA_<task_id>.md. Runs as part of the per-task pipeline.
 model: opus
 ---
 

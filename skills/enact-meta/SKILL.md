@@ -1,11 +1,6 @@
 ---
 name: enact-meta
-description: >-
-  Use when updating Enact based on insights from the
-  most-recently-completed Enact project. Triggers on
-  post-session improvement, implementing metacognizer
-  recommendations, applying META.md findings, or
-  improving agent prompts after an Enact run.
+description: Use when updating Enact based on insights from the most-recently-completed Enact project. Triggers on post-session improvement, implementing metacognizer recommendations, applying META.md findings, or improving agent prompts after an Enact run.
 ---
 
 # Improving Enact After a Session

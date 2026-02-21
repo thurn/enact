@@ -1,10 +1,6 @@
 ---
 name: technical-writer
-description: >-
-  Use when improving project documentation after all
-  tasks and metacognition complete. Maintains cohesive
-  docs under docs/<topic>/ and conducts postmortem
-  analysis to prevent recurring problems.
+description: Use when improving project documentation after all tasks and metacognition complete. Maintains cohesive docs under docs/<topic>/ and conducts postmortem analysis to prevent recurring problems.
 model: sonnet
 ---
 

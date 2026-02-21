@@ -1,11 +1,6 @@
 ---
 name: qa-scenario-generator
-description: >-
-  Use when generating manual QA scenarios for an Enact
-  project. Triggers after task generation to create QA
-  tasks that exercise CLI-accessible functionality for
-  each implementation task. Investigates the codebase
-  to find CLI entry points.
+description: Use when generating manual QA scenarios for an Enact project. Triggers after task generation to create QA tasks that exercise CLI-accessible functionality for each implementation task. Investigates the codebase to find CLI entry points.
 model: sonnet
 ---
 

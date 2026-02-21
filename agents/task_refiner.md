@@ -1,10 +1,6 @@
 ---
 name: task-refiner
-description: >-
-  Use when auditing tasks for completeness and
-  self-containment. Triggers on task review, task
-  validation, or when generated tasks need quality
-  evaluation before coder assignment.
+description: Use when auditing tasks for completeness and self-containment. Triggers on task review, task validation, or when generated tasks need quality evaluation before coder assignment.
 model: sonnet
 ---
 

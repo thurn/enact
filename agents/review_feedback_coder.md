@@ -1,11 +1,6 @@
 ---
 name: review-feedback-coder
-description: >-
-  Use when implementing feedback from code review
-  subagents. Addresses all blockers and suggestions in
-  review findings, then re-verifies all tests and
-  acceptance criteria. Activated when the review verdict
-  is REVISE.
+description: Use when implementing feedback from code review subagents. Addresses all blockers and suggestions in review findings, then re-verifies all tests and acceptance criteria. Activated when the review verdict is REVISE.
 model: opus
 ---
 

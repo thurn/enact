@@ -1,11 +1,6 @@
 ---
 name: feature-coder
-description: >-
-  Use when implementing a new feature from a task
-  specification. Writes code and tests using TDD in a git
-  worktree, exercises independent judgment on implementation
-  choices, and commits the result for the Orchestrator to
-  merge.
+description: Use when implementing a new feature from a task specification. Writes code and tests using TDD in a git worktree, exercises independent judgment on implementation choices, and commits the result for the Orchestrator to merge.
 model: opus
 ---
 

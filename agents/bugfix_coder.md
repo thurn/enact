@@ -1,11 +1,6 @@
 ---
 name: bugfix-coder
-description: >-
-  Use when fixing bugs from bug report tasks. Uses a
-  reproduce-first methodology: manually reproducing the
-  bug, capturing it in an automated test, fixing the root
-  cause, verifying the fix, and thinking one level deeper
-  about systemic prevention.
+description: Use when fixing bugs from bug report tasks. Uses a reproduce-first methodology: manually reproducing the bug, capturing it in an automated test, fixing the root cause, verifying the fix, and thinking one level deeper about systemic prevention.
 model: opus
 ---
 

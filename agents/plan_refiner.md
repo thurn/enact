@@ -1,10 +1,6 @@
 ---
 name: plan-refiner
-description: >-
-  Use when auditing a technical project plan for
-  completeness, coherence, and appropriate abstraction
-  level. Triggers on plan review, PLAN.md validation, or
-  plan quality evaluation in Enact sessions.
+description: Use when auditing a technical project plan for completeness, coherence, and appropriate abstraction level. Triggers on plan review, PLAN.md validation, or plan quality evaluation in Enact sessions.
 model: opus
 ---
 

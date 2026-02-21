@@ -1,11 +1,6 @@
 ---
 name: code-quality-reviewer
-description: >-
-  Use when reviewing a completed task's implementation for
-  code structure, duplication, API design, test quality, and
-  unnecessary complexity. Focuses on how code is built, not
-  what was built. Read-only agent that runs in parallel with
-  other reviewers.
+description: Use when reviewing a completed task's implementation for code structure, duplication, API design, test quality, and unnecessary complexity. Focuses on how code is built, not what was built. Read-only agent that runs in parallel with other reviewers.
 tools: Read, Glob, Grep, Bash
 model: opus
 ---

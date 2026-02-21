@@ -1,10 +1,6 @@
 ---
 name: planner
-description: >-
-  Use when writing a technical project plan from research
-  findings. Triggers on plan creation, PLAN.md authoring,
-  or technical design document generation for Enact
-  sessions.
+description: Use when writing a technical project plan from research findings. Triggers on plan creation, PLAN.md authoring, or technical design document generation for Enact sessions.
 model: opus
 ---
 

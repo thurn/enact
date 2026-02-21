@@ -1,10 +1,6 @@
 ---
 name: surveyor
-description: >-
-  Use when starting a new Enact research phase. Performs
-  breadth-first analysis of a problem domain, creates
-  targeted research assignments for parallel researchers.
-  Use proactively as the first step of any Enact workflow.
+description: Use when starting a new Enact research phase. Performs breadth-first analysis of a problem domain, creates targeted research assignments for parallel researchers. Use proactively as the first step of any Enact workflow.
 model: opus
 ---
 

@@ -1,11 +1,6 @@
 ---
 name: sme-reviewer
-description: >-
-  Use when reviewing a completed task's implementation from
-  the perspective of a specific domain expertise. Provides
-  expert-level feedback grounded in real-world impact.
-  Read-only agent that runs in parallel with other
-  reviewers.
+description: Use when reviewing a completed task's implementation from the perspective of a specific domain expertise. Provides expert-level feedback grounded in real-world impact. Read-only agent that runs in parallel with other reviewers.
 tools: Read, Glob, Grep, Bash
 model: opus
 ---

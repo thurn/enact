@@ -1,12 +1,6 @@
 ---
 name: integration-reviewer
-description: >-
-  Use when performing a final audit of a completed Enact
-  project against the project plan and original prompt.
-  Validates that the plan matched the prompt, tasks fully
-  covered the plan, implementation is correct, testing is
-  sufficient, and the pieces integrate into a working whole.
-  Has authority to file corrective tasks.
+description: Use when performing a final audit of a completed Enact project against the project plan and original prompt. Validates that the plan matched the prompt, tasks fully covered the plan, implementation is correct, testing is sufficient, and the pieces integrate into a working whole. Has authority to file corrective tasks.
 tools: Read, Glob, Grep, Bash
 model: opus
 ---

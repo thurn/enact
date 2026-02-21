@@ -19,11 +19,7 @@ does.
 ```yaml
 ---
 name: writing-skills
-description: >-
-  Use when creating new skills, editing existing skills,
-  writing skill descriptions, or testing skills with
-  subagents. Triggers on skill authoring, skill testing,
-  or SKILL.md creation.
+description: Use when creating new skills, editing existing skills, writing skill descriptions, or testing skills with subagents. Triggers on skill authoring, skill testing, or SKILL.md creation.
 ---
 ```
 
@@ -96,41 +92,26 @@ the description contains too much workflow detail. Remove it.
 
 ```yaml
 # Specific triggers, no workflow
-description: >-
-  Use when creating new skills, editing existing skills,
-  or testing skills with subagents. Triggers on skill
-  authoring, SKILL.md creation, or skill testing.
+description: Use when creating new skills, editing existing skills, or testing skills with subagents. Triggers on skill authoring, SKILL.md creation, or skill testing.
 
 # Symptom-based triggers
-description: >-
-  Use when tests fail intermittently, test suites run
-  slowly, or test coverage reports show gaps. Triggers
-  on flaky tests, test performance, or coverage issues.
+description: Use when tests fail intermittently, test suites run slowly, or test coverage reports show gaps. Triggers on flaky tests, test performance, or coverage issues.
 
 # Tool and artifact triggers
-description: >-
-  Use when creating docs, building document indexes,
-  structuring doc hierarchies, or applying progressive
-  disclosure patterns. Triggers on documentation
-  authoring, docs organization, or index management.
+description: Use when creating docs, building document indexes, structuring doc hierarchies, or applying progressive disclosure patterns. Triggers on documentation authoring, docs organization, or index management.
 ```
 
 ### Bad Descriptions
 
 ```yaml
 # Workflow summary — causes shortcutting
-description: >-
-  Creates skills by first running a baseline test, then
-  writing the skill, then pressure testing it.
+description: Creates skills by first running a baseline test, then writing the skill, then pressure testing it.
 
 # Too vague — triggers too broadly or not at all
-description: >-
-  A skill for helping with development tasks.
+description: A skill for helping with development tasks.
 
 # No trigger conditions — unclear when to use
-description: >-
-  Comprehensive guide to writing and testing skills for
-  Claude Code with best practices and examples.
+description: Comprehensive guide to writing and testing skills for Claude Code with best practices and examples.
 ```
 
 ## Common Mistakes

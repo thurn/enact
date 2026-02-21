@@ -1,12 +1,6 @@
 ---
 name: enact-metacognizer
-description: >-
-  Use when synthesizing Mini-Metacognizer findings into
-  a META.md report. Reads all analysis results,
-  deduplicates, identifies cross-agent patterns, and
-  writes concrete recommendations for improving agent
-  prompts and skills. Always the final step of the
-  metacognition phase.
+description: Use when synthesizing Mini-Metacognizer findings into a META.md report. Reads all analysis results, deduplicates, identifies cross-agent patterns, and writes concrete recommendations for improving agent prompts and skills. Always the final step of the metacognition phase.
 model: opus
 ---
 

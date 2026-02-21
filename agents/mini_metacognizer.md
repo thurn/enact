@@ -1,10 +1,6 @@
 ---
 name: mini-metacognizer
-description: >-
-  Use when analyzing a batch of Enact session transcripts
-  based on an analysis assignment. Reads transcripts,
-  extracts friction signals, and writes structured
-  findings. Multiple mini-metacognizers run in parallel.
+description: Use when analyzing a batch of Enact session transcripts based on an analysis assignment. Reads transcripts, extracts friction signals, and writes structured findings. Multiple mini-metacognizers run in parallel.
 model: sonnet
 ---
 

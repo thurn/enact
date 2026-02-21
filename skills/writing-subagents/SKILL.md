@@ -59,10 +59,7 @@ them in `.claude/agents/` (project-scoped) or
 ```markdown
 ---
 name: code-reviewer
-description: >-
-  Use when reviewing code changes for quality issues,
-  security vulnerabilities, or style violations. Use
-  proactively after code modifications.
+description: Use when reviewing code changes for quality issues, security vulnerabilities, or style violations. Use proactively after code modifications.
 tools: Read, Glob, Grep
 model: sonnet
 ---

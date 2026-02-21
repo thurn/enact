@@ -89,11 +89,14 @@ Every SKILL.md follows this template:
 ```yaml
 ---
 name: kebab-case-name
-description: >-
-  Use when [triggering conditions]. Triggers on
-  [keyword list].
+description: Use when [triggering conditions]. Triggers on [keyword list].
 ---
 ```
+
+**Always use a single-line description string.** Do not
+use YAML multiline syntax (`>-`, `|`, `>`) — some skill
+systems cannot parse it. Keep the description on one line
+after `description: `.
 
 The body follows a consistent structure:
 
@@ -238,7 +241,7 @@ skills/
 | Rule | Detail |
 |------|--------|
 | Golden Rule | No skill without a failing test first |
-| Description | "Use when..." with trigger conditions only |
+| Description | "Use when..." triggers only, single line |
 | Line limit | SKILL.md under 500 lines |
 | Token budget | Challenge every paragraph's value |
 | Disclosure | Three levels: metadata → body → resources |
@@ -255,6 +258,7 @@ skills/
 |---------|-----|
 | Writing before testing | Run scenario without skill first |
 | Description summarizes workflow | "Use when..." triggers only |
+| Multiline YAML description (`>-`) | Single-line string only |
 | All content in SKILL.md | Split into supporting docs |
 | Vague instructions | Imperative commands with examples |
 | Rules assumed obvious | Close loopholes explicitly |

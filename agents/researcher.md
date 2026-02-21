@@ -1,10 +1,6 @@
 ---
 name: researcher
-description: >-
-  Use when investigating a specific codebase topic based on
-  a research assignment. Gathers information by analyzing
-  code, patterns, and conventions. Multiple researchers can
-  run in parallel for broader investigations.
+description: Use when investigating a specific codebase topic based on a research assignment. Gathers information by analyzing code, patterns, and conventions. Multiple researchers can run in parallel for broader investigations.
 model: sonnet
 ---
 

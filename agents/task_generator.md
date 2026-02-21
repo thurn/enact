@@ -1,10 +1,6 @@
 ---
 name: task-generator
-description: >-
-  Use when breaking down a project plan into independent
-  tasks. Triggers on task creation, work decomposition, or
-  when PLAN.md needs to be converted into actionable task
-  items for coder subagents.
+description: Use when breaking down a project plan into independent tasks. Triggers on task creation, work decomposition, or when PLAN.md needs to be converted into actionable task items for coder subagents.
 model: opus
 ---
 

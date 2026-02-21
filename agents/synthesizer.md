@@ -1,10 +1,6 @@
 ---
 name: synthesizer
-description: >-
-  Use when consolidating research results from multiple
-  Researcher subagents into a cohesive RESEARCH.md document.
-  Use after all research assignments for a round have
-  completed.
+description: Use when consolidating research results from multiple Researcher subagents into a cohesive RESEARCH.md document. Use after all research assignments for a round have completed.
 model: opus
 ---
 

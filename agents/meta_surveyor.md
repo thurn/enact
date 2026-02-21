@@ -1,10 +1,6 @@
 ---
 name: meta-surveyor
-description: >-
-  Use when starting the metacognition phase of an Enact
-  session. Discovers all transcripts, performs pipeline
-  compliance checks, and creates analysis assignments
-  for parallel Mini-Metacognizers.
+description: Use when starting the metacognition phase of an Enact session. Discovers all transcripts, performs pipeline compliance checks, and creates analysis assignments for parallel Mini-Metacognizers.
 model: opus
 ---
 

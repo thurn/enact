@@ -1,10 +1,6 @@
 ---
 name: code-conformance-reviewer
-description: >-
-  Use when reviewing a completed task's implementation
-  against the project plan and task specification. Validates
-  that the right thing was built, not how it was built.
-  Read-only agent that runs in parallel with other reviewers.
+description: Use when reviewing a completed task's implementation against the project plan and task specification. Validates that the right thing was built, not how it was built. Read-only agent that runs in parallel with other reviewers.
 tools: Read, Glob, Grep, Bash
 model: sonnet
 ---
