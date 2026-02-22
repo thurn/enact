@@ -252,8 +252,7 @@ For each task, run these pipeline phases in order:
    - `scripts/review-quality.sh <scratch>
      <task_file> <worktree_dir> <main_branch>`
    - `scripts/review-conformance.sh <scratch>
-     <task_file> <worktree_dir> <main_branch>
-     <plan_file>`
+     <task_file> <worktree_dir> <main_branch>`
    - (Optional) SME Reviewer (spawn as agent)
 3. **Review Feedback Coder** — if any reviewer returned REVISE, implement
    feedback

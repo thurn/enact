@@ -108,14 +108,15 @@ on real world understanding of the project.
 
 Script: scripts/review-conformance.sh
 
-A bash script that runs `codex review` with the task
-spec and project plan piped as a conformance prompt.
-Invoked directly by the Orchestrator via Bash — not a
-subagent. Args: `<scratch_dir> <task_file>
-<worktree_dir> <main_branch> <plan_file>`. Prints
-`PASS` or `REVISE: REVIEW_conformance_<task_id>.md`
-to stdout. If Codex fails or times out, prints `PASS`
-with a warning to stderr (no LLM fallback available).
+A bash script that runs `codex review` for spec
+conformance analysis. Invoked directly by the
+Orchestrator via Bash — not a subagent. Codex handles
+reading the diff and producing findings. Args:
+`<scratch_dir> <task_file> <worktree_dir>
+<main_branch>`. Prints `PASS` or
+`REVISE: REVIEW_conformance_<task_id>.md` to stdout.
+If Codex fails or times out, prints `PASS` with a
+warning to stderr (no LLM fallback available).
 
 ### Code Quality Review Script
 

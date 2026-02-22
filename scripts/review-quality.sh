@@ -26,30 +26,18 @@ worktree_dir="$3"
 main_branch="$4"
 
 # Extract task_id from task file path
-# e.g. /path/to/tasks/task_42.md -> 42
 task_id=$(basename "$task_file" .md | sed 's/^task_//')
 
-raw_file="${scratch_dir}/CODEX_quality_${task_id}.raw"
-review_file="${scratch_dir}/REVIEW_quality_${task_id}.md"
-
-blockers=()
-suggestions=()
-codex_status="completed"
+review_file="REVIEW_quality_${task_id}.md"
+review_path="${scratch_dir}/${review_file}"
+has_findings=false
 
 # ---------------------------------------------------
-# Phase 1: Run Codex Review
+# Phase 1: Internal Tooling Leaks Check
 # ---------------------------------------------------
-if ! timeout 480 bash -c \
-  "cd '$worktree_dir' && codex review \
-    --base '$main_branch'" \
-  &> "$raw_file"; then
-  codex_status="failed"
-  echo >&2 "WARNING: codex review failed or timed out"
-fi
+# Codex cannot detect these — this is the one piece
+# of manual analysis the script must do.
 
-# ---------------------------------------------------
-# Phase 2: Internal Tooling Leaks Check
-# ---------------------------------------------------
 leak_patterns=(
   '[Ee]nact'
   'PLAN\.md'
@@ -63,117 +51,68 @@ leak_patterns=(
   'subagent'
 )
 
-# Build a combined grep pattern
 leak_regex=$(IFS='|'; echo "${leak_patterns[*]}")
 
-# Get changed files in the worktree
 changed_files=$(
   cd "$worktree_dir" && \
-  git diff --name-only "$main_branch" -- \
-    '*.py' '*.js' '*.ts' '*.tsx' '*.jsx' \
-    '*.rs' '*.go' '*.java' '*.rb' '*.sh' \
-    '*.md' '*.txt' '*.yaml' '*.yml' '*.toml' \
-    '*.json' '*.css' '*.html' 2>/dev/null || true
+  git diff --name-only "$main_branch" 2>/dev/null \
+    || true
 )
 
+leaks=""
 if [ -n "$changed_files" ]; then
   while IFS= read -r file; do
     filepath="${worktree_dir}/${file}"
     [ -f "$filepath" ] || continue
-
     matches=$(grep -nE "$leak_regex" "$filepath" \
       2>/dev/null || true)
     if [ -n "$matches" ]; then
-      while IFS= read -r match; do
-        blockers+=(
-          "### Tooling Leak in ${file}
-- **Severity**: blocker
-- **Category**: tooling-leak
-- **Source**: manual
-- **File**: ${file}:$(echo "$match" \
-  | cut -d: -f1)
-- **Issue**: Internal tooling reference found: \
-$(echo "$match" | cut -d: -f2-)
-- **Recommendation**: Remove all references to \
-internal tooling, planning frameworks, and \
-orchestration concepts. The codebase must read as \
-if no planning framework exists."
-        )
-      done <<< "$matches"
+      leaks+="### Tooling Leak in ${file}"$'\n'
+      leaks+="${matches}"$'\n\n'
     fi
   done <<< "$changed_files"
 fi
 
 # ---------------------------------------------------
-# Phase 3: Parse Codex Output
+# Phase 2: Run Codex Review
 # ---------------------------------------------------
-if [ "$codex_status" = "completed" ] \
-  && [ -f "$raw_file" ] \
-  && [ -s "$raw_file" ]; then
+codex_output=""
+codex_status="completed"
 
-  # Extract P1 findings as blockers
-  # Codex uses markdown headers and severity markers
-  p1_findings=$(grep -B2 -A5 -iE \
-    '(P1|high|critical|error)' "$raw_file" \
-    2>/dev/null || true)
-  if [ -n "$p1_findings" ]; then
-    blockers+=(
-      "### Codex High-Priority Finding
-- **Severity**: blocker
-- **Category**: codex-finding
-- **Source**: codex
-- **Issue**: See ${raw_file} for details
-- **Recommendation**: Review and address \
-high-priority findings from Codex analysis"
-    )
-  fi
-
-  # Extract P2 findings as suggestions (skip P3)
-  p2_findings=$(grep -B2 -A5 -iE \
-    '(P2|medium|warning)' "$raw_file" \
-    2>/dev/null || true)
-  if [ -n "$p2_findings" ]; then
-    suggestions+=(
-      "### Codex Medium-Priority Finding
-- **Severity**: suggestion
-- **Category**: codex-finding
-- **Source**: codex
-- **Issue**: See ${raw_file} for details
-- **Recommendation**: Review and address \
-medium-priority findings from Codex analysis"
-    )
-  fi
+if ! codex_output=$(
+  timeout 480 bash -c \
+    "cd '$worktree_dir' && codex review \
+      --base '$main_branch'" 2>&1
+); then
+  codex_status="failed"
+  echo >&2 "WARNING: codex review failed or timed out"
 fi
 
 # ---------------------------------------------------
-# Phase 4: Write Findings
+# Phase 3: Assemble Review File
 # ---------------------------------------------------
-blocker_count=${#blockers[@]}
-suggestion_count=${#suggestions[@]}
-total=$((blocker_count + suggestion_count))
+# If codex produced findings, use its output directly.
+# Append tooling leaks if any were found.
 
-if [ "$total" -gt 0 ]; then
-  {
-    echo "# Quality Review — Task ${task_id}"
+{
+  if [ "$codex_status" = "completed" ] \
+    && [ -n "$codex_output" ]; then
+    echo "$codex_output"
     echo ""
-    echo "## Findings"
-    echo ""
-    for finding in "${blockers[@]}"; do
-      echo "$finding"
-      echo ""
-    done
-    for finding in "${suggestions[@]}"; do
-      echo "$finding"
-      echo ""
-    done
-    echo "## Summary"
-    echo ""
-    echo "- **Blockers**: ${blocker_count}"
-    echo "- **Suggestions**: ${suggestion_count}"
-    echo "- **Codex status**: ${codex_status}"
-  } > "$review_file"
+    has_findings=true
+  fi
 
-  echo "REVISE: REVIEW_quality_${task_id}.md"
+  if [ -n "$leaks" ]; then
+    echo "## Internal Tooling Leaks (Blockers)"
+    echo ""
+    echo "$leaks"
+    has_findings=true
+  fi
+} > "$review_path"
+
+if [ "$has_findings" = true ]; then
+  echo "REVISE: ${review_file}"
 else
+  rm -f "$review_path"
   echo "PASS"
 fi
