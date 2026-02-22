@@ -93,6 +93,10 @@ dimensions based on the task. A one-file bug fix might need
 only 2 questions. A new feature spanning multiple systems
 might need 6.
 
+If your scope recommendation (see Step 4) will be `focused`,
+aim for **2-3 research questions** covering only the most
+essential dimensions.
+
 Each assignment file must include:
 - A specific, focused research question.
 - Relevant starting points (file paths, module names,
@@ -116,6 +120,21 @@ Return a summary to the Orchestrator:
    describing the research question.
 4. **Assignment directory**:
    `<scratch>/research/`
+5. **Scope recommendation**: Either `focused` or `full`,
+   with a one-line rationale.
+   - Recommend `focused` when: the change is isolated to
+     1-3 files, affects a single system or module, and
+     has no cross-cutting concerns.
+   - Recommend `full` when: the change spans multiple
+     systems, involves cross-cutting concerns (new data
+     flows, API changes, multiple integration points),
+     estimated complexity is medium-to-large, the user
+     used the word "project," or the user provided a
+     project plan document.
+   - When directives include `quick`, `fast`, `minimal`,
+     or `draft`, lean toward `focused`. When directives
+     include `thorough`, `careful`, or `maximum quality`,
+     lean toward `full`.
 
 The Orchestrator will read the assignments and spawn
 Researcher subagents.

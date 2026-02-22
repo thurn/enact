@@ -20,6 +20,8 @@ tools, skills) is respected automatically.
 ## Default-On Agents
 
 These agents run unless the user explicitly opts out.
+Agents marked **(full only)** are skipped in focused
+mode. See the enact-project skill for scope details.
 
 ### Surveyors
 
@@ -64,7 +66,7 @@ technical design doc describing the project. They
 investigate the codebase directly to fill knowledge gaps
 before writing the plan.
 
-### Plan Refiners
+### Plan Refiners (full only)
 
 Definition: agents/plan_refiner.md
 
@@ -74,7 +76,7 @@ a complete description of the task to achieve. In some
 modes of operation multiple iterations of planning and
 refining can be performed.
 
-### Task Generators
+### Task Generators (full only)
 
 Definition: agents/task_generator.md
 
@@ -87,7 +89,7 @@ judgement to make implementation choices as work
 continues. They can investigate the codebase directly to
 fill knowledge gaps.
 
-### Task Refiners
+### Task Refiners (full only)
 
 Definition: agents/task_refiner.md
 
@@ -140,7 +142,7 @@ Review feedback coders implement feedback from code review
 subagents, resolving their issues and then re-validating
 task acceptance criteria.
 
-### Integration Reviewers
+### Integration Reviewers (full only)
 
 Definition: agents/integration_reviewer.md
 

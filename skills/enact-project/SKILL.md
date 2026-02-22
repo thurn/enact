@@ -36,30 +36,41 @@ The Orchestrator collaboratively decides which agents to include with the user.
 
 ### Default-On Agents
 
-These agents run unless the user explicitly opts out:
+These agents run unless the user explicitly opts out.
+Agents marked **(full only)** are skipped in focused
+mode.
 
-- **Surveyors** — breadth-first analysis of the problem domain, creating
-  research assignments
-- **Researchers** — deep-dive into specific topics from surveyor assignments
-  (run in parallel)
+- **Surveyors** — breadth-first analysis of the
+  problem domain, creating research assignments
+- **Researchers** — deep-dive into specific topics
+  from surveyor assignments (run in parallel)
 - **Synthesizer** — combines research into RESEARCH.md
 - **Planner** — writes PLAN.md technical design
-- **Plan Refiner** — audit complex plans
+- **Plan Refiner** — audit complex plans **(full
+  only)**
 - **Plan Approval** — user reviews and approves plan
-  before task generation (Orchestrator behavior, not a
-  subagent)
-- **Task Generator** — breaks plan into tasks
+  before task generation (Orchestrator behavior, not
+  a subagent)
+- **Task Generator** — breaks plan into tasks **(full
+  only)**
 - **Task Refiner** — validate task completeness
-- **Feature Coders** — implement tasks (concurrently, in git worktrees)
+  **(full only)**
+- **Feature Coders** — implement tasks (concurrently
+  in full mode, single task in focused mode)
 - **Code Conformance Review** — script verifying
   implementation matches spec
-- **Code Quality Review** — script auditing code quality
-- **Review Feedback Coders** — implement review feedback
+- **Code Quality Review** — script auditing code
+  quality
+- **Review Feedback Coders** — implement review
+  feedback
 - **Integration Reviewer** — end-to-end validation
+  **(full only)**
 - **Technical Writer** — documentation updates
-- **Meta-Surveyor** — discovers transcripts, creates analysis assignments
+- **Meta-Surveyor** — discovers transcripts, creates
+  analysis assignments
 - **Mini-Metacognizers** — parallel transcript analysis
-- **Enact Metacognizer** — synthesizes findings into META.md
+- **Enact Metacognizer** — synthesizes findings into
+  META.md
 
 ### Default-Off Agents
 
@@ -91,12 +102,18 @@ You are always in one of these states:
 | State           | Description                          |
 |-----------------|--------------------------------------|
 | RESEARCH        | Surveyor, Researchers, Synthesizer   |
+| SCOPE_SELECTION | Present scope to user, choose mode   |
 | PLANNING        | Planner, optional Refiner/Interview  |
 | PLAN_APPROVAL   | User reviews and approves plan       |
 | TASK_GENERATION | Task Generator, optional refinement  |
 | TASK_PIPELINE   | Per-task: Coder, Review, opt. QA     |
 | POST_TASK       | Integration, Meta pipeline, Writer   |
 | COMPLETE        | All work done                        |
+
+In **focused mode**, TASK_GENERATION is skipped and
+TASK_PIPELINE and POST_TASK are simplified. See
+[focused-mode.md](focused-mode.md) for the focused
+pipeline.
 
 After each subagent completes:
 
@@ -116,6 +133,7 @@ your persistent memory — it survives context compaction.
 Include:
 
 - Current state and pipeline position
+- Selected scope mode (focused or full)
 - Which optional agents were selected
 - Concurrency limit (default 3, or user-specified)
 - Currently active task pipelines and their pipeline step
@@ -138,13 +156,41 @@ research files at any time.
 In high-effort mode, multiple survey-research-synthesize rounds can be
 conducted, exploring discovered topics in greater detail.
 
+## Scope Selection Phase
+
+After the Synthesizer completes, enter
+SCOPE_SELECTION. The Surveyor's report includes a
+scope recommendation (`focused` or `full`) with
+rationale.
+
+**Override rules** — always use `full` if:
+- The user's prompt contains the word "project"
+- The user provided a project plan document
+
+Present the recommendation to the user via
+AskUserQuestion with options:
+- "Focused" — streamlined pipeline (single task, no
+  task decomposition, lighter review)
+- "Full" — complete pipeline (task decomposition,
+  plan refinement, integration review)
+
+Include the surveyor's rationale in the question.
+Record the choice in ORCHESTRATOR_STATE.md as
+`scope: focused` or `scope: full`.
+
+If `focused`: load
+[focused-mode.md](focused-mode.md) and follow the
+focused pipeline for all subsequent states.
+If `full`: continue with the standard pipeline below.
+
 ## Planning Phase
 
 If the Interviewer was selected, spawn it before planning to resolve
 ambiguities.
 
 Spawn a Planner to create `~/.enact/<enact_id>/PLAN.md`. If the Plan Refiner was
-selected, spawn it to audit the plan. Do not read the plan.
+selected (skipped in focused mode), spawn it to audit the plan. Do not read the
+plan.
 
 ## Plan Approval Phase
 
@@ -398,6 +444,8 @@ compaction), run these steps before doing anything else:
    - `pending` + worktree exists → task was spawned but not marked in_progress
      (treat as in_progress)
 4. Re-read `~/.enact/<enact_id>/ORCHESTRATOR_STATE.md`
+   — note the `scope` field to determine which pipeline
+   to follow (focused or full)
 
 Do NOT spawn new agents until you have confirmed the active worktree count is
 below the concurrency limit.
