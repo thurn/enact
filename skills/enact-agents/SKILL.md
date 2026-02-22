@@ -108,29 +108,29 @@ on real world understanding of the project.
 
 Script: ~/.claude/scripts/review-conformance.sh
 
-A bash script that runs `codex review` for spec
-conformance analysis. Invoked directly by the
-Orchestrator via Bash — not a subagent. Codex handles
-reading the diff and producing findings. Args:
+Runs `codex exec --full-auto` with a conformance
+review prompt and the task spec. Codex writes
+`REVIEW_conformance_<task_id>.md` to the scratch dir
+only if it finds issues. Invoked directly by the
+Orchestrator via Bash — not a subagent. Args:
 `<scratch_dir> <task_file> <worktree_dir>
 <main_branch>`. Prints `PASS` or
 `REVISE: REVIEW_conformance_<task_id>.md` to stdout.
-If Codex fails or times out, prints `PASS` with a
-warning to stderr (no LLM fallback available).
 
 ### Code Quality Review Script
 
 Script: ~/.claude/scripts/review-quality.sh
 
-A bash script that runs `codex review` for structural
-quality analysis and checks for internal tooling leaks
-(references to Enact, PLAN.md, task IDs, gate numbers,
-pipeline phases). Invoked directly by the Orchestrator
-via Bash — not a subagent. Args: `<scratch_dir>
-<task_file> <worktree_dir> <main_branch>`. Prints
-`PASS` or `REVISE: REVIEW_quality_<task_id>.md` to
-stdout. If Codex fails or times out, falls back to
-the tooling leaks check only.
+Runs `codex exec --full-auto` with a quality review
+prompt. Codex writes `REVIEW_quality_<task_id>.md` to
+the scratch dir only if it finds issues. Also checks
+for internal tooling leaks (references to Enact,
+PLAN.md, task IDs, gate numbers, pipeline phases) via
+grep on added lines. Invoked directly by the
+Orchestrator via Bash — not a subagent. Args:
+`<scratch_dir> <task_file> <worktree_dir>
+<main_branch>`. Prints `PASS` or
+`REVISE: REVIEW_quality_<task_id>.md` to stdout.
 
 ### Review Feedback Coders
 
