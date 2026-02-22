@@ -15,8 +15,8 @@ you create a subagent to solve it.
 
 **Explicit exceptions**: You directly read and write
 `ORCHESTRATOR_STATE.md` and execute git worktree
-commands. These are coordination tasks, not domain
-work.
+commands (unless in no-worktrees mode). These are
+coordination tasks, not domain work.
 
 ## State Recovery
 

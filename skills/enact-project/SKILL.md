@@ -30,6 +30,19 @@ defines the specific project lifecycle.
 6. Initialize `<scratch>/ORCHESTRATOR_STATE.md` (see below)
 7. Report the scratch directory to the user immediately
 
+### Worktree Mode
+
+By default, Enact uses git worktrees for concurrent
+task execution. If the user requests **no-worktrees
+mode**, record `worktree_mode: serial` in
+ORCHESTRATOR_STATE.md. In this mode:
+
+- Skip worktree cleanup in session setup (step 5)
+- Tasks execute serially (concurrency fixed at 1)
+- No worktree creation, rebase, or merge steps
+- `worktree_dir` = `project_dir` (main project dir)
+- Feature Coders commit directly to `<main_branch>`
+
 ## Agent Selection
 
 The Orchestrator collaboratively decides which agents to include with the user.
@@ -86,15 +99,15 @@ them via AskUserQuestion:
 
 ### Ad-Hoc Agents
 
-These agents are not selected during Agent Selection. The Orchestrator spawns
-them on demand:
+These agents are not selected during Agent Selection.
+The Orchestrator spawns them on demand:
 
-- **Merge Conflict Resolver** — spawned during worktree merges when rebase
-  conflicts are too complex to resolve inline.
+- **Merge Conflict Resolver** — spawned during
+  worktree merges when conflicts are too complex
 
-Use AskUserQuestion to propose optional agents when the project characteristics
-warrant them. For example: "This project has CLI-exercisable output. Should I
-include QA testing?"
+Use AskUserQuestion to propose optional agents when
+warranted (e.g., "This project has CLI-exercisable
+output. Should I include QA testing?").
 
 ## Orchestrator State Machine
 
@@ -237,23 +250,20 @@ directly.
 ## Task Pipeline
 
 **Tasks execute concurrently — up to 3 at a time by default.** The user can
-request a different concurrency limit during session setup. Whenever a task
-pipeline completes (or a slot is otherwise free) and unblocked tasks are
+request a different concurrency limit during session setup. In **no-worktrees
+mode**, concurrency is 1 and tasks run serially on the main repo. Whenever a
+task pipeline completes (or a slot is otherwise free) and unblocked tasks are
 available, spawn the next task's pipeline immediately. Each task's per-task
-pipeline still runs its steps sequentially within its own git worktree.
+pipeline still runs its steps sequentially within its own git worktree (or
+directly on the main repo in no-worktrees mode).
 
-Task dependencies enforce code visibility: a blocked task does not start until
-its dependencies are merged to `<main_branch>`, which is when their code becomes
-visible. This is by design — each worktree branches from the current
-`<main_branch>`, so dependent code must be merged first.
-
-Track active task pipelines in ORCHESTRATOR_STATE.md. Before spawning new task
-pipelines, verify the active worktree count with `git worktree list` — do not
-rely solely on ORCHESTRATOR_STATE.md for concurrency tracking.
-
-Process completions **one at a time**, in notification order. This prevents
-merge conflicts from concurrent fast-forward attempts. When a subagent
-completes:
+Task dependencies enforce code visibility: a blocked
+task does not start until its dependencies are merged
+to `<main_branch>`. Track active pipelines in
+ORCHESTRATOR_STATE.md. Verify the active worktree count
+with `git worktree list` before spawning (skip in
+no-worktrees mode). Process completions **one at a
+time** in notification order. When a subagent completes:
 
 1. The current task's pipeline has a next step — if so, spawn it.
 2. A concurrency slot is free and unblocked tasks remain — if so, start a new
@@ -261,33 +271,34 @@ completes:
 
 ### Git Worktrees
 
-Each task's pipeline runs in a single git worktree that the Orchestrator creates
-and manages. All agents in that task's pipeline (Feature Coder, reviewers,
-Review Feedback Coder, QA Tester, Bugfix Coder) share the same worktree. No
-agent creates or removes worktrees.
+> **No-worktrees mode**: skip this entire section.
+> Pass `worktree_dir` equal to `project_dir` to all
+> pipeline agents. There is no worktree lifecycle —
+> agents work directly on the main repo.
+
+Each task's pipeline runs in a single git worktree
+managed by the Orchestrator. All agents in a task's
+pipeline share the same worktree. No agent creates or
+removes worktrees.
 
 Orchestrator worktree lifecycle:
 
-1. **Create** before spawning the Feature Coder: `git worktree add
-   ~/.enact/<enact_id>/task_<id> -b enact/<enact_id>/task_<id> <main_branch>`
-2. **Pass the path** to every agent in the pipeline as `worktree_dir` (along
-   with `project_dir` for the main project directory)
-3. **Rebase** before merging:
-   ```
-   cd ~/.enact/<enact_id>/task_<id>
-   git fetch <project_dir> <main_branch>
-   git rebase FETCH_HEAD
-   ```
-   Resolve simple conflicts yourself rather than spawning an agent — only spawn
-   a Merge Conflict Resolver if conflicts are too complex to resolve inline.
-4. **Fast-forward merge** after rebase succeeds:
-   ```
-   cd <project_dir>
-   git checkout <main_branch>
-   git merge --ff-only enact/<enact_id>/task_<id>
-   ```
-5. **Clean up**: `git worktree remove ~/.enact/<enact_id>/task_<id> && git
-   branch -d enact/<enact_id>/task_<id>`
+1. **Create**: `git worktree add
+   ~/.enact/<enact_id>/task_<id> -b
+   enact/<enact_id>/task_<id> <main_branch>`
+2. **Pass** `worktree_dir` and `project_dir` to every
+   agent in the pipeline
+3. **Rebase** before merging: `cd
+   ~/.enact/<enact_id>/task_<id> && git fetch
+   <project_dir> <main_branch> && git rebase
+   FETCH_HEAD`. Only spawn a Merge Conflict Resolver
+   for complex conflicts.
+4. **Merge**: `cd <project_dir> && git checkout
+   <main_branch> && git merge --ff-only
+   enact/<enact_id>/task_<id>`
+5. **Clean up**: `git worktree remove
+   ~/.enact/<enact_id>/task_<id> && git branch -d
+   enact/<enact_id>/task_<id>`
 
 ### Per-Task Pipeline
 
@@ -307,14 +318,14 @@ For each task, run these pipeline phases in order:
 4. **(Optional) Manual QA Tester** — execute QA scenarios for this task
 5. **(Optional) Bugfix Coder** — fix bugs found during QA
 
-All code-writing agents (Feature Coder, Review Feedback Coder, Bugfix Coder)
-rebase onto `<main_branch>` before reporting complete. This reduces merge
-conflicts at merge time. The Orchestrator rebases again before the fast-forward
-merge as a safety net.
-6. Merge the worktree to `<main_branch>` and mark the
-   task completed by editing its frontmatter to set
-   `status: completed` (only the Orchestrator does
-   this — pipeline agents do not)
+All code-writing agents rebase onto `<main_branch>`
+before reporting complete. The Orchestrator rebases
+again before the fast-forward merge as a safety net.
+6. Merge the worktree to `<main_branch>` (skip in
+   no-worktrees mode — code is already on main) and
+   mark the task completed by editing its frontmatter
+   to set `status: completed` (only the Orchestrator
+   does this — pipeline agents do not)
 
 All code reviewers (scripts and agents) return either
 the single word `PASS` or
@@ -409,13 +420,17 @@ could not finish):
 
 ### Failed Pipeline Cleanup
 
-If a task pipeline fails irrecoverably:
+If a task pipeline fails irrecoverably (in no-worktrees
+mode, only do step 1 in the project directory and
+step 4):
 
-1. Reset any partial changes in the worktree: `cd ~/.enact/<enact_id>/task_<id>
-   && git checkout .`
-2. Remove the worktree: `git worktree remove ~/.enact/<enact_id>/task_<id>`
-3. Delete the branch: `git branch -D enact/<enact_id>/task_<id>`
-4. Update the task status and record the failure in ORCHESTRATOR_STATE.md.
+1. Reset partial changes: `cd
+   ~/.enact/<enact_id>/task_<id> && git checkout .`
+2. Remove worktree:
+   `git worktree remove ~/.enact/<enact_id>/task_<id>`
+3. Delete branch:
+   `git branch -D enact/<enact_id>/task_<id>`
+4. Update task status in ORCHESTRATOR_STATE.md.
 
 ## Progress Reporting
 
@@ -432,24 +447,24 @@ After all tasks complete:
 If you are ever uncertain about the project state (e.g. after context
 compaction), run these steps before doing anything else:
 
-1. `git worktree list` — shows which worktrees currently exist. Any `task_*`
-   worktree means an agent is (or was) working on that task.
+1. `git worktree list` — shows active worktrees (skip
+   in no-worktrees mode). Any `task_*` worktree means
+   an agent is (or was) working on that task.
 2. `python3 ~/.claude/scripts/enact-tasks.py
    <scratch>/tasks list` — shows task statuses.
-3. Cross-reference worktrees with task statuses:
-   - `in_progress` + worktree exists → agent is likely still running; wait for
-     its completion notification
-   - `in_progress` + no worktree → agent finished but wasn't merged; check for
-     the branch with `git branch --list 'enact/*/task_*'` and merge if it
-     exists, or reset the task to `pending` if gone
-   - `pending` + worktree exists → task was spawned but not marked in_progress
-     (treat as in_progress)
+3. Cross-reference worktrees with task statuses (in
+   no-worktrees mode, rely on task statuses and
+   ORCHESTRATOR_STATE.md alone):
+   - `in_progress` + worktree → agent likely running
+   - `in_progress` + no worktree → check for branch
+     with `git branch --list 'enact/*/task_*'`; merge
+     if it exists, or reset to `pending`
+   - `pending` + worktree → treat as in_progress
 4. Re-read `~/.enact/<enact_id>/ORCHESTRATOR_STATE.md`
-   — note the `scope` field to determine which pipeline
-   to follow (focused or full)
+   — note `scope` and `worktree_mode` fields
 
-Do NOT spawn new agents until you have confirmed the active worktree count is
-below the concurrency limit.
+Do NOT spawn new agents until you have confirmed the
+active count is below the concurrency limit.
 
 ## Critical Rules
 

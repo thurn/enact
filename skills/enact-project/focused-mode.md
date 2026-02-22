@@ -63,9 +63,10 @@ a single synthetic task:
      `~/.enact/<enact_id>/PLAN.md`. Read the full
      plan for requirements and acceptance criteria."
 
-2. Create a worktree and spawn a Feature Coder for
-   task 1, passing the task file path, worktree_dir,
-   project_dir, and main_branch.
+2. Create a worktree (skip in no-worktrees mode) and
+   spawn a Feature Coder for task 1, passing the task
+   file path, worktree_dir, project_dir, and
+   main_branch.
 
 3. After the Feature Coder completes, run code review
    scripts in parallel:
@@ -79,7 +80,8 @@ a single synthetic task:
 
 5. Merge the worktree to main_branch using the
    standard worktree lifecycle (rebase, fast-forward
-   merge, cleanup).
+   merge, cleanup). Skip in no-worktrees mode — code
+   is already on main.
 
 No concurrency is needed — there is exactly one task.
 
