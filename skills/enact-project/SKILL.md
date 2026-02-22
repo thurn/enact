@@ -51,8 +51,9 @@ These agents run unless the user explicitly opts out:
 - **Task Generator** — breaks plan into tasks
 - **Task Refiner** — validate task completeness
 - **Feature Coders** — implement tasks (concurrently, in git worktrees)
-- **Code Conformance Reviewers** — verify implementation matches spec
-- **Code Quality Reviewers** — audit code quality
+- **Code Conformance Review** — script verifying
+  implementation matches spec
+- **Code Quality Review** — script auditing code quality
 - **Review Feedback Coders** — implement review feedback
 - **Integration Reviewer** — end-to-end validation
 - **Technical Writer** — documentation updates
@@ -246,10 +247,14 @@ Orchestrator worktree lifecycle:
 For each task, run these pipeline phases in order:
 
 1. **Feature Coder** — implement the task in its worktree
-2. **Code Review** — spawn all applicable reviewers in parallel:
-   - Code Conformance Reviewer
-   - Code Quality Reviewer
-   - (Optional) SME Reviewer
+2. **Code Review** — run review scripts in parallel
+   via Bash:
+   - `scripts/review-quality.sh <scratch>
+     <task_file> <worktree_dir> <main_branch>`
+   - `scripts/review-conformance.sh <scratch>
+     <task_file> <worktree_dir> <main_branch>
+     <plan_file>`
+   - (Optional) SME Reviewer (spawn as agent)
 3. **Review Feedback Coder** — if any reviewer returned REVISE, implement
    feedback
 4. **(Optional) Manual QA Tester** — execute QA scenarios for this task
@@ -264,8 +269,10 @@ merge as a safety net.
    `status: completed` (only the Orchestrator does
    this — pipeline agents do not)
 
-All code review agents return either the single word `PASS` or `REVISE:
-REVIEW_<reviewer_type>_<task_id>.md`.
+All code reviewers (scripts and agents) return either
+the single word `PASS` or
+`REVISE: REVIEW_<reviewer_type>_<task_id>.md` on
+stdout.
 
 After code review (and Review Feedback if needed), check
 `<scratch>/QA_SCENARIOS.md` for QA scenarios that validate this task. If they

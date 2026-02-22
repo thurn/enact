@@ -104,37 +104,32 @@ writing code and tests to specification, but also
 exercising independent judgement to make decisions based
 on real world understanding of the project.
 
-### Code Conformance Reviewers
+### Code Conformance Review Script
 
-Definition: agents/code_conformance_reviewer.md
+Script: scripts/review-conformance.sh
 
-Code conformance reviewers ensure code conforms to the
-task specification and project plan. They use the
-**Codex CLI** (`codex review`) as their primary code
-analysis engine for automated bug and correctness
-detection, combined with their own spec-based
-verification against the task requirements and project
-plan. All code review agents return either the single
-word `PASS` or
-`REVISE: REVIEW_<reviewer_type>_<task_id>.md` and write
-a code review document with a description of needed
-revisions in the "REVISE" case. If Codex fails or times
-out, they fall back to pure spec-based analysis.
+A bash script that runs `codex review` with the task
+spec and project plan piped as a conformance prompt.
+Invoked directly by the Orchestrator via Bash — not a
+subagent. Args: `<scratch_dir> <task_file>
+<worktree_dir> <main_branch> <plan_file>`. Prints
+`PASS` or `REVISE: REVIEW_conformance_<task_id>.md`
+to stdout. If Codex fails or times out, prints `PASS`
+with a warning to stderr (no LLM fallback available).
 
-### Code Quality Reviewers
+### Code Quality Review Script
 
-Definition: agents/code_quality_reviewer.md
+Script: scripts/review-quality.sh
 
-Code quality reviewers ensure code is well written. They
-use the **Codex CLI** (`codex review`) as their primary
-code analysis engine, parsing its structured output for
-quality-relevant findings (duplication, API design,
-complexity, consistency, test quality). They also
-perform an Internal Tooling Leaks check that Codex
-cannot detect. They operate on a "less code is better"
-principle, which also applies to tests. If Codex fails
-or times out, they fall back to the tooling leaks check
-only.
+A bash script that runs `codex review` for structural
+quality analysis and checks for internal tooling leaks
+(references to Enact, PLAN.md, task IDs, gate numbers,
+pipeline phases). Invoked directly by the Orchestrator
+via Bash — not a subagent. Args: `<scratch_dir>
+<task_file> <worktree_dir> <main_branch>`. Prints
+`PASS` or `REVISE: REVIEW_quality_<task_id>.md` to
+stdout. If Codex fails or times out, falls back to
+the tooling leaks check only.
 
 ### Review Feedback Coders
 
