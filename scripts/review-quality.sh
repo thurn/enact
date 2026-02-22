@@ -81,8 +81,8 @@ codex_status="completed"
 
 if ! codex_output=$(
   timeout 480 bash -c \
-    "cd '$worktree_dir' && codex review \
-      --base '$main_branch'" 2>&1
+    'cd "$1" && codex review --base "$2"' \
+    -- "$worktree_dir" "$main_branch" 2>&1
 ); then
   codex_status="failed"
   echo >&2 "WARNING: codex review failed or timed out"

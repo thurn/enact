@@ -9,7 +9,6 @@
 #   $2 — task_file    (<scratch>/tasks/task_<id>.md)
 #   $3 — worktree_dir (path to git worktree)
 #   $4 — main_branch  (e.g. main, master)
-#   $5 — plan_file    (path to PLAN.md)
 #
 # Output contract:
 #   - Writes REVIEW_conformance_<task_id>.md to
@@ -24,7 +23,6 @@ scratch_dir="$1"
 task_file="$2"
 worktree_dir="$3"
 main_branch="$4"
-plan_file="$5"
 
 # Extract task_id from task file path
 task_id=$(basename "$task_file" .md | sed 's/^task_//')
@@ -40,8 +38,8 @@ codex_status="completed"
 
 if ! codex_output=$(
   timeout 480 bash -c \
-    "cd '$worktree_dir' && codex review \
-      --base '$main_branch'" 2>&1
+    'cd "$1" && codex review --base "$2"' \
+    -- "$worktree_dir" "$main_branch" 2>&1
 ); then
   codex_status="failed"
   echo >&2 \
