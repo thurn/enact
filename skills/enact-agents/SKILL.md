@@ -106,7 +106,7 @@ on real world understanding of the project.
 
 ### Code Conformance Review Script
 
-Script: scripts/review-conformance.sh
+Script: ~/.claude/scripts/review-conformance.sh
 
 A bash script that runs `codex review` for spec
 conformance analysis. Invoked directly by the
@@ -120,7 +120,7 @@ warning to stderr (no LLM fallback available).
 
 ### Code Quality Review Script
 
-Script: scripts/review-quality.sh
+Script: ~/.claude/scripts/review-quality.sh
 
 A bash script that runs `codex review` for structural
 quality analysis and checks for internal tooling leaks

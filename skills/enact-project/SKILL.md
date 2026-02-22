@@ -249,10 +249,11 @@ For each task, run these pipeline phases in order:
 1. **Feature Coder** — implement the task in its worktree
 2. **Code Review** — run review scripts in parallel
    via Bash:
-   - `scripts/review-quality.sh <scratch>
+   - `~/.claude/scripts/review-quality.sh <scratch>
      <task_file> <worktree_dir> <main_branch>`
-   - `scripts/review-conformance.sh <scratch>
-     <task_file> <worktree_dir> <main_branch>`
+   - `~/.claude/scripts/review-conformance.sh
+     <scratch> <task_file> <worktree_dir>
+     <main_branch>`
    - (Optional) SME Reviewer (spawn as agent)
 3. **Review Feedback Coder** — if any reviewer returned REVISE, implement
    feedback
