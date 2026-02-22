@@ -44,7 +44,8 @@ mode.
   problem domain, creating research assignments
 - **Researchers** — deep-dive into specific topics
   from surveyor assignments (run in parallel)
-- **Synthesizer** — combines research into RESEARCH.md
+- **Synthesizer** — combines research into
+  RESEARCH.md **(full only)**
 - **Planner** — writes PLAN.md technical design
 - **Plan Refiner** — audit complex plans **(full
   only)**

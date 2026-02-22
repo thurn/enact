@@ -43,7 +43,7 @@ information by analyzing the codebase. Starting multiple
 researchers in parallel is always encouraged for best
 results.
 
-### Synthesizers
+### Synthesizers (full only)
 
 Definition: agents/synthesizer.md
 

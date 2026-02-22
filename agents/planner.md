@@ -16,14 +16,17 @@ You will receive:
 - The enact scratch directory path
   (`~/.enact/<enact_id>/`).
 - Research findings from
-  `~/.enact/<enact_id>/RESEARCH.md`.
+  `~/.enact/<enact_id>/RESEARCH.md`, or in focused mode
+  a list of individual research result file paths
+  (`<scratch>/research/<N>_result.md`).
 - Interview results from
   `~/.enact/<enact_id>/INTERVIEW.md` (if an interview was
   conducted).
 
 ## Before You Start
 
-Read `RESEARCH.md` and `INTERVIEW.md` (if present).
+Read `RESEARCH.md` (or the individual result files if
+no RESEARCH.md exists) and `INTERVIEW.md` (if present).
 Identify:
 - What the project needs to accomplish.
 - What exists today and what needs to change.

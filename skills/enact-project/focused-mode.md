@@ -10,7 +10,7 @@ plan as a single implementation task.
 | State           | Description                        |
 |-----------------|------------------------------------|
 | RESEARCH        | Surveyor (2-3 assignments),        |
-|                 | Researchers, Synthesizer           |
+|                 | Researchers (no Synthesizer)       |
 | SCOPE_SELECTION | Scope confirmed as focused         |
 | PLANNING        | Planner only (no Plan Refiner)     |
 | PLAN_APPROVAL   | User reviews and approves plan     |
@@ -20,13 +20,30 @@ plan as a single implementation task.
 |                 | Writer                             |
 | COMPLETE        | All work done                      |
 
-No TASK_GENERATION state. No Integration Reviewer
-in POST_TASK.
+No TASK_GENERATION state. No Synthesizer in
+RESEARCH. No Integration Reviewer in POST_TASK.
+
+## Research Phase (Focused)
+
+Spawn a Surveyor with the user's prompt. The
+Surveyor creates 2-3 research assignments. Spawn
+Researchers in parallel (one per assignment). Do
+**not** spawn a Synthesizer — with only 2-3 result
+files, the Planner reads them directly.
+
+After Researchers complete, pass the research
+result file paths to the Planner (see below).
 
 ## Planning Phase (Focused)
 
-Spawn a Planner to create PLAN.md. Do NOT spawn a
-Plan Refiner. Proceed directly to PLAN_APPROVAL.
+Spawn a Planner to create PLAN.md. In the Planner's
+prompt, note that there is no RESEARCH.md — instead
+list the research result file paths
+(`<scratch>/research/<N>_result.md`) so the Planner
+reads them directly.
+
+Do NOT spawn a Plan Refiner. Proceed directly to
+PLAN_APPROVAL.
 
 ## Plan Approval Phase (Focused)
 
@@ -83,6 +100,8 @@ After the single task completes:
 
 | Agent              | Reason                          |
 |--------------------|---------------------------------|
+| Synthesizer        | 2-3 result files are small      |
+|                    | enough for the Planner to read  |
 | Plan Refiner       | Single-system changes rarely    |
 |                    | need a second planning pass     |
 | Task Generator     | No decomposition needed         |
