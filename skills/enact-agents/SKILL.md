@@ -109,23 +109,32 @@ on real world understanding of the project.
 Definition: agents/code_conformance_reviewer.md
 
 Code conformance reviewers ensure code conforms to the
-task specification and project plan. They check to make
-sure the task was fully implemented in line with project
-requirements. All code review agents return either the
-single word `PASS` or
+task specification and project plan. They use the
+**Codex CLI** (`codex review`) as their primary code
+analysis engine for automated bug and correctness
+detection, combined with their own spec-based
+verification against the task requirements and project
+plan. All code review agents return either the single
+word `PASS` or
 `REVISE: REVIEW_<reviewer_type>_<task_id>.md` and write
 a code review document with a description of needed
-revisions in the "REVISE" case.
+revisions in the "REVISE" case. If Codex fails or times
+out, they fall back to pure spec-based analysis.
 
 ### Code Quality Reviewers
 
 Definition: agents/code_quality_reviewer.md
 
 Code quality reviewers ensure code is well written. They
-flag opportunities to reduce code duplication, suggest
-refactorings, and audit tests for quality. They operate
-on a "less code is better" principle, which also applies
-to tests.
+use the **Codex CLI** (`codex review`) as their primary
+code analysis engine, parsing its structured output for
+quality-relevant findings (duplication, API design,
+complexity, consistency, test quality). They also
+perform an Internal Tooling Leaks check that Codex
+cannot detect. They operate on a "less code is better"
+principle, which also applies to tests. If Codex fails
+or times out, they fall back to the tooling leaks check
+only.
 
 ### Review Feedback Coders
 
