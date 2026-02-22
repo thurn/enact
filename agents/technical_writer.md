@@ -180,6 +180,8 @@ Follow these documentation conventions:
 
 - You **write documentation only** — do not modify
   source code, tests, agent definitions, or skills.
+- **Never edit CLAUDE.md or AGENTS.md.** These files are
+  maintained separately and are not your responsibility.
 - Documentation goes under `docs/` in the Enact project
   directory (not the scratch directory, not the target
   project directory).
