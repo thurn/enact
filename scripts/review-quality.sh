@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-# review-quality.sh — Code quality review via Codex CLI
-#
-# Runs codex review for structural quality analysis and
-# checks for internal tooling leaks. Replaces the
-# code-quality-reviewer agent.
+# review-quality.sh — Code quality review via Codex
 #
 # Args:
 #   $1 — scratch_dir  (~/.enact/<enact_id>/)
@@ -12,11 +8,10 @@
 #   $4 — main_branch  (e.g. main, master)
 #
 # Output contract:
-#   - Writes REVIEW_quality_<task_id>.md to scratch_dir
-#     if findings exist
-#   - Prints PASS or REVISE: REVIEW_quality_<task_id>.md
-#     to stdout
-#   - Always exits 0 on success (even when REVISE)
+#   - REVIEW_quality_<task_id>.md written by codex
+#     (and/or tooling leaks check) only if findings
+#   - Prints PASS or REVISE to stdout
+#   - Always exits 0
 
 set -euo pipefail
 
@@ -25,18 +20,17 @@ task_file="$2"
 worktree_dir="$3"
 main_branch="$4"
 
-# Extract task_id from task file path
 task_id=$(basename "$task_file" .md | sed 's/^task_//')
-
 review_file="REVIEW_quality_${task_id}.md"
 review_path="${scratch_dir}/${review_file}"
-has_findings=false
+
+rm -f "$review_path"
 
 # ---------------------------------------------------
-# Phase 1: Internal Tooling Leaks Check
+# Tooling Leaks Check (codex cannot detect these)
 # ---------------------------------------------------
-# Codex cannot detect these — this is the one piece
-# of manual analysis the script must do.
+# Only scan added lines to avoid flagging pre-existing
+# content.
 
 leak_patterns=(
   '[Ee]nact'
@@ -50,69 +44,57 @@ leak_patterns=(
   'pipeline'
   'subagent'
 )
-
 leak_regex=$(IFS='|'; echo "${leak_patterns[*]}")
 
-changed_files=$(
+added_lines=$(
   cd "$worktree_dir" && \
-  git diff --name-only "$main_branch" 2>/dev/null \
-    || true
+  git diff -U0 "$main_branch" 2>/dev/null \
+    | awk '
+      /^--- /{ next }
+      /^\+\+\+ /{ file=substr($0,7); next }
+      /^@@/{ split($3,a,","); line=int(a[1]); next }
+      /^\+/{ print file ":" line ": " substr($0,2);
+              line++ }
+    ' || true
 )
 
 leaks=""
-if [ -n "$changed_files" ]; then
-  while IFS= read -r file; do
-    filepath="${worktree_dir}/${file}"
-    [ -f "$filepath" ] || continue
-    matches=$(grep -nE "$leak_regex" "$filepath" \
-      2>/dev/null || true)
-    if [ -n "$matches" ]; then
-      leaks+="### Tooling Leak in ${file}"$'\n'
-      leaks+="${matches}"$'\n\n'
-    fi
-  done <<< "$changed_files"
+if [ -n "$added_lines" ]; then
+  leaks=$(echo "$added_lines" \
+    | grep -E "$leak_regex" 2>/dev/null || true)
 fi
 
 # ---------------------------------------------------
-# Phase 2: Run Codex Review
+# Codex Review
 # ---------------------------------------------------
-codex_output=""
-codex_status="completed"
 
-if ! codex_output=$(
-  timeout 480 bash -c \
-    'cd "$1" && codex review --base "$2"' \
-    -- "$worktree_dir" "$main_branch" 2>&1
-); then
-  codex_status="failed"
-  echo >&2 "WARNING: codex review failed or timed out"
-fi
+prompt="Review the git diff against '${main_branch}' "
+prompt+="for code quality: structure, duplication, "
+prompt+="API design, complexity, test quality. "
+prompt+="If you find issues, write findings to "
+prompt+="'${review_path}'. "
+prompt+="If there are no issues, do not create the "
+prompt+="file."
 
-# ---------------------------------------------------
-# Phase 3: Assemble Review File
-# ---------------------------------------------------
-# If codex produced findings, use its output directly.
-# Append tooling leaks if any were found.
+timeout 480 codex exec \
+  --full-auto \
+  --add-dir "$scratch_dir" \
+  -C "$worktree_dir" \
+  "$prompt" \
+  > /dev/null 2>&1 || true
 
-{
-  if [ "$codex_status" = "completed" ] \
-    && [ -n "$codex_output" ]; then
-    echo "$codex_output"
+# Append tooling leaks if any
+if [ -n "$leaks" ]; then
+  {
     echo ""
-    has_findings=true
-  fi
-
-  if [ -n "$leaks" ]; then
     echo "## Internal Tooling Leaks (Blockers)"
     echo ""
     echo "$leaks"
-    has_findings=true
-  fi
-} > "$review_path"
+  } >> "$review_path"
+fi
 
-if [ "$has_findings" = true ]; then
+if [ -f "$review_path" ]; then
   echo "REVISE: ${review_file}"
 else
-  rm -f "$review_path"
   echo "PASS"
 fi
