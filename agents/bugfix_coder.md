@@ -34,10 +34,13 @@ The Orchestrator provides your task ID via `task_id`.
 ### Step 1: Claim and Read the Task
 
 Read the task file at
-`<scratch>/tasks/task_<task_id>.md`. Then edit the
-task file's YAML frontmatter to set:
-- `owner: bugfix-coder`
-- `status: in_progress`
+`<scratch>/tasks/task_<task_id>.md`. Then claim it:
+
+```bash
+python3 ~/.claude/scripts/enact-tasks.py \
+  <scratch>/tasks update <task_id> \
+  --status in_progress --owner bugfix-coder
+```
 
 Identify:
 - The reported incorrect behavior
@@ -310,8 +313,12 @@ After all phases are complete:
    HARDENING: <implemented X / filed task for Y>
    ```
 
-2. Edit the task file's frontmatter to set
-   `status: completed`.
+2. Mark the task completed:
+   ```bash
+   python3 ~/.claude/scripts/enact-tasks.py \
+     <scratch>/tasks update <task_id> \
+     --status completed
+   ```
 
 ## Filing New Tasks
 

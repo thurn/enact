@@ -5,6 +5,8 @@ Usage:
     enact-tasks.py <tasks_dir> next-id
     enact-tasks.py <tasks_dir> list [--status S] [--tags T]
     enact-tasks.py <tasks_dir> available
+    enact-tasks.py <tasks_dir> update <id> [--status S]
+        [--owner O]
 """
 
 import os
@@ -219,6 +221,86 @@ def cmd_available(tasks_dir):
     print_table(available)
 
 
+def cmd_update(tasks_dir, task_id, status=None,
+               owner=None):
+    """Update a task file's frontmatter fields."""
+    path = os.path.join(
+        tasks_dir, f"task_{task_id}.md"
+    )
+    if not os.path.isfile(path):
+        print(
+            f"Error: task file '{path}' not found.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        print(
+            "Error: no YAML frontmatter found.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end = i
+            break
+
+    if end is None:
+        print(
+            "Error: unterminated frontmatter.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    updates = {}
+    if status is not None:
+        updates["status"] = status
+    if owner is not None:
+        updates["owner"] = owner
+
+    if not updates:
+        print(
+            "Error: no fields to update. "
+            "Use --status and/or --owner.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    for i in range(1, end):
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped or ":" not in stripped:
+            continue
+        key, _, _ = stripped.partition(":")
+        key = key.strip()
+        if key in updates:
+            val = updates[key]
+            if val == "":
+                lines[i] = f'{key}: ""'
+            else:
+                lines[i] = f"{key}: {val}"
+            del updates[key]
+
+    # Add any fields that didn't exist yet
+    for key, val in updates.items():
+        if val == "":
+            lines.insert(end, f'{key}: ""')
+        else:
+            lines.insert(end, f"{key}: {val}")
+        end += 1
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    print(f"Updated task {task_id}.")
+
+
 def print_usage():
     """Print usage help."""
     print(
@@ -227,11 +309,14 @@ def print_usage():
         "  enact-tasks.py <tasks_dir> list"
         " [--status S] [--tags T]\n"
         "  enact-tasks.py <tasks_dir> available\n"
+        "  enact-tasks.py <tasks_dir> update <id>"
+        " [--status S] [--owner O]\n"
         "\n"
         "Commands:\n"
         "  next-id    Print next available task ID\n"
         "  list       List tasks (filterable)\n"
-        "  available  List pending unblocked tasks"
+        "  available  List pending unblocked tasks\n"
+        "  update     Update task frontmatter fields"
     )
 
 
@@ -276,6 +361,40 @@ def main():
         cmd_list(tasks_dir, status=status, tags=tags)
     elif command == "available":
         cmd_available(tasks_dir)
+    elif command == "update":
+        if not rest:
+            print(
+                "Error: update requires a task ID.",
+                file=sys.stderr,
+            )
+            print_usage()
+            sys.exit(1)
+        try:
+            task_id = int(rest[0])
+        except ValueError:
+            print(
+                f"Error: invalid task ID '{rest[0]}'.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        upd_status = None
+        upd_owner = None
+        i = 1
+        while i < len(rest):
+            if (rest[i] == "--status"
+                    and i + 1 < len(rest)):
+                upd_status = rest[i + 1]
+                i += 2
+            elif (rest[i] == "--owner"
+                    and i + 1 < len(rest)):
+                upd_owner = rest[i + 1]
+                i += 2
+            else:
+                i += 1
+        cmd_update(
+            tasks_dir, task_id,
+            status=upd_status, owner=upd_owner,
+        )
     else:
         print(
             f"Error: unknown command '{command}'",

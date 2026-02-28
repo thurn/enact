@@ -36,10 +36,13 @@ The Orchestrator provides your task ID via `task_id`.
 ### Step 1: Claim and Read the Task
 
 Read the task file at
-`<scratch>/tasks/task_<task_id>.md`. Then edit the
-task file's YAML frontmatter to set:
-- `owner: feature-coder`
-- `status: in_progress`
+`<scratch>/tasks/task_<task_id>.md`. Then claim it:
+
+```bash
+python3 ~/.claude/scripts/enact-tasks.py \
+  <scratch>/tasks update <task_id> \
+  --status in_progress --owner feature-coder
+```
 
 Identify:
 - The context and terminology

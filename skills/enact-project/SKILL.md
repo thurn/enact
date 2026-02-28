@@ -292,9 +292,12 @@ For each task, run these pipeline phases in order:
    enabled.
 5. **Merge** — rebase and fast-forward merge the worktree to
    `<main_branch>` (skip in no-worktrees mode — code is already on
-   main). Mark the task completed by editing its frontmatter to set
-   `status: completed` (only the Orchestrator does this — pipeline
-   agents do not).
+   main). Mark the task completed (only the
+   Orchestrator does this — pipeline agents do not):
+   ```
+   python3 ~/.claude/scripts/enact-tasks.py \
+     <scratch>/tasks update <id> --status completed
+   ```
 
 All code-writing agents rebase onto `<main_branch>` before reporting
 complete. The Orchestrator rebases again before the fast-forward
