@@ -136,9 +136,18 @@ Include:
 - What just completed
 - What comes next
 - A checklist of all completed pipeline steps
+- **If QA is enabled**: a QA status table listing every
+  implementation task and its QA result (pending / PASS / FAIL /
+  N/A). Initialize this table after the QA Scenario Generator
+  completes by reading `QA_SCENARIOS.md`. Tasks with QA scenarios
+  start as `pending`; tasks without start as `N/A`. Update after
+  each task's QA Check step. **This table is critical for context
+  recovery** — without it, QA tasks become invisible after
+  compaction.
 
-This is your **primary recovery mechanism**. If your context compacts and you
-lose track, re-read this file and task statuses to fully reconstruct your state.
+This is your **primary recovery mechanism**. If your context
+compacts and you lose track, re-read this file and task statuses
+to fully reconstruct your state.
 
 ## Research Phase
 
@@ -262,32 +271,44 @@ For each task, run these pipeline phases in order:
 
 1. **Feature Coder** — implement the task in its worktree
 2. **Code Review** — run review scripts in parallel via Bash:
-   - `~/.claude/scripts/review-quality.sh <scratch> <task_file> <worktree_dir>
-     <main_branch>`
+   - `~/.claude/scripts/review-quality.sh <scratch> <task_file>
+     <worktree_dir> <main_branch>`
    - `~/.claude/scripts/review-conformance.sh <scratch> <task_file>
      <worktree_dir> <main_branch>`
    - (Optional) SME Reviewer (spawn as agent)
-3. **Review Feedback Coder** — if any reviewer returned REVISE, implement
-   feedback
-4. **(Optional) Manual QA Tester** — execute QA scenarios for this task
-5. **(Optional) Bugfix Coder** — fix bugs found during QA
+3. **Review Feedback Coder** — if any reviewer returned REVISE,
+   implement feedback
+4. **QA Check** — if QA was selected, look up this task's ID in
+   `<scratch>/QA_SCENARIOS.md`. If the task has QA scenarios listed,
+   spawn a **Manual QA Tester** with the task ID, worktree dir, and
+   scratch path. If the tester finds bugs, spawn a **Bugfix Coder**
+   before proceeding to merge. Record the QA result (PASS/FAIL/SKIP)
+   in ORCHESTRATOR_STATE.md. If the task has no QA scenarios, record
+   QA as N/A. **Do NOT skip this step.** Checking `QA_SCENARIOS.md`
+   takes one Read call — always do it when QA is enabled.
+5. **Merge** — rebase and fast-forward merge the worktree to
+   `<main_branch>` (skip in no-worktrees mode — code is already on
+   main). Mark the task completed by editing its frontmatter to set
+   `status: completed` (only the Orchestrator does this — pipeline
+   agents do not).
 
-All code-writing agents rebase onto `<main_branch>` before reporting complete.
-The Orchestrator rebases again before the fast-forward merge as a safety net.
-6. Merge the worktree to `<main_branch>` (skip in no-worktrees mode — code is
-   already on main) and mark the task completed by editing its frontmatter to
-   set `status: completed` (only the Orchestrator does this — pipeline agents do
-   not)
+All code-writing agents rebase onto `<main_branch>` before reporting
+complete. The Orchestrator rebases again before the fast-forward
+merge as a safety net.
 
-All code reviewers (scripts and agents) return either the single word `PASS` or
-`REVISE: REVIEW_<reviewer_type>_<task_id>.md` on stdout.
+All code reviewers (scripts and agents) return either the single
+word `PASS` or `REVISE: REVIEW_<reviewer_type>_<task_id>.md` on
+stdout.
 
-After code review (and Review Feedback if needed), check
-`<scratch>/QA_SCENARIOS.md` for QA scenarios that validate this task. If they
-exist, spawn the Manual QA Tester. If the tester finds bugs, spawn a Bugfix
-Coder before merging.
+### Pipeline Gate: QA Completion
 
-Record QA status in ORCHESTRATOR_STATE.md for each task.
+Before transitioning from TASK_PIPELINE to POST_TASK, if QA is
+enabled, check the QA status table in ORCHESTRATOR_STATE.md. Every
+task with QA scenarios must have a result (PASS, FAIL, or
+explicitly skipped with justification). If any QA status is still
+`pending`, do NOT proceed to POST_TASK — dispatch the missing QA
+steps first. This gate also applies after context recovery: re-read
+ORCHESTRATOR_STATE.md and verify QA completion before proceeding.
 
 ## Post-Task Phase
 
@@ -401,11 +422,17 @@ compaction), run these steps before doing anything else:
    - `in_progress` + no worktree → check for branch with `git branch --list
      'enact/*/task_*'`; merge if it exists, or reset to `pending`
    - `pending` + worktree → treat as in_progress
-4. Re-read `~/.enact/<enact_id>/ORCHESTRATOR_STATE.md` — note `scope` and
-   `worktree_mode` fields
+4. Re-read `~/.enact/<enact_id>/ORCHESTRATOR_STATE.md` — note
+   `scope` and `worktree_mode` fields
+5. **If QA is enabled**: check the QA status table in
+   ORCHESTRATOR_STATE.md. If any tasks still have QA status
+   `pending`, those tasks need their QA Check step run before
+   the pipeline can transition to POST_TASK. Also verify
+   `<scratch>/QA_SCENARIOS.md` exists and cross-reference it
+   with the QA status table.
 
-Do NOT spawn new agents until you have confirmed the active count is below the
-concurrency limit.
+Do NOT spawn new agents until you have confirmed the active
+count is below the concurrency limit.
 
 ## Critical Rules
 
