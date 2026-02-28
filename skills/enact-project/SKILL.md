@@ -12,8 +12,7 @@ defines the specific project lifecycle.
 
 1. Create an Enact ID via `date +%s`
 2. Resolve the scratch directory path: `~/.enact/<enact_id>/`
-3. Create the scratch directory with `mkdir -p`
-   Also create the tasks directory:
+3. Create the scratch directory with `mkdir -p` Also create the tasks directory:
    `mkdir -p <scratch>/tasks`
 4. Detect the main branch name: `git symbolic-ref refs/remotes/origin/HEAD | sed
    's@^refs/remotes/origin/@@'` If this fails, ask the user. Store as
@@ -32,9 +31,8 @@ defines the specific project lifecycle.
 
 ### Worktree Mode
 
-By default, Enact uses git worktrees for concurrent
-task execution. If the user requests **no-worktrees
-mode**, record `worktree_mode: serial` in
+By default, Enact uses git worktrees for concurrent task execution. If the user
+requests **no-worktrees mode**, record `worktree_mode: serial` in
 ORCHESTRATOR_STATE.md. In this mode:
 
 - Skip worktree cleanup in session setup (step 5)
@@ -49,42 +47,30 @@ The Orchestrator collaboratively decides which agents to include with the user.
 
 ### Default-On Agents
 
-These agents run unless the user explicitly opts out.
-Agents marked **(full only)** are skipped in focused
-mode.
+These agents run unless the user explicitly opts out. Agents marked **(full
+only)** are skipped in focused mode.
 
-- **Surveyors** — breadth-first analysis of the
-  problem domain, creating research assignments
-- **Researchers** — deep-dive into specific topics
-  from surveyor assignments (run in parallel)
-- **Synthesizer** — combines research into
-  RESEARCH.md **(full only)**
+- **Surveyors** — breadth-first analysis of the problem domain, creating
+  research assignments
+- **Researchers** — deep-dive into specific topics from surveyor assignments
+  (run in parallel)
+- **Synthesizer** — combines research into RESEARCH.md **(full only)**
 - **Planner** — writes PLAN.md technical design
-- **Plan Refiner** — audit complex plans **(full
-  only)**
-- **Plan Approval** — user reviews and approves plan
-  before task generation (Orchestrator behavior, not
-  a subagent)
-- **Task Generator** — breaks plan into tasks **(full
-  only)**
-- **Task Refiner** — validate task completeness
-  **(full only)**
-- **Feature Coders** — implement tasks (concurrently
-  in full mode, single task in focused mode)
-- **Code Conformance Review** — script verifying
-  implementation matches spec
-- **Code Quality Review** — script auditing code
-  quality
-- **Review Feedback Coders** — implement review
-  feedback
-- **Integration Reviewer** — end-to-end validation
-  **(full only)**
+- **Plan Refiner** — audit complex plans **(full only)**
+- **Plan Approval** — user reviews and approves plan before task generation
+  (Orchestrator behavior, not a subagent)
+- **Task Generator** — breaks plan into tasks **(full only)**
+- **Task Refiner** — validate task completeness **(full only)**
+- **Feature Coders** — implement tasks (concurrently in full mode, single task
+  in focused mode)
+- **Code Conformance Review** — script verifying implementation matches spec
+- **Code Quality Review** — script auditing code quality
+- **Review Feedback Coders** — implement review feedback
+- **Integration Reviewer** — end-to-end validation **(full only)**
 - **Technical Writer** — documentation updates
-- **Meta-Surveyor** — discovers transcripts, creates
-  analysis assignments
+- **Meta-Surveyor** — discovers transcripts, creates analysis assignments
 - **Mini-Metacognizers** — parallel transcript analysis
-- **Enact Metacognizer** — synthesizes findings into
-  META.md
+- **Enact Metacognizer** — synthesizes findings into META.md
 
 ### Default-Off Agents
 
@@ -99,15 +85,14 @@ them via AskUserQuestion:
 
 ### Ad-Hoc Agents
 
-These agents are not selected during Agent Selection.
-The Orchestrator spawns them on demand:
+These agents are not selected during Agent Selection. The Orchestrator spawns
+them on demand:
 
-- **Merge Conflict Resolver** — spawned during
-  worktree merges when conflicts are too complex
+- **Merge Conflict Resolver** — spawned during worktree merges when conflicts
+  are too complex
 
-Use AskUserQuestion to propose optional agents when
-warranted (e.g., "This project has CLI-exercisable
-output. Should I include QA testing?").
+Use AskUserQuestion to propose optional agents when warranted (e.g., "This
+project has CLI-exercisable output. Should I include QA testing?").
 
 ## Orchestrator State Machine
 
@@ -124,17 +109,14 @@ You are always in one of these states:
 | POST_TASK       | Integration, Meta pipeline, Writer   |
 | COMPLETE        | All work done                        |
 
-In **focused mode**, TASK_GENERATION is skipped and
-TASK_PIPELINE and POST_TASK are simplified. See
-[focused-mode.md](focused-mode.md) for the focused
-pipeline.
+In **focused mode**, TASK_GENERATION is skipped and TASK_PIPELINE and POST_TASK
+are simplified. See [focused-mode.md](focused-mode.md) for the focused pipeline.
 
 After each subagent completes:
 
 1. Read the subagent's return message (brief — details are in files)
 2. Update ORCHESTRATOR_STATE.md
-3. Determine the next subagent based on the state
-   machine and task statuses
+3. Determine the next subagent based on the state machine and task statuses
 4. Spawn it with `run_in_background: true`
 5. **End your turn and wait.** See Critical Rules.
 
@@ -156,8 +138,7 @@ Include:
 - A checklist of all completed pipeline steps
 
 This is your **primary recovery mechanism**. If your context compacts and you
-lose track, re-read this file and task statuses to
-fully reconstruct your state.
+lose track, re-read this file and task statuses to fully reconstruct your state.
 
 ## Research Phase
 
@@ -172,30 +153,25 @@ conducted, exploring discovered topics in greater detail.
 
 ## Scope Selection Phase
 
-After the Synthesizer completes, enter
-SCOPE_SELECTION. The Surveyor's report includes a
-scope recommendation (`focused` or `full`) with
-rationale.
+After the Synthesizer completes, enter SCOPE_SELECTION. The Surveyor's report
+includes a scope recommendation (`focused` or `full`) with rationale.
 
 **Override rules** — always use `full` if:
 - The user's prompt contains the word "project"
 - The user provided a project plan document
 
-Present the recommendation to the user via
-AskUserQuestion with options:
-- "Focused" — streamlined pipeline (single task, no
-  task decomposition, lighter review)
-- "Full" — complete pipeline (task decomposition,
-  plan refinement, integration review)
+Present the recommendation to the user via AskUserQuestion with options:
+- "Focused" — streamlined pipeline (single task, no task decomposition, lighter
+  review)
+- "Full" — complete pipeline (task decomposition, plan refinement, integration
+  review)
 
-Include the surveyor's rationale in the question.
-Record the choice in ORCHESTRATOR_STATE.md as
-`scope: focused` or `scope: full`.
+Include the surveyor's rationale in the question. Record the choice in
+ORCHESTRATOR_STATE.md as `scope: focused` or `scope: full`.
 
-If `focused`: load
-[focused-mode.md](focused-mode.md) and follow the
-focused pipeline for all subsequent states.
-If `full`: continue with the standard pipeline below.
+If `focused`: load [focused-mode.md](focused-mode.md) and follow the focused
+pipeline for all subsequent states. If `full`: continue with the standard
+pipeline below.
 
 ## Planning Phase
 
@@ -208,44 +184,34 @@ plan.
 
 ## Plan Approval Phase
 
-After the plan (and optional refinement) is complete,
-pause for user approval before generating tasks. This
-is **on by default** — skip this phase only if the user
-explicitly requested no plan approval during agent
-selection.
+After the plan (and optional refinement) is complete, pause for user approval
+before generating tasks. This is **on by default** — skip this phase only if the
+user explicitly requested no plan approval during agent selection.
 
-1. Enter the `PLAN_APPROVAL` state and update
-   ORCHESTRATOR_STATE.md
+1. Enter the `PLAN_APPROVAL` state and update ORCHESTRATOR_STATE.md
 2. Use AskUserQuestion to present the plan for review:
-   - Tell the user the plan is at
-     `~/.enact/<enact_id>/PLAN.md`
-   - Offer options: "Approve plan and proceed to task
-     generation" or "Suggest changes to the plan"
+   - Tell the user the plan is at `~/.enact/<enact_id>/PLAN.md`
+   - Offer options: "Approve plan and proceed to task generation" or "Suggest
+     changes to the plan"
 3. If the user approves: transition to TASK_GENERATION
-4. If the user suggests changes:
-   a. Spawn a new **Planner** with the user's feedback
-      and a note that it should revise the existing
-      plan at `~/.enact/<enact_id>/PLAN.md`
-   b. If Plan Refiner was selected, spawn it to audit
-      the revised plan
-   c. Return to step 2 (ask for approval again)
+4. If the user suggests changes: a. Spawn a new **Planner** with the user's
+   feedback and a note that it should revise the existing plan at
+      `~/.enact/<enact_id>/PLAN.md` b. If Plan Refiner was selected, spawn it to
+      audit the revised plan c. Return to step 2 (ask for approval again)
 
-Do NOT implement plan changes yourself. Always delegate
-revision to a Planner subagent. The approval loop
-repeats until the user is satisfied.
+Do NOT implement plan changes yourself. Always delegate revision to a Planner
+subagent. The approval loop repeats until the user is satisfied.
 
 ## Task Generation Phase
 
-Spawn the Task Generator to break the plan into tasks. If the Task
-Refiner was selected, spawn it to validate tasks. If QA was selected, spawn the
-QA Scenario Generator after task generation.
+Spawn the Task Generator to break the plan into tasks. If the Task Refiner was
+selected, spawn it to validate tasks. If QA was selected, spawn the QA Scenario
+Generator after task generation.
 
-Tasks are markdown files in `<scratch>/tasks/`.
-Each task includes a description, acceptance criteria,
-and dependencies on other tasks. The Orchestrator never
-reads task content — it only tracks task IDs and passes
-task file paths to subagents, who read the task files
-directly.
+Tasks are markdown files in `<scratch>/tasks/`. Each task includes a
+description, acceptance criteria, and dependencies on other tasks. The
+Orchestrator never reads task content — it only tracks task IDs and passes task
+file paths to subagents, who read the task files directly.
 
 ## Task Pipeline
 
@@ -257,12 +223,10 @@ available, spawn the next task's pipeline immediately. Each task's per-task
 pipeline still runs its steps sequentially within its own git worktree (or
 directly on the main repo in no-worktrees mode).
 
-Task dependencies enforce code visibility: a blocked
-task does not start until its dependencies are merged
-to `<main_branch>`. Track active pipelines in
-ORCHESTRATOR_STATE.md. Verify the active worktree count
-with `git worktree list` before spawning (skip in
-no-worktrees mode). Process completions **one at a
+Task dependencies enforce code visibility: a blocked task does not start until
+its dependencies are merged to `<main_branch>`. Track active pipelines in
+ORCHESTRATOR_STATE.md. Verify the active worktree count with `git worktree list`
+before spawning (skip in no-worktrees mode). Process completions **one at a
 time** in notification order. When a subagent completes:
 
 1. The current task's pipeline has a next step — if so, spawn it.
@@ -271,66 +235,52 @@ time** in notification order. When a subagent completes:
 
 ### Git Worktrees
 
-> **No-worktrees mode**: skip this entire section.
-> Pass `worktree_dir` equal to `project_dir` to all
-> pipeline agents. There is no worktree lifecycle —
-> agents work directly on the main repo.
+> **No-worktrees mode**: skip this entire section. Pass `worktree_dir` equal to
+> `project_dir` to all pipeline agents. There is no worktree lifecycle — agents
+> work directly on the main repo.
 
-Each task's pipeline runs in a single git worktree
-managed by the Orchestrator. All agents in a task's
-pipeline share the same worktree. No agent creates or
+Each task's pipeline runs in a single git worktree managed by the Orchestrator.
+All agents in a task's pipeline share the same worktree. No agent creates or
 removes worktrees.
 
 Orchestrator worktree lifecycle:
 
-1. **Create**: `git worktree add
-   ~/.enact/<enact_id>/task_<id> -b
+1. **Create**: `git worktree add ~/.enact/<enact_id>/task_<id> -b
    enact/<enact_id>/task_<id> <main_branch>`
-2. **Pass** `worktree_dir` and `project_dir` to every
-   agent in the pipeline
-3. **Rebase** before merging: `cd
-   ~/.enact/<enact_id>/task_<id> && git fetch
-   <project_dir> <main_branch> && git rebase
-   FETCH_HEAD`. Only spawn a Merge Conflict Resolver
-   for complex conflicts.
-4. **Merge**: `cd <project_dir> && git checkout
-   <main_branch> && git merge --ff-only
-   enact/<enact_id>/task_<id>`
-5. **Clean up**: `git worktree remove
-   ~/.enact/<enact_id>/task_<id> && git branch -d
-   enact/<enact_id>/task_<id>`
+2. **Pass** `worktree_dir` and `project_dir` to every agent in the pipeline
+3. **Rebase** before merging: `cd ~/.enact/<enact_id>/task_<id> && git fetch
+   <project_dir> <main_branch> && git rebase FETCH_HEAD`. Only spawn a Merge
+   Conflict Resolver for complex conflicts.
+4. **Merge**: `cd <project_dir> && git checkout <main_branch> && git merge
+   --ff-only enact/<enact_id>/task_<id>`
+5. **Clean up**: `git worktree remove ~/.enact/<enact_id>/task_<id> && git
+   branch -d enact/<enact_id>/task_<id>`
 
 ### Per-Task Pipeline
 
 For each task, run these pipeline phases in order:
 
 1. **Feature Coder** — implement the task in its worktree
-2. **Code Review** — run review scripts in parallel
-   via Bash:
-   - `~/.claude/scripts/review-quality.sh <scratch>
-     <task_file> <worktree_dir> <main_branch>`
-   - `~/.claude/scripts/review-conformance.sh
-     <scratch> <task_file> <worktree_dir>
+2. **Code Review** — run review scripts in parallel via Bash:
+   - `~/.claude/scripts/review-quality.sh <scratch> <task_file> <worktree_dir>
      <main_branch>`
+   - `~/.claude/scripts/review-conformance.sh <scratch> <task_file>
+     <worktree_dir> <main_branch>`
    - (Optional) SME Reviewer (spawn as agent)
 3. **Review Feedback Coder** — if any reviewer returned REVISE, implement
    feedback
 4. **(Optional) Manual QA Tester** — execute QA scenarios for this task
 5. **(Optional) Bugfix Coder** — fix bugs found during QA
 
-All code-writing agents rebase onto `<main_branch>`
-before reporting complete. The Orchestrator rebases
-again before the fast-forward merge as a safety net.
-6. Merge the worktree to `<main_branch>` (skip in
-   no-worktrees mode — code is already on main) and
-   mark the task completed by editing its frontmatter
-   to set `status: completed` (only the Orchestrator
-   does this — pipeline agents do not)
+All code-writing agents rebase onto `<main_branch>` before reporting complete.
+The Orchestrator rebases again before the fast-forward merge as a safety net.
+6. Merge the worktree to `<main_branch>` (skip in no-worktrees mode — code is
+   already on main) and mark the task completed by editing its frontmatter to
+   set `status: completed` (only the Orchestrator does this — pipeline agents do
+   not)
 
-All code reviewers (scripts and agents) return either
-the single word `PASS` or
-`REVISE: REVIEW_<reviewer_type>_<task_id>.md` on
-stdout.
+All code reviewers (scripts and agents) return either the single word `PASS` or
+`REVISE: REVIEW_<reviewer_type>_<task_id>.md` on stdout.
 
 After code review (and Review Feedback if needed), check
 `<scratch>/QA_SCENARIOS.md` for QA scenarios that validate this task. If they
@@ -360,9 +310,9 @@ After all tasks complete, run selected post-task agents:
      reads all result files and writes `~/.enact/<enact_id>/META.md`.
 - **Technical Writer** — runs after metacognition completes. Uses
   mini-metacognizer findings and META.md to identify documentation gaps that
-  caused problems, then improves docs under `docs/` in the Enact project
-  directory. Pass the scratch directory path and the Enact project directory
-  path (where `docs/` lives).
+  caused problems, then improves docs under `docs/` in the **target project
+  directory**. Pass the scratch directory path and the target project directory
+  path.
 
 ## Prompting Subagents
 
@@ -373,9 +323,8 @@ When spawning any subagent, keep your prompt **minimal**. Provide:
 - Any user-specified constraints relevant to this agent
 - Specific information this agent needs that is not in the scratch directory
   files
-- For task-related agents: the task file path
-  (`<scratch>/tasks/task_<id>.md`) — the subagent
-  reads the task file directly
+- For task-related agents: the task file path (`<scratch>/tasks/task_<id>.md`) —
+  the subagent reads the task file directly
 - For pipeline agents: `worktree_dir`, `project_dir`, and `main_branch`
 
 Reviewers discover changed files themselves via `git diff`. You do not need to
@@ -395,9 +344,8 @@ to give it the right *inputs*, not to redefine its *behavior*.
 Subagents return **brief** summaries (3-5 lines). You do NOT need their full
 output in your context.
 
-**Do NOT**: read task descriptions (pass task file
-paths to subagents instead), read source code files,
-read detailed review findings, accumulate long subagent
+**Do NOT**: read task descriptions (pass task file paths to subagents instead),
+read source code files, read detailed review findings, accumulate long subagent
 outputs, or repeat summaries back to the user verbatim.
 
 **DO**: track state via ORCHESTRATOR_STATE.md, report brief progress, pass file
@@ -420,16 +368,12 @@ could not finish):
 
 ### Failed Pipeline Cleanup
 
-If a task pipeline fails irrecoverably (in no-worktrees
-mode, only do step 1 in the project directory and
-step 4):
+If a task pipeline fails irrecoverably (in no-worktrees mode, only do step 1 in
+the project directory and step 4):
 
-1. Reset partial changes: `cd
-   ~/.enact/<enact_id>/task_<id> && git checkout .`
-2. Remove worktree:
-   `git worktree remove ~/.enact/<enact_id>/task_<id>`
-3. Delete branch:
-   `git branch -D enact/<enact_id>/task_<id>`
+1. Reset partial changes: `cd ~/.enact/<enact_id>/task_<id> && git checkout .`
+2. Remove worktree: `git worktree remove ~/.enact/<enact_id>/task_<id>`
+3. Delete branch: `git branch -D enact/<enact_id>/task_<id>`
 4. Update task status in ORCHESTRATOR_STATE.md.
 
 ## Progress Reporting
@@ -447,24 +391,21 @@ After all tasks complete:
 If you are ever uncertain about the project state (e.g. after context
 compaction), run these steps before doing anything else:
 
-1. `git worktree list` — shows active worktrees (skip
-   in no-worktrees mode). Any `task_*` worktree means
-   an agent is (or was) working on that task.
-2. `python3 ~/.claude/scripts/enact-tasks.py
-   <scratch>/tasks list` — shows task statuses.
-3. Cross-reference worktrees with task statuses (in
-   no-worktrees mode, rely on task statuses and
-   ORCHESTRATOR_STATE.md alone):
+1. `git worktree list` — shows active worktrees (skip in no-worktrees mode). Any
+   `task_*` worktree means an agent is (or was) working on that task.
+2. `python3 ~/.claude/scripts/enact-tasks.py <scratch>/tasks list` — shows task
+   statuses.
+3. Cross-reference worktrees with task statuses (in no-worktrees mode, rely on
+   task statuses and ORCHESTRATOR_STATE.md alone):
    - `in_progress` + worktree → agent likely running
-   - `in_progress` + no worktree → check for branch
-     with `git branch --list 'enact/*/task_*'`; merge
-     if it exists, or reset to `pending`
+   - `in_progress` + no worktree → check for branch with `git branch --list
+     'enact/*/task_*'`; merge if it exists, or reset to `pending`
    - `pending` + worktree → treat as in_progress
-4. Re-read `~/.enact/<enact_id>/ORCHESTRATOR_STATE.md`
-   — note `scope` and `worktree_mode` fields
+4. Re-read `~/.enact/<enact_id>/ORCHESTRATOR_STATE.md` — note `scope` and
+   `worktree_mode` fields
 
-Do NOT spawn new agents until you have confirmed the
-active count is below the concurrency limit.
+Do NOT spawn new agents until you have confirmed the active count is below the
+concurrency limit.
 
 ## Critical Rules
 
