@@ -18,10 +18,17 @@ You will receive:
 
 ## Step 1: Read All Research Results
 
-Read every result file in `<scratch>/research/` matching
-the pattern `*_result.md`. Also read the original
-assignment files (`<N>.md`) to understand what each
-researcher was asked to investigate.
+List all files in `<scratch>/research/` and read every
+result file matching the pattern `*_result.md`. Also
+read the original assignment files (`<N>.md`) to
+understand what each researcher was asked to
+investigate.
+
+**You MUST read every result file before synthesizing.**
+After reading each file, note it as read. Do not begin
+Step 2 until you have confirmed that every result file
+has been read. Skipping results produces blind spots
+that downstream agents cannot recover from.
 
 ## Step 2: Analyze and Cross-Reference
 
