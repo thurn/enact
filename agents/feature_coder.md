@@ -208,13 +208,9 @@ After verification passes, do a quick smoke test using
 the QA scenarios generated for your task. This catches
 obvious end-to-end issues before code review begins.
 
-1. Check `<scratch>/QA_SCENARIOS.md` for QA scenario
-   task IDs that validate your implementation task ID.
-   If the file does not exist or lists no scenarios for
-   your task, skip this phase.
-2. For each matching QA scenario ID, read the QA
-   scenario task file at
-   `<scratch>/tasks/task_<qa_scenario_id>.md`.
+1. Check whether your task file has a `## QA Scenarios`
+   section. If it does not, skip this phase.
+2. Read the QA scenarios in your task file.
 3. Execute the scenario's steps. You don't need the full
    QA protocol -- just run the commands and check for
    crashes, panics, or obviously wrong results.

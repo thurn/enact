@@ -78,7 +78,8 @@ These agents run only when the user requests them or the Orchestrator recommends
 them via AskUserQuestion:
 
 - **Interviewer** — clarify ambiguous requirements
-- **QA Scenario Generator** — generate manual QA scenarios
+- **QA Scenario Generator** — append QA scenarios to task
+  files
 - **Manual QA Tester** — execute QA scenarios per task
 - **Bugfix Coder** — fix bugs found during QA
 - **Subject Matter Expert Reviewers** — domain-specific review passes
@@ -139,11 +140,11 @@ Include:
 - **If QA is enabled**: a QA status table listing every
   implementation task and its QA result (pending / PASS / FAIL /
   N/A). Initialize this table after the QA Scenario Generator
-  completes by reading `QA_SCENARIOS.md`. Tasks with QA scenarios
-  start as `pending`; tasks without start as `N/A`. Update after
-  each task's QA Check step. **This table is critical for context
-  recovery** — without it, QA tasks become invisible after
-  compaction.
+  completes — it will report which tasks received QA scenarios.
+  Tasks with QA scenarios start as `pending`; tasks without start
+  as `N/A`. Update after each task's QA Check step. **This table
+  is critical for context recovery** — without it, QA status
+  becomes invisible after compaction.
 
 This is your **primary recovery mechanism**. If your context
 compacts and you lose track, re-read this file and task statuses
@@ -215,7 +216,8 @@ subagent. The approval loop repeats until the user is satisfied.
 
 Spawn the Task Generator to break the plan into tasks. If the Task Refiner was
 selected, spawn it to validate tasks. If QA was selected, spawn the QA Scenario
-Generator after task generation.
+Generator after task generation — it reads each task file and appends a
+`## QA Scenarios` section to tasks that warrant QA.
 
 Tasks are markdown files in `<scratch>/tasks/`. Each task includes a
 description, acceptance criteria, and dependencies on other tasks. The
@@ -278,14 +280,16 @@ For each task, run these pipeline phases in order:
    - (Optional) SME Reviewer (spawn as agent)
 3. **Review Feedback Coder** — if any reviewer returned REVISE,
    implement feedback
-4. **QA Check** — if QA was selected, look up this task's ID in
-   `<scratch>/QA_SCENARIOS.md`. If the task has QA scenarios listed,
-   spawn a **Manual QA Tester** with the task ID, worktree dir, and
+4. **QA Check** — if QA was selected, check whether this task's
+   file has a `## QA Scenarios` section (the QA Scenario Generator
+   appended these during task generation). If it does, spawn a
+   **Manual QA Tester** with the task file path, worktree dir, and
    scratch path. If the tester finds bugs, spawn a **Bugfix Coder**
-   before proceeding to merge. Record the QA result (PASS/FAIL/SKIP)
-   in ORCHESTRATOR_STATE.md. If the task has no QA scenarios, record
-   QA as N/A. **Do NOT skip this step.** Checking `QA_SCENARIOS.md`
-   takes one Read call — always do it when QA is enabled.
+   before proceeding to merge. Record the QA result (PASS/FAIL/N/A)
+   in ORCHESTRATOR_STATE.md. If the task has no QA section, record
+   QA as N/A. **Do NOT skip this step.** One Read call on the task
+   file tells you whether QA is needed — always check when QA is
+   enabled.
 5. **Merge** — rebase and fast-forward merge the worktree to
    `<main_branch>` (skip in no-worktrees mode — code is already on
    main). Mark the task completed by editing its frontmatter to set
@@ -426,10 +430,8 @@ compaction), run these steps before doing anything else:
    `scope` and `worktree_mode` fields
 5. **If QA is enabled**: check the QA status table in
    ORCHESTRATOR_STATE.md. If any tasks still have QA status
-   `pending`, those tasks need their QA Check step run before
-   the pipeline can transition to POST_TASK. Also verify
-   `<scratch>/QA_SCENARIOS.md` exists and cross-reference it
-   with the QA status table.
+   `pending`, those tasks need their QA Check step run
+   before the pipeline can transition to POST_TASK.
 
 Do NOT spawn new agents until you have confirmed the active
 count is below the concurrency limit.
