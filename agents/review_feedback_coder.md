@@ -184,11 +184,22 @@ each criterion:
 | "I'm confident" | Confidence is not evidence |
 | "I already ran tests after each fix" | Final state needs full verification |
 
-## Phase 5: Rebase, Commit, and Complete
+## Phase 5: Commit, Rebase, and Complete
 
 After all fixes are verified:
 
-### Step 1: Rebase onto Main
+### Step 1: Commit Review Feedback Changes
+
+Stage the specific files you changed and create a new
+commit (do not amend the Feature Coder's commit):
+
+```bash
+git add <file1> <file2> ...
+git commit -m "Address code review feedback for task
+  <task_id>"
+```
+
+### Step 2: Rebase onto Main
 
 Check for `<main_branch>` advances and rebase:
 
@@ -205,18 +216,7 @@ git rebase FETCH_HEAD
 Resolve any conflicts, keeping your intended changes.
 Run verification again after rebase.
 
-### Step 2: Commit Review Feedback Changes
-
-Stage the specific files you changed and create a new
-commit (do not amend the Feature Coder's commit):
-
-```bash
-git add <file1> <file2> ...
-git commit -m "Address code review feedback for task
-  <task_id>"
-```
-
-Report the new commit hash.
+Report the final commit hash.
 
 ### Step 3: Write Completion Notes
 
