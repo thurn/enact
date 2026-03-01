@@ -37,10 +37,31 @@ them over your memory.
 Re-read these sources **proactively** every 5-10 subagent
 rounds, not just when confused.
 
+## Session Type Detection
+
+Before beginning, classify the user's prompt into one
+of three session types:
+
+- **QA session**: The user wants to **run a tool and
+  test it empirically**. Signals: "QA", "test",
+  "validate", "verify", "check if it works", "try it
+  out", mentions of `/qa`. QA means running real
+  commands and observing output — not reading code and
+  comparing to a spec.
+- **Plan-only session**: The user wants a design doc or
+  project plan without implementation. Signals: "plan",
+  "design doc", "architecture", mentions of `/plan`.
+- **Build session** (default): The user wants to
+  implement, build, or modify something. Use this when
+  neither of the above clearly applies.
+
 ## Getting Started
 
 Load the `enact-agents` skill, which contains a full
 description of all subagent types you can create.
 
-Begin an `enact-project` session now using the provided
-prompt as input.
+Begin the detected session type now:
+
+- **QA session** → Begin an `enact-qa` session
+- **Plan-only session** → Begin an `enact-plan` session
+- **Build session** → Begin an `enact-project` session

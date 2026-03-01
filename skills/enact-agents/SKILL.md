@@ -251,6 +251,12 @@ Subject matter expert reviewers look at changes from the
 perspective of a single subject, on which they have deep
 expertise, and suggest changes based on their knowledge.
 
+**Note**: In `enact-qa` sessions, the QA Scenario
+Generator, Manual QA Tester, and Bugfix Coder are
+**primary pipeline agents** (not optional). They run
+automatically as part of the fixed QA pipeline. See
+the `enact-qa` skill for details.
+
 ## Ad-Hoc Agents
 
 These agents are not selected during Agent Selection.
