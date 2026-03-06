@@ -172,12 +172,20 @@ evidence.**
 Before marking the task as complete, run through this
 gate:
 
-1. **IDENTIFY**: What commands prove the task is done?
-   (tests, linter, type checker, build)
-2. **RUN**: Execute each command fresh and completely
-3. **READ**: Full output -- check exit codes, count
+1. **FULL TEST SUITE**: Run the project's complete test
+   suite (not just your new tests). Find the project's
+   test runner by checking existing config, scripts, or
+   CI definitions. All pre-existing passing tests must
+   continue to pass. If any test that passed before your
+   changes now fails, fix the regression before
+   proceeding.
+2. **IDENTIFY**: What additional commands prove the task
+   is done? (linter, type checker, build, task-specific
+   acceptance criteria)
+3. **RUN**: Execute each command fresh and completely
+4. **READ**: Full output -- check exit codes, count
    failures, read error messages
-4. **VERIFY**: Does the output confirm completion?
+5. **VERIFY**: Does the output confirm completion?
    - If NO: State actual status with evidence. Fix and
      re-verify.
    - If YES: State claim WITH evidence.
