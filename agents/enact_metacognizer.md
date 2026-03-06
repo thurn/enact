@@ -148,11 +148,6 @@ meta agents (`agents/meta_surveyor.md`,
 `agents/enact_metacognizer.md`) with the same
 specificity you demand for other agents.
 
-When reading previous META.md files (Phase 4), briefly
-check whether past self-improvement recommendations
-were acted on. If the same one keeps appearing, it
-needs to be louder.
-
 Do not recurse. One level of self-reflection is
 productive. Two is graduate school.
 
@@ -163,15 +158,6 @@ about conciseness. This is a diagnostic summary, not a
 narrative essay. Use terse descriptions, short bullets,
 and compress freely. If you must cut, cut prose before
 data.
-
-Check for previous META.md files first:
-
-```bash
-ls ~/.enact/*/META.md 2>/dev/null
-```
-
-If they exist, read them for recurring patterns and
-trend data.
 
 Write your findings to
 `~/.enact/<enact_id>/META.md`:
@@ -211,10 +197,6 @@ Write your findings to
 
 | # | Category | File | Change | Severity |
 |---|----------|------|--------|----------|
-
-## Recurring Themes
-
-[1-3 sentences on patterns from prior META.md files.]
 
 ## Self-Improvement
 
