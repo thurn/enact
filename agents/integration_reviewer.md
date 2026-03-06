@@ -95,6 +95,11 @@ descriptions, notes, and status. Build a mapping:
   without plan traceability are suspect).
 - **Coverage gaps** — plan sections with no corresponding
   task.
+- **Unexecuted tasks** — tasks with status `pending`,
+  `todo`, or `in_progress`. These indicate the pipeline
+  stopped before completing all work (including bug tasks
+  and corrective tasks filed during QA or earlier review
+  rounds). Flag every unexecuted task as a GAP finding.
 
 ### Step 4: Read the Implementation
 

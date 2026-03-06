@@ -307,6 +307,19 @@ All code reviewers (scripts and agents) return either the single
 word `PASS` or `REVISE: REVIEW_<reviewer_type>_<task_id>.md` on
 stdout.
 
+### Pipeline Gate: Task Completion
+
+Before transitioning from TASK_PIPELINE to POST_TASK, run:
+```
+python3 ~/.claude/scripts/enact-tasks.py <scratch>/tasks list
+```
+Verify that **every** task has status `completed`. Bug tasks and
+corrective tasks filed during QA or review count — they are real
+tasks that must go through the pipeline. Do NOT count only the
+original planned tasks. If any task has status `pending`, `todo`,
+or `in_progress`, it must be executed before proceeding. This gate
+also applies after context recovery.
+
 ### Pipeline Gate: QA Completion
 
 Before transitioning from TASK_PIPELINE to POST_TASK, if QA is
