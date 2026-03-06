@@ -221,15 +221,29 @@ def cmd_available(tasks_dir):
     print_table(available)
 
 
+def resolve_task_path(tasks_dir, task_id):
+    """Find the actual task file, trying both padded
+    and unpadded names (e.g. task_1.md, task_01.md).
+    """
+    candidates = [
+        f"task_{task_id}.md",
+        f"task_{task_id:02d}.md",
+    ]
+    for name in candidates:
+        path = os.path.join(tasks_dir, name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 def cmd_update(tasks_dir, task_id, status=None,
                owner=None):
     """Update a task file's frontmatter fields."""
-    path = os.path.join(
-        tasks_dir, f"task_{task_id}.md"
-    )
-    if not os.path.isfile(path):
+    path = resolve_task_path(tasks_dir, task_id)
+    if path is None:
         print(
-            f"Error: task file '{path}' not found.",
+            f"Error: task file for ID {task_id} "
+            "not found.",
             file=sys.stderr,
         )
         sys.exit(1)
