@@ -61,31 +61,36 @@ You will receive from the Orchestrator:
   implementation lives. Execute all QA commands inside
   this directory.
 
-### Step 1: Read the Task File
+### Step 1: Read the Task File (MANDATORY FIRST ACTION)
 
-Read the task file. It contains:
-- The implementation description (what was built)
-- The `## QA Scenarios` section with one or more
-  `### QA:` subsections (what to test)
+Your **very first tool call** MUST be a Read of the task
+file. No exceptions. Do not read PLAN.md first. Do not
+read source code first. Read the task file.
 
-Execute all QA scenarios in the task file, one at a time.
+Extract the `## QA Scenarios` section. It contains one or
+more `### QA:` subsections — these are the scenarios you
+must execute. Copy them into your working memory. You will
+execute every one of these scenarios before doing anything
+exploratory.
 
-### Step 2: Build Deep Context
+If the task file has no `## QA Scenarios` section, stop
+and report this to the Orchestrator — you have nothing to
+test.
 
-Before executing anything, read and understand:
+### Step 2: Build Supporting Context
 
-1. **The project plan.** Read `PLAN.md` in the enact
-   scratch directory. Understand how this task fits into
-   the project.
-2. **The task and its QA scenarios.** Understand what was
-   built, what the scenarios are testing, and what
-   "success" means -- not just the checklist, but the
-   underlying intent.
-3. **The relevant source code.** If the scenario tests a
+After reading the task file, build context to help you
+evaluate results:
+
+1. **The relevant source code.** If the scenario tests a
    specific feature, read the implementation. You are
    building the domain knowledge you need to evaluate the
    system's behavior.
-4. **Any previous QA results.** If a
+2. **The project plan.** Optionally read `PLAN.md` in the
+   enact scratch directory if you need broader context
+   about how this task fits into the project. This is
+   supplementary — the task file is your primary source.
+3. **Any previous QA results.** If a
    `QA_<task_id>.md` file already exists in the enact
    scratch directory, read it to understand what has
    already been validated.
