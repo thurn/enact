@@ -106,6 +106,28 @@ For each significant problem, trace it to a root cause.
 Ask: "If we fixed this, would the problem have been
 prevented for *all future sessions*, or just this one?"
 
+**Critical: Generalize, don't overfit.** Enact is a
+general-purpose framework used for many different kinds
+of software engineering tasks -- not just the task from
+this session. Your recommendations must work across all
+future sessions, not just prevent a recurrence of this
+session's specific problem.
+
+- **Bad** (overfits to session): "Always assign a
+  researcher to the system's entry point." (Assumes all
+  tasks involve replicating a system with an entry
+  point.)
+- **Good** (general): "Plan auditor must verify that
+  every file the plan proposes to modify was read by at
+  least one researcher. Flag ungrounded assumptions."
+
+Ask yourself: "Would this recommendation make sense to
+someone who has never seen this session's task
+description?" If not, generalize further. Strip away
+task-specific nouns (entry point, draft runner, color
+scheme) and find the underlying structural failure
+(coverage gap, missing validation, information loss).
+
 ### Write Recommendations
 
 For each diagnosed problem, write a concrete
@@ -114,6 +136,11 @@ recommendation:
 - **Specific**: "Add a section to the Feature Coder
   prompt explaining how to use git commands" -- not
   "improve the Feature Coder prompt."
+- **General**: Must apply to all future sessions, not
+  just this session's task type. Never reference
+  task-specific concepts (e.g., "entry point",
+  "color migration") in recommendations -- use
+  structural descriptions instead.
 - **Actionable**: Implementable without additional
   research.
 - **Proportional**: Matches the severity of the problem.
