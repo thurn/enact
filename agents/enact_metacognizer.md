@@ -128,6 +128,14 @@ task-specific nouns (entry point, draft runner, color
 scheme) and find the underlying structural failure
 (coverage gap, missing validation, information loss).
 
+Enact is also **language-agnostic**. Never recommend
+adding language-specific commands (e.g., `python3 -m
+unittest discover`, `cargo test`, `npm run lint`) to
+agent prompts. Instead, recommend structural behaviors
+like "run the project's full test suite before
+committing" and let agents discover the right command
+from the project context.
+
 ### Write Recommendations
 
 For each diagnosed problem, write a concrete
