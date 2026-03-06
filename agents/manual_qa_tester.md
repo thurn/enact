@@ -129,6 +129,14 @@ scenario's "Expected" field. The scenario author may have
 been wrong, or the output may technically match while
 still being incorrect in a deeper sense.
 
+**Hard rule on runtime errors:** If a command's output
+contains ANY unhandled exception, stack trace, runtime
+error, or panic — regardless of which module or
+component produced it — that is an automatic BUG. You
+must file a bug task and mark the scenario FAIL. Do not
+filter out, ignore, or explain away runtime errors. The
+program crashed; that is a bug.
+
 ### Phase 3: Critical Evaluation
 
 After executing all steps, step back and evaluate:
@@ -286,6 +294,11 @@ ORCHESTRATOR_STATE.md.
 - The system crashes or hangs on reasonable input.
 - Behavior contradicts what PLAN.md says the system
   should do.
+- **Any command produces an unhandled exception, stack
+  trace, or runtime error in its output** — even if
+  the error originates in a different module or
+  component than the one being tested. A crash is a
+  crash.
 
 **It is NOT a bug if:**
 - The behavior is intentional and documented.
