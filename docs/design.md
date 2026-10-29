@@ -426,3 +426,45 @@ Findings and adjustments made while implementing (2026-10-28):
   checked out elsewhere, including a locked worktree. Restoring a missing
   checkout reports the surviving head as its base; new branches still start
   at staging.
+
+
+## Shared run holds and bounded recovery (2026-10-29)
+
+- `run register` stores each vizier's host, provider, app, project, session,
+  parallelism and invocation authorization on the epic. `next` also records
+  its route for legacy callers, without inventing missing authorization.
+  Registration never resumes a held run. Different viziers use separate
+  metadata keys; remote-wins sync verifies every published update.
+- `run pause` and `run block --exhausted` set shared control independently
+  of Beads issue status. Claims, reservation starts, scheduling and Marshal
+  recovery check holds on run links and ancestors. Workers already running
+  may push and close under a hold. Automatic epic closure excludes held
+  epics and their descendants; unmet acceptance remains open. Block a run
+  only after Justiciar recovery cannot resolve missing access or a human
+  decision. Do not replace impossible requirements with endless retries.
+- Only `run resume --explicit --reason` clears a hold and creates a new
+  recovery epoch. The flag attests an explicit user instruction, not a
+  permission available to automatic recovery. Raw Beads writes and old
+  helper versions can bypass this cooperative protocol; update participating
+  peers before relying on fleet-wide pause enforcement.
+- `run recover` records one attempt before a native message is sent. Per
+  epoch it permits two nudges per worker session, three resume messages per
+  vizier, and one fallback notice per vizier. Attempts are at least an hour
+  apart, survive process death and sync, and retain evidence and timestamps.
+  An uncertain send consumes its attempt. Only explicit resume resets the
+  budget; apparent activity or a new sweep does not erase history. A
+  successful routed lookup remains mandatory, and incapable hosts notify
+  rather than pretending they can restart orchestration.
+- `status.active_runs` includes registered runs before first assignment,
+  between workers and after epic closure until final delivery completes.
+  Legacy routes are inferred from recorded assignments for inspection and
+  a fallback notice; automatic restart needs retained authorization.
+  `sweep_needed` also accounts for running workers and unarchived chats;
+  paused/blocked idle runs do not require automatic recovery. Pending
+  deliveries keep validation alive. `staging` remains the remote tip SHA.
+- `marshal_name` is stable for the absolute project path, host, provider and
+  app, avoiding basename collisions. The scheduled standalone project sweep
+  retains invocation authorization and its automation ID, stays quiet while
+  unchanged, and is removed only when no relevant run or cleanup needs it.
+  Desktop tool schemas and the available host capability decide how to
+  perform scheduling and messaging; the helper never calls native tools.

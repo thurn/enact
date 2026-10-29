@@ -105,9 +105,11 @@ everything before you close your own bead, then run `enact sync`.
 
 - **Ordinary difficulty is not a blocker.** Failing tests, confusing code,
   merge conflicts and flaky checks are your job. Keep working.
-- **Genuinely impossible bead** (contradicts the code, depends on something
-  that does not exist): file replacement beads that describe the real work,
-  comment why, then close with `--reason "replaced by ..."`.
+- **Genuinely impossible acceptance:** preserve the open requirement and
+  request Justiciar recovery with the evidence. Do not close it as delivered
+  or repeatedly release it for replacements. After exhausted recovery the
+  Justiciar records `enact run block <epic> --exhausted --reason "<exact
+  missing access or decision>"`; the unfinished beads and work stay intact.
 - **Emergency** (the Beads database is gone or corrupt, the remote rejects
   every push, disk is full, a core tool is broken for everyone): run
   `enact justiciar request --reason "<what is broken, evidence>"`. Exit 3
@@ -116,9 +118,13 @@ everything before you close your own bead, then run `enact sync`.
   Then keep doing whatever useful work remains, or wait: the vizier spawns the
   Justiciar and it may message you. "Tests are broken" is never an emergency.
 - **Resumed after an interruption** (usage limit, crash, a Marshal nudge):
-  check `bd show <bead>` and `git status` in your worktree. Continue only if
-  you still own the bead; otherwise leave all files intact and end the turn.
+  check `bd show <bead>`, `enact status` and your worktree. Continue only if
+  you still own the bead and its run is active; otherwise preserve all files
+  and end the turn. A shared pause lets already running workers finish, but
+  never authorizes a stopped worker to restart. Only explicit user resume
+  clears paused or blocked state; never clear it as automatic recovery.
 - Never wait for a human, never end your turn mid-task to ask a question, and
   never leave your bead in progress when you stop for good. If you truly
-  cannot continue, comment the exact state on the bead and run
-  `enact release <bead> --reason "..."` so another session can pick it up.
+  cannot continue in an active run, comment the exact state and run
+  `enact release <bead> --reason "..."`. Paused or blocked runs retain their
+  assignments and unfinished acceptance until explicit resume.

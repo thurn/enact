@@ -57,6 +57,17 @@ a dependency cycle, or a bead stuck `in_progress` with no live session.
 Repair the graph so work can flow, for example by bringing the prerequisite
 into the epic, removing a stale edge or releasing the bead.
 
+## Exhausted recovery
+
+If progress truly requires unavailable access or a human decision after
+you exhaust recovery, run `enact run block <epic> --exhausted --reason
+"<exact need and attempted recovery>"` for each affected run. Preserve all
+unfinished beads, acceptance criteria and worktrees. Do not close an
+impossible requirement or keep releasing it for replacement workers.
+Release the Justiciar lock and report the exact need. Only explicit user
+resume (`enact run resume <epic> --explicit --reason "..."`) can restart it.
+Ordinary test failures and implementation difficulty are not blockers.
+
 ## Finish
 
 1. Verify the emergency is over: `enact sync` works, `enact push` works from

@@ -786,6 +786,100 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.assertEqual([d["id"] for d in result["dropped"]], [bead])
         self.assertEqual(b.show(bead)["title"], "a title")
 
+    def test_worker_recovery_requires_route_and_notices_do_not_restart_holds(self):
+        epic = self.a.create("worker recovery", type="epic")
+        task = self.a.create("worker", parent=epic)
+        route = self.a.enact("run", "register", epic, "--authorized")
+        step = self.a.enact("next", "--epic", epic)
+        self.start_worker(self.a, task, "worker")
+        command = ("run", "recover", epic, "--kind", "worker", "--bead", task,
+                   "--session", "worker", "--evidence", "successful lookup: idle")
+        self.b.enact(*command, code=3)
+        self.assertTrue(self.a.enact(*command)["allowed"])
+        self.assertEqual(self.a.enact(*command)["reason"], "cooldown")
+        self.a.enact("run", "pause", epic, "--reason", "user stop")
+        self.a.enact(*command, code=3)
+        notice = ("run", "recover", epic, "--kind", "notice", "--session", "sess-a",
+                  "--evidence", "user action needed")
+        self.assertTrue(self.a.enact(*notice)["allowed"])
+        self.assertEqual(self.a.enact(*notice)["reason"], "exhausted")
+        self.a.bd("update", epic, "--set-metadata", "enact_marshal_notified=2020-01-01T00:00:00Z")
+        status = self.a.enact("status")
+        self.assertEqual(status["marshal_name"], route["marshal_name"])
+        self.assertFalse(status["active_runs"][0]["recoverable"])
+        self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "paused")
+        self.a.enact("meta", epic, 'enact_control={"state":"active"}', code=3)
+        # Legacy callers get a safe fallback without inventing authorization.
+        self.assertEqual(self.b.enact("next", "--epic", epic)["action"], "paused")
+        notice = ("run", "recover", epic, "--kind", "notice", "--session", "sess-b",
+                  "--evidence", "registration needs original authorization")
+        self.assertTrue(self.b.enact(*notice)["allowed"])
+        self.assertEqual(self.b.enact(*notice)["reason"], "exhausted")
+
+    def test_shared_run_pause_blocks_peers_but_allows_delivery(self):
+        epic = self.a.create("shared run", type="epic")
+        first = self.a.create("in flight", parent=epic, priority=1)
+        second = self.a.create("later", parent=epic)
+        self.a.enact("run", "register", epic, "--authorized")
+        status = self.a.enact("status")
+        self.assertTrue(status["sweep_needed"])
+        self.assertEqual(status["active_runs"][0]["epic"], epic)
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual(step["bead"], first)
+        self.start_worker(self.a, first, "worker")
+        path = Path(self.a.enact("worktree", "create", first, session="worker")["path"])
+        self.a.enact("run", "pause", epic, "--reason", "user requested stop")
+        self.assertEqual(self.b.enact("next", "--epic", epic)["action"], "paused")
+        self.b.enact("claim", second, code=3)
+        self.a.enact("start", first, "--reservation", step["reservation"], session="worker", code=3)
+        self.a.commit_file("finished", "in-flight work", cwd=path)
+        self.a.enact("push", "--bead", first, "--no-ci", cwd=path, session="worker")
+        self.a.enact("close", first, "--reason", "finished in flight", session="worker")
+        self.assertEqual(self.a.show(first)["status"], "closed")
+        self.assertNotEqual(self.a.show(epic)["status"], "closed")
+        self.a.enact("run", "recover", epic, "--kind", "vizier", "--session", "sess-a",
+                     "--evidence", "successful lookup: stopped", code=3)
+        self.b.enact("run", "resume", epic, "--reason", "automatic retry", code=3)
+        self.b.enact("run", "resume", epic, "--explicit", "--reason", "user says resume")
+        self.assertEqual(self.a.enact("next", "--epic", epic)["bead"], second)
+
+    def test_blocked_acceptance_and_recovery_history_survive_sweeps(self):
+        epic = self.a.create("acceptance needs new access", type="epic",
+                             acceptance="Required access is available")
+        task = self.a.create("implementation", parent=epic)
+        self.a.enact("run", "register", epic, "--authorized", "--parallel", "2")
+        command = ("run", "recover", epic, "--kind", "vizier", "--session", "sess-a",
+                   "--evidence", "successful lookup: stopped")
+        for attempt in range(3):
+            result = self.a.enact(*command)
+            self.assertTrue(result["allowed"])
+            self.assertEqual(result["remaining"], 2 - attempt)
+            self.assertEqual(result["route"]["parallel"], 2)
+            if attempt == 0:
+                self.assertEqual(self.a.enact(*command)["reason"], "cooldown")
+            # Simulate the passage of hourly sweeps in the real shared graph.
+            bead = self.a.show(epic)
+            key = next(k for k in bead["metadata"] if k.startswith("enact_marshal_"))
+            history = bead["metadata"][key]
+            if isinstance(history, str):
+                history = json.loads(history)
+            history[-1]["at"] = "2020-01-01T00:00:00+00:00"
+            self.a.bd("update", epic, "--set-metadata", key + "=" + json.dumps(history))
+        self.assertEqual(self.a.enact(*command)["reason"], "exhausted")
+        self.a.enact("run", "block", epic, "--exhausted", "--reason", "Justiciar: access unavailable")
+        self.b.enact("claim", task, code=3)
+        self.assertEqual(self.b.enact("next", "--epic", epic)["action"], "blocked")
+        self.a.enact(*command, code=3)
+        # Even otherwise eligible epics must retain unmet whole-run acceptance.
+        self.a.bd("close", task, "--reason", "implementation finished")
+        self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "blocked")
+        self.assertNotEqual(self.a.show(epic)["status"], "closed")
+        self.assertEqual(self.a.show(epic)["acceptance_criteria"], "Required access is available")
+        self.a.enact("run", "resume", epic, "--explicit", "--reason", "user supplied access")
+        self.assertTrue(self.a.enact(*command)["allowed"])
+        self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "done")
+        self.assertEqual(self.b.enact("next", "--epic", epic)["action"], "done")
+
     def test_vizier_schedules_archives_and_finishes(self):
         epic = self.a.create("epic", type="epic")
         first = self.a.create("first", parent=epic, priority=1)
@@ -818,6 +912,9 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.wait_for_ci(self.a)
         status = self.a.enact("status")
         self.assertIn(epic, status["pending_deliveries"])
+        self.assertEqual(status["staging"], self.remote_sha("staging"))
+        self.assertTrue(status["sweep_needed"])
+        self.assertIn(epic, [r["epic"] for r in status["active_runs"]])
         self.assertFalse(status["ci"]["result"]["passed"])
         steward = status["open_stewards"][0]
         self.assertIn(epic, self.a.show(steward)["metadata"]["enact_runs"].split())

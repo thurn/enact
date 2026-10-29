@@ -213,6 +213,52 @@ class GraphTest(unittest.TestCase):
         self.assertEqual(enact.bead_runs(repair, graph), ["run", "peer"])
         self.assertEqual(enact.bead_runs({"id": "unrelated"}, graph), [])
 
+    def test_holds_apply_to_nested_work_and_shared_repairs(self):
+        graph = [{"id": "run", "issue_type": "epic"},
+                 {"id": "gate", "parent": "run", "issue_type": "epic",
+                  "metadata": {"enact_control": {"state": "paused", "epoch": "1"}}},
+                 {"id": "work", "parent": "gate"}]
+        with self.assertRaises(enact.Fail):
+            enact.require_running(graph[-1], graph)
+        graph[0]["metadata"] = {"enact_control": {"state": "blocked", "epoch": "1"}}
+        with self.assertRaises(enact.Fail):
+            enact.require_running({"id": "repair", "metadata": {"enact_runs": "run peer"}}, graph)
+
+    def test_recovery_is_bounded_and_only_explicit_epoch_change_resets(self):
+        history = [{"epoch": "old", "at": "2020-01-01T00:00:00+00:00"}]
+        self.assertEqual(enact.recovery_budget(history, "old", 2,
+                                              "2020-01-01T00:59:59+00:00"), "cooldown")
+        self.assertIsNone(enact.recovery_budget(history, "old", 2,
+                                                "2020-01-01T01:00:00+00:00"))
+        history.append({"epoch": "old", "at": "2020-01-01T01:00:00+00:00"})
+        self.assertEqual(enact.recovery_budget(history, "old", 2,
+                                              "2030-01-01T00:00:00+00:00"), "exhausted")
+        self.assertIsNone(enact.recovery_budget(history, "explicit-resume", 2,
+                                                "2030-01-01T00:00:00+00:00"))
+
+    def test_marshal_names_distinguish_equal_project_basenames(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            one = types.SimpleNamespace(main=root / "one" / "project")
+            two = types.SimpleNamespace(main=root / "two" / "project")
+            self.assertEqual(enact.marshal_name(one), enact.marshal_name(one))
+            self.assertNotEqual(enact.marshal_name(one), enact.marshal_name(two))
+
+    def test_legacy_incomplete_route_cannot_hide_current_vizier(self):
+        epic = {"id": "run", "issue_type": "epic"}
+        metadata = {"enact_run": "run", "enact_vizier": "vizier",
+                    "enact_spawn_host": enact.host_name(),
+                    "enact_spawn_provider": enact.provider()}
+        old = {"id": "old", "status": "closed", "metadata": metadata}
+        current = {"id": "current", "metadata": {
+            **metadata, "enact_spawn_app": os.environ.get("ENACT_APP", enact.provider()),
+            "enact_spawn_project": "/project"}}
+        routes = enact.vizier_routes(epic, [epic, old, current])
+        self.assertEqual(len(routes), 1)
+        self.assertEqual(routes[0]["session"], "vizier")
+        self.assertEqual(routes[0]["project"], "/project")
+        self.assertFalse(routes[0]["authorized"])
+
     def test_role_defaults_to_executor(self):
         self.assertEqual(enact.role_of({"labels": ["role:warden"]}), "warden")
         self.assertEqual(enact.role_of({"labels": ["ui"]}), "executor")

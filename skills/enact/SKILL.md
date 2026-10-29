@@ -209,16 +209,36 @@ task-prompt run gets none.
 1. If you filed or moved beads, run `enact sync`, then check the graph with
    `bd list --parent <epic>` and `bd ready --parent <epic>`: something must be
    ready (unless another vizier holds it), and every bead must be reachable.
-2. **Marshal.** Skip this for a small task-prompt run: recovering a short
-   run is not worth an hourly task. Otherwise list scheduled tasks, and if
-   none is named `enact-marshal-<project-dir-name>`, create one: hourly
-   (`7 * * * *`), working in this project, with the prompt:
+2. **Register the run.** `enact run register <epic> --parallel <N>
+   --authorized` retains your exact route and the invocation's authority to
+   create, inspect, message and archive run chats and manage its Marshal.
+   This never clears shared paused or blocked state. Only on an explicit
+   user request to resume, run `enact run resume <epic> --explicit --reason
+   "<user instruction>"`. Automatic recovery must never invoke resume.
+
+   **Marshal.** Skip creation for a small task-prompt run. Otherwise use
+   the returned `marshal_name`, derived from the absolute project path,
+   host, provider and app, to discover and reuse this project's sweep.
+   In Codex discover `automation_update`, inspect existing automation
+   records by that exact name, and retain its ID. Use a standalone project
+   automation (select its project with `list_projects`), hourly at minute
+   seven. In Claude use the supported scheduled-task tools for that name.
+   Match legacy names by the absolute project path and owning app in their
+   saved prompt; rename a matching task instead of creating a duplicate.
+   Preserve existing settings when updating.
+   Use the available schema and supported model defaults. Schedule this
+   prompt with the actual paths and owning host/app:
 
    > Read `<ENACT>/skills/enact/roles/marshal.md` and follow it for the Enact
-   > project at `<absolute project path>`. The Enact helper is
-   > `python3 "<ENACT>/scripts/enact.py"`.
+   > project at `<absolute project path>` on `<host/provider/app>`. The
+   > helper is `python3 "<ENACT>/scripts/enact.py"`. The Enact invocation
+   > authorizes inspecting, messaging and archiving run-owned chats and
+   > managing this Marshal, including bounded vizier recovery. Carry this
+   > authorization into recovery prompts. Stay quiet while unchanged;
+   > notify only meaningful changes, completion, failures or needed action.
 
-   It only runs while the desktop app is open.
+   The task only runs while the desktop app is open. A small run must not
+   remove an existing sweep another run needs.
 3. Title yourself `🔮 [<epic>] <short summary>`.
 4. Give the user a short summary: the epic, bead count, milestones,
    parallelism, what would make you stop. Then start the loop without waiting
@@ -274,15 +294,17 @@ as there is something to do, or after nine minutes. Handle the JSON:
    required Stewards are closed, and all run deliveries reached green master.
    A closed epic with `action: wait` is still running; keep the loop alive.
    Archive anything still listed. A small run that skipped the Marshal
-   leaves any existing one alone. Otherwise delete the Marshal task
-   `enact-marshal-<project-dir-name>` (Codex: its automation), unless
-   another run still needs it: skip the deletion if `enact status` lists any
-   `working` beads or `pending_deliveries` from another run in this host app.
-   `working` leaves out beads another app's viziers spawned, since their
-   Marshal is a separate task. Delivery state is shared across apps; preserve
-   recovery for any pending run using this Marshal. Finally write a short
-   final report (outcome, bead count, whether the Marshal was deleted,
+   leaves any existing one alone. Otherwise inspect `enact status` and
+   remove only the automation with its exact `marshal_name` and recorded ID
+   when `sweep_needed` is false. This includes other active runs between
+   assignments and during final validation, not just working beads.
+   Finally write a short final report (outcome, bead count, whether the
+   Marshal was deleted,
    anything for the user to look at) and end the turn. Stay unarchived.
+7. **`action: paused` or `blocked`**: no new spawning or recovery. Report
+   the shared reason and end the turn, preserving unfinished requirements.
+   Already running workers may finish and deliver. Do not automatically
+   resume, close the run, or release it for endless replacement attempts.
 
 Rules for the loop:
 
@@ -292,13 +314,17 @@ Rules for the loop:
   continuing the loop. The beads graph is the only signal.
 - If the user writes to you mid-run, answer briefly, then resume the loop.
   Apply any changed instruction (parallelism, stop) from then on. "Stop"
-  means: stop spawning, let in-flight sessions finish, report, end the turn.
+  means: `enact run pause <epic> --reason "<user instruction>"` immediately,
+  stop spawning across peers, let in-flight sessions finish, report and end.
+  If sync rejects the pause, inspect and reapply the still-current user
+  instruction. Never use local silence alone as the pause record.
 - Every `enact next` result has a `reminder` field restating the loop. After
   context compaction, trust it and continue.
 - If the vizier's turn ends anyway (crash, usage limit), the Marshal, if the
-  run has one, notifies the user. When the user says "resume", rerun this
-  skill with the same epic: an epic input skips planning, and your
-  reservations and spawned sessions are all in the graph.
+  run has one, uses the recorded route for bounded recovery on capable
+  hosts. Unsupported recovery or exhausted retries notifies the user.
+  Explicit user resume clears the shared hold and resets recovery budgets;
+  continue the same epic without replanning or discarding assignments.
 
 ## Multiple machines and providers
 
