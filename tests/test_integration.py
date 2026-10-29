@@ -343,6 +343,14 @@ class EnactTest(unittest.TestCase):
         self.assertIn("/.worktrees/", (self.a.path / ".git" / "info" / "exclude").read_text())
         self.assertEqual(self.a.git("status", "--porcelain"), "")
 
+    def test_remove_preserves_unpublished_branch_without_checkout(self):
+        path = Path(self.a.enact("worktree", "create", "orphan")["path"])
+        self.a.commit_file("unfinished", "saved commit", cwd=path)
+        head = self.a.git("rev-parse", "HEAD", cwd=path)
+        self.a.git("worktree", "remove", str(path))
+        self.a.enact("worktree", "remove", "orphan", code=2)
+        self.assertEqual(self.a.git("rev-parse", "enact/orphan"), head)
+
     def test_push_from_worktree_records_commits_and_cleans_up(self):
         bead = self.a.create("feature")
         wt = self.a.enact("worktree", "create", bead)
@@ -382,7 +390,11 @@ import argparse, runpy, sys
 module = runpy.run_path(sys.argv[1], run_name='fault_test')
 def fail_sync(repo):
     raise RuntimeError('injected sync outage')
-module['cmd_push'].__globals__['sync'] = fail_sync
+original_finish = module['finish_delivery']
+def finish(repo, receipt, data):
+    module['cmd_push'].__globals__['sync'] = fail_sync
+    return original_finish(repo, receipt, data)
+module['cmd_push'].__globals__['finish_delivery'] = finish
 module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
                                      no_ci=False, keep=False))
 """
@@ -573,6 +585,145 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
 
     # -- beads coordination -----------------------------------------------
 
+    def start_worker(self, machine, bead, session):
+        token = machine.show(bead)["metadata"]["enact_reservation"]
+        return machine.enact("start", bead, "--reservation", token, session=session)
+
+    def test_same_host_viziers_race_without_overwriting_reservations(self):
+        epic = self.a.create("race", type="epic")
+        bead = self.a.create("one assignment", parent=epic)
+        self.a.bd("update", bead, "--set-metadata", "enact_provider=claude")
+        self.a.enact("sync")
+        processes = [subprocess.Popen(
+            [sys.executable, str(SCRIPT), "next", "--epic", epic],
+            cwd=self.a.path, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, **self.a.env(session)}) for session in ("viz-1", "viz-2")]
+        results = []
+        for process in processes:
+            out, err = process.communicate(timeout=180)
+            self.assertEqual(process.returncode, 0, (out, err))
+            results.append(json.loads(out))
+        self.assertEqual(sorted(r["action"] for r in results), ["spawn", "wait"])
+        saved = self.a.show(bead)
+        winner = next(r["vizier"] for r in results if r["action"] == "spawn")
+        self.assertEqual(saved["assignee"], f"vizier:host-a:claude:{winner}")
+        self.assertEqual(saved["metadata"]["enact_vizier"], winner)
+        self.assertIn(saved["metadata"]["enact_reservation"],
+                      next(r["prompt"] for r in results if r["action"] == "spawn"))
+        # Targeting may change independently; it is not the creator route.
+        self.a.bd("update", bead, "--set-metadata", "enact_provider=codex")
+        row = self.a.enact("status")["working"][0]
+        self.assertEqual(row["routing"], {"host": "host-a", "provider": "claude",
+                                         "app": "claude", "project": str(self.a.path)})
+        loser = "viz-2" if winner == "viz-1" else "viz-1"
+        self.a.enact("meta", bead, "enact_session=wrong", session=loser, code=3)
+        self.a.enact("start", bead, "--reservation", "wrong", session="worker", code=3)
+        self.a.enact("meta", bead, "enact_session=worker", session=winner)
+        token = saved["metadata"]["enact_reservation"]
+        self.a.enact("start", bead, "--reservation", token, session="wrong", code=3)
+        self.start_worker(self.a, bead, "worker")
+        self.a.enact("meta", bead, "enact_session=late-child", session=winner, code=3)
+
+    def test_local_recovery_fences_stale_workers_and_preserves_all_work(self):
+        epic = self.a.create("local recovery", type="epic")
+        bead = self.a.create("unfinished", parent=epic)
+        self.a.enact("next", "--epic", epic)
+        old_token = self.a.show(bead)["metadata"]["enact_reservation"]
+        self.start_worker(self.a, bead, "old")
+        path = Path(self.a.enact("worktree", "create", bead, session="old")["path"])
+        self.a.commit_file("committed", "original", cwd=path)
+        head = self.a.git("rev-parse", "HEAD", cwd=path)
+        (path / "committed").write_text("unfinished edit")
+        (path / "untracked").write_text("unfinished new file")
+        self.a.enact("worktree", "remove", bead, session="old", code=2)
+        # Lookup failure, a stale observation, and a different provider cannot
+        # establish inactivity. None may discard this worker's assignment.
+        base = ["release", bead, "--reason", "recovery", "--expected-owner", "old",
+                "--expected-session", "old"]
+        self.a.enact(*base, session="marshal", code=3)
+        self.a.enact(*base, "--inactive", "stopped", session="marshal", code=3)
+        self.a.enact(*base, "--inactive", "stopped", "--evidence", "read confirmed idle",
+                     "--expected-owner", "stale", session="marshal", code=3)
+        foreign = subprocess.run([sys.executable, str(SCRIPT), *base, "--inactive", "stopped",
+                                  "--evidence", "wrong provider"], cwd=self.a.path,
+                                 capture_output=True, text=True,
+                                 env={**os.environ, **self.a.env("marshal"),
+                                      "ENACT_PROVIDER": "codex"})
+        self.assertEqual(foreign.returncode, 3, foreign.stdout)
+        result = self.a.enact(*base, "--inactive", "stopped", "--evidence", "read confirmed idle",
+                              session="marshal")
+        self.assertEqual(result["recovery"]["head"], head)
+        self.assertEqual(result["recovery"]["path"], str(path))
+        self.a.enact("start", bead, "--reservation", old_token, session="old", code=3)
+        self.a.enact("next", "--epic", epic, session="replacement-vizier")
+        self.a.enact("start", bead, "--reservation", old_token, session="old", code=3)
+        self.start_worker(self.a, bead, "new")
+        for args in (("close", bead, "--reason", "stale"),
+                     ("meta", bead, "enact_commits=stale"),
+                     ("release", bead, "--reason", "stale"),
+                     ("worktree", "remove", bead)):
+            self.a.enact(*args, session="old", code=3)
+        self.a.enact("push", "--no-ci", cwd=path, session="old", code=3)
+        self.a.enact("push", "--bead", bead, "--no-ci", cwd=path, session="old", code=3)
+        recovered = self.a.enact("worktree", "create", bead, session="new")
+        self.assertTrue(recovered["recovered"])
+        self.assertEqual(recovered["path"], str(path))
+        self.assertEqual(self.a.git("rev-parse", "HEAD", cwd=path), head)
+        self.assertEqual((path / "committed").read_text(), "unfinished edit")
+        self.assertEqual((path / "untracked").read_text(), "unfinished new file")
+        self.a.git("add", ".", cwd=path)
+        self.a.git("commit", "-qm", "finish recovered work", cwd=path)
+        # Bead inference protects --bead omission and records the delivery.
+        pushed = self.a.enact("push", "--no-ci", cwd=path, session="new")
+        self.assertTrue(pushed["pushed"])
+        self.assertFalse(path.exists())
+        self.a.enact("close", bead, "--reason", "recovered", session="new")
+        self.assertIn(head, self.a.show(bead)["metadata"]["enact_commits"].split())
+
+    def test_remote_replacement_preserves_original_recovery_location(self):
+        epic = self.a.create("remote recovery", type="epic")
+        bead = self.a.create("unfinished remote", parent=epic)
+        self.a.enact("next", "--epic", epic)
+        self.start_worker(self.a, bead, "old")
+        original = Path(self.a.enact("worktree", "create", bead, session="old")["path"])
+        self.a.commit_file("unpublished", "local commit", cwd=original)
+        head = self.a.git("rev-parse", "HEAD", cwd=original)
+        (original / "untracked").write_text("local edit")
+        self.a.enact("release", bead, "--reason", "relocating", session="old")
+        self.b.enact("next", "--epic", epic)
+        self.start_worker(self.b, bead, "remote")
+        replacement = self.b.enact("worktree", "create", bead, session="remote")
+        fresh = Path(replacement["path"])
+        self.assertFalse(replacement["recovered"])
+        self.assertEqual(self.b.git("rev-parse", "HEAD", cwd=fresh), self.remote_sha("staging"))
+        self.assertEqual((original / "untracked").read_text(), "local edit")
+        self.assertEqual(self.a.git("rev-parse", "HEAD", cwd=original), head)
+        records = self.b.show(bead)["metadata"]["enact_recovery"]
+        record = (json.loads(records) if isinstance(records, str) else records)[0]
+        self.assertEqual((record["host"], record["path"], record["head"]),
+                         ("host-a", str(original), head))
+        self.a.enact("push", "--no-ci", cwd=original, session="old", code=3)
+        self.assertTrue(original.exists())
+
+    def test_legacy_handoff_requires_recorded_child_and_known_route(self):
+        bead = self.a.create("legacy reservation")
+        self.a.bd("update", bead, "--assignee", "vizier:host-a", "--status", "in_progress",
+                  "--set-metadata", "enact_spawn_host=host-a",
+                  "--set-metadata", "enact_vizier=sess-a")
+        self.a.enact("start", bead, session="wrong", code=3)
+        self.a.enact("meta", bead, "enact_session=legacy")
+        self.a.enact("start", bead, session="legacy")
+        self.a.enact("release", bead, "--reason", "unknown provider", "--expected-owner", "legacy",
+                     "--expected-session", "legacy", "--inactive", "missing", "--evidence",
+                     "unsupported lookup", session="marshal", code=3)
+        self.assertFalse(self.a.enact("status")["working"][0]["routing_known"])
+        self.a.bd("update", bead, "--set-metadata", "enact_spawn_provider=claude")
+        # A provider alone does not prove which app/project can inspect it.
+        self.a.enact("release", bead, "--reason", "unknown app", "--expected-owner", "legacy",
+                     "--expected-session", "legacy", "--inactive", "missing", "--evidence",
+                     "unsupported lookup", session="marshal", code=3)
+        self.a.enact("close", bead, "--reason", "legacy completed", session="legacy")
+
     def test_claim_race_has_one_winner(self):
         bead = self.a.create("contested")
         self.a.enact("sync")
@@ -602,13 +753,13 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         step = self.a.enact("next", "--epic", epic)
         self.assertEqual((step["action"], step["bead"], step["role"]), ("spawn", first, "executor"))
         self.assertIn("executor.md", step["prompt"])
-        self.a.enact("meta", first, "enact_session=local_1")
-        self.a.enact("start", first, session="exec-1")
+        self.a.enact("meta", first, "enact_session=exec-1")
+        self.start_worker(self.a, first, "exec-1")
         self.a.enact("close", first, "--reason", "done", session="exec-1")
         step = self.a.enact("next", "--epic", epic)
-        self.assertEqual(step["archive"], [{"bead": first, "session": "local_1"}])
+        self.assertEqual(step["archive"], [{"bead": first, "session": "exec-1"}])
         self.assertEqual((step["action"], step["bead"], step["role"]), ("spawn", second, "warden"))
-        self.a.enact("start", second, session="exec-2")
+        self.start_worker(self.a, second, "exec-2")
         self.a.enact("close", second, "--reason", "done", session="exec-2")
         self.assertEqual(self.a.show(epic)["status"], "closed")
         self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "done")
@@ -633,11 +784,11 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.a.bd("update", steward, "--unset-metadata", "enact_runs")
         step = self.a.enact("next", "--epic", epic)
         self.assertEqual((step["action"], step["bead"]), ("spawn", steward))
-        self.a.enact("start", steward, session="steward")
-        path = Path(self.a.enact("worktree", "create", steward)["path"])
+        self.start_worker(self.a, steward, "steward")
+        path = Path(self.a.enact("worktree", "create", steward, session="steward")["path"])
         self.a.git("rm", "SLOW", cwd=path)
         self.a.git("commit", "-qm", "repair slow check", cwd=path)
-        repaired = self.a.enact("push", "--bead", steward, "--no-ci", cwd=path)
+        repaired = self.a.enact("push", "--bead", steward, "--no-ci", cwd=path, session="steward")
         self.a.enact("close", steward, "--reason", "fixed", session="steward")
         step = self.a.enact("next", "--epic", epic)
         self.assertEqual(step["action"], "wait")

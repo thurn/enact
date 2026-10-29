@@ -250,7 +250,15 @@ as there is something to do, or after nine minutes. Handle the JSON:
    - Codex: `create_thread` with the same prompt, then title it.
 
    Then record the session: `enact meta <bead> enact_session=<session id>`.
-   If the start fails, run `enact release <bead> --reason "<error>"`.
+   Keep the reservation token in the spawn prompt. Record actual app and
+   project routing with `enact_spawn_app` and `enact_spawn_project` if the
+   returned route differs from the helper's defaults; targeting fields
+   `enact_host` and `enact_provider` do not describe an existing chat.
+   If spawning is definitively rejected before creating a child, release
+   your unbound reservation: `enact release <bead> --reason "<error>"`.
+   For a timeout or uncertain result, inspect the owning app first. Never
+   release merely because the lookup failed; use the Marshal handoff rules
+   once a child's inactivity is confirmed.
 3. **`action: spawn-justiciar`**: start a session the same way with the given
    `title` and `prompt`. There is no bead to record.
 4. **`action: wait`**: nothing to do yet. Run `enact next` again.

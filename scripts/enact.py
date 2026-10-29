@@ -11,8 +11,10 @@ rebase conflict), 3 lost a race (claim or lock held by someone else).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import errno
+import functools
 import hashlib
 import json
 import os
@@ -24,6 +26,7 @@ import sys
 import tempfile
 import time
 import tomllib
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -369,6 +372,40 @@ def resolve_remote_wins(repo: Repo) -> list[dict[str, Any]]:
     return dropped
 
 
+# Serialize the read/check/write/sync sequence within one clone. Remote
+# conflicts still resolve remote-wins; verify the published owner afterwards.
+_ownership_locks: set[Path] = set()
+
+
+@contextlib.contextmanager
+def ownership_lock(repo: Repo):
+    path = repo.state / "ownership.lock"
+    if path in _ownership_locks:
+        yield
+        return
+    deadline = time.monotonic() + 180
+    while (guard := try_lock(path)) is None:
+        if time.monotonic() >= deadline:
+            raise Fail("ownership operation busy; retry", code=3)
+        time.sleep(0.1)
+    _ownership_locks.add(path)
+    try:
+        yield
+    finally:
+        _ownership_locks.remove(path)
+        release_lock(path, guard)
+
+
+def serialized(function):
+    @functools.wraps(function)
+    def call(first, *args, **kwargs):
+        repo = first if isinstance(first, Repo) else find_repo()
+        with ownership_lock(repo):
+            return function(first, *args, **kwargs)
+    return call
+
+
+@serialized
 def sync(repo: Repo) -> dict[str, Any]:
     """Commit local Beads writes, merge the remote and push refs/dolt/data."""
     beads = Beads(repo)
@@ -397,6 +434,19 @@ def sync(repo: Repo) -> dict[str, Any]:
 # Claims and bead bookkeeping
 
 
+def require_owner(bead: dict[str, Any], actor: str, *, closed: bool = False) -> None:
+    if (bead.get("assignee") != actor or
+            (bead.get("status") == "closed" and not closed)):
+        raise Fail(f"{bead['id']} belongs to {bead.get('assignee') or 'nobody'} "
+                   f"({bead.get('status')}); this session is {actor}", code=3)
+
+
+def recovery_records(bead: dict[str, Any]) -> list[dict[str, Any]]:
+    value = (bead.get("metadata") or {}).get("enact_recovery", [])
+    return json.loads(value) if isinstance(value, str) else value
+
+
+@serialized
 def claim(repo: Repo, bead_id: str, actor: str, extra_meta: dict[str, str]) -> bool:
     """Claim a bead fleet-wide. Returns False when another actor won."""
     beads = Beads(repo)
@@ -404,14 +454,17 @@ def claim(repo: Repo, bead_id: str, actor: str, extra_meta: dict[str, str]) -> b
     bead = beads.show(bead_id)
     if bead.get("status") == "closed":
         return False
-    if bead.get("assignee") and bead["assignee"] != actor:
-        return False
+    if bead.get("assignee"):
+        return bead["assignee"] == actor and all(
+            meta(bead, key) == value for key, value in extra_meta.items())
     args = ["update", bead_id, "--claim"]
     for key, value in extra_meta.items():
         args += ["--set-metadata", f"{key}={value}"]
     beads.run(*args, actor=actor)
     sync(repo)
-    return beads.show(bead_id).get("assignee") == actor
+    saved = beads.show(bead_id)
+    return saved.get("assignee") == actor and all(
+        meta(saved, key) == value for key, value in extra_meta.items())
 
 
 def cmd_claim(args: argparse.Namespace) -> dict[str, Any]:
@@ -422,56 +475,92 @@ def cmd_claim(args: argparse.Namespace) -> dict[str, Any]:
     return {"claimed": args.bead, "assignee": actor}
 
 
+@serialized
 def cmd_start(args: argparse.Namespace) -> dict[str, Any]:
-    """A spawned session takes its bead over from the vizier's reservation."""
+    """Take only the reservation handed to this spawned session."""
     repo = find_repo()
     actor = require_actor(args.actor)
     beads = Beads(repo)
     sync(repo)
     bead = beads.show(args.bead)
     owner = bead.get("assignee") or ""
+    token = meta(bead, "enact_reservation")
+    assigned = meta(bead, "enact_session")
     if bead.get("status") == "closed":
         raise Fail(f"{args.bead} is already closed", code=3)
-    if owner and owner != actor and not owner.startswith("vizier:"):
-        raise Fail(f"{args.bead} belongs to {owner}", code=3)
-    beads.run(
-        "update",
-        args.bead,
-        "--assignee",
-        actor,
-        "--status",
-        "in_progress",
-        "--set-metadata",
-        f"enact_actor={actor}",
-        actor=actor,
-    )
+    if owner != actor:
+        if not owner.startswith("vizier:") or (assigned and assigned != actor):
+            raise Fail(f"{args.bead} belongs to {owner}", code=3)
+        # Legacy reservations have no token: only the recorded child may start.
+        if (token and args.reservation != token) or (not token and assigned != actor):
+            raise Fail("reservation does not match this worker", code=3)
+    beads.run("update", args.bead, "--assignee", actor, "--status", "in_progress",
+              "--set-metadata", f"enact_actor={actor}",
+              "--set-metadata", f"enact_session={actor}", actor=actor)
     sync(repo)
     bead = beads.show(args.bead)
-    if bead.get("assignee") != actor:
-        raise Fail(f"lost {args.bead} to {bead.get('assignee')}", code=3)
+    require_owner(bead, actor)
     return {"bead": bead, "role": role_of(bead), "emoji": EMOJI.get(role_of(bead), "")}
 
 
+@serialized
 def cmd_close(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     actor = require_actor(args.actor)
     beads = Beads(repo)
+    sync(repo)
+    require_owner(beads.show(args.bead), actor, closed=True)
     beads.run("close", args.bead, "--reason", args.reason, actor=actor)
-    closed = beads.json("epic", "close-eligible") or {}
     result = sync(repo)
+    saved = beads.show(args.bead)
+    require_owner(saved, actor, closed=True)
+    if saved.get("status") != "closed":
+        raise Fail("close lost during sync; recheck ownership", code=3)
+    closed = beads.json("epic", "close-eligible") or {}
+    sync(repo)
     return {"closed": args.bead, "epics_closed": closed.get("closed", []), "sync": result}
 
 
+@serialized
 def cmd_meta(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
+    actor = require_actor(args.actor)
     pairs = {}
     for item in args.pairs:
         key, sep, value = item.partition("=")
         if not sep:
             raise Fail(f"expected key=value, got {item!r}")
         pairs[key] = value
-    Beads(repo).set_meta(args.bead, pairs, actor=args.actor or session_actor())
-    return {"bead": args.bead, "metadata": pairs, "sync": sync(repo)}
+    sync(repo)
+    beads = Beads(repo)
+    bead = beads.show(args.bead)
+    # Only the current vizier may bind a child/routing. An already started
+    # child can be recorded idempotently, never replaced by a late spawn.
+    routing = {"enact_session", "enact_spawn_app", "enact_spawn_project"}
+    if set(pairs) <= routing and meta(bead, "enact_vizier") == actor:
+        assigned = meta(bead, "enact_session")
+        if assigned and pairs.get("enact_session", assigned) != assigned:
+            raise Fail("worker already bound; release it before replacing", code=3)
+    elif set(pairs) == {"enact_archived"} and (
+            meta(bead, "enact_vizier") == actor or
+            (args.expected_session == meta(bead, "enact_session") and
+             args.expected_session and routed_here(bead))):
+        if bead.get("status") != "closed":
+            raise Fail("cannot archive an open assignment", code=3)
+    else:
+        if bead.get("issue_type") != "epic" or bead.get("assignee"):
+            require_owner(bead, actor)
+        protected = routing | {"enact_vizier", "enact_actor", "enact_reservation",
+                               "enact_spawn_host", "enact_spawn_provider", "enact_recovery",
+                               "enact_worktree", "enact_branch", "enact_worktree_host"}
+        if protected.intersection(pairs):
+            raise Fail("ownership and recovery fields are managed by Enact", code=3)
+    beads.set_meta(args.bead, pairs, actor=actor)
+    result = sync(repo)
+    saved = beads.show(args.bead)
+    if any(meta(saved, key) != value for key, value in pairs.items()):
+        raise Fail("metadata lost during sync; recheck ownership", code=3)
+    return {"bead": args.bead, "metadata": pairs, "sync": result}
 
 
 def cmd_sync(args: argparse.Namespace) -> dict[str, Any]:
@@ -555,13 +644,19 @@ def run_delivery(repo: Repo, graph: list[dict[str, Any]], epic: str) -> dict[str
 def spawn_prompt(role: str, bead: dict[str, Any], epic: str, vizier: str) -> str:
     script = Path(__file__).resolve()
     python = sys.executable or "python3"
+    token = meta(bead, "enact_reservation")
+    start = f"enact start {bead['id']}" + (f" --reservation {token}" if token else "")
     return (
         f"You are an Enact {role} session (emoji {EMOJI.get(role, '')}). "
         f"Your bead is {bead['id']} ({bead.get('title', '')}) in epic {epic}; "
         f"you were started by vizier {vizier} on host {host_name()}.\n\n"
         f"Read {ROLES_DIR / 'common.md'} and then {ROLES_DIR / (role + '.md')}, "
         f"and follow them. The Enact helper is `\"{python}\" \"{script}\"`, "
-        f"referred to as `enact` in those files.\n\n{ROLE_NOTICE}"
+        f"referred to as `enact` in those files.\n"
+        f"Start with `{start}`.\n"
+        "The run authorizes creating, inspecting, messaging and archiving its "
+        "role chats and managing its Marshal. Preserve this authorization "
+        f"during recovery.\n\n{ROLE_NOTICE}"
     )
 
 
@@ -580,6 +675,7 @@ def spawn_action(repo: Repo, bead: dict[str, Any], epic: str, vizier: str) -> di
         "action": "spawn",
         "bead": bead["id"],
         "role": role,
+        "reservation": meta(bead, "enact_reservation"),
         "title": session_title(role, bead),
         "prompt": spawn_prompt(role, bead, epic, vizier),
         "settings": repo.config.role_settings(role, provider()),
@@ -657,10 +753,16 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
             "enact_vizier": vizier,
             "enact_spawn_host": host_name(),
             "enact_spawn_provider": provider(),
+            "enact_spawn_app": os.environ.get("ENACT_APP", provider()),
+            "enact_spawn_project": str(repo.main),
+            "enact_reservation": uuid.uuid4().hex,
         }
-        if claim(repo, bead["id"], f"vizier:{host_name()}", reservation):
-            return {**result, **spawn_action(repo, by_id.get(bead["id"], bead), epic, vizier)}
+        if claim(repo, bead["id"], f"vizier:{host_name()}:{provider()}:{vizier}", reservation):
+            return {**result, **spawn_action(repo, beads.show(bead["id"]), epic, vizier)}
         log(f"lost the claim race for {bead['id']}; trying the next bead")
+    if candidates:
+        # The graph predates the winning claim; it cannot prove a deadlock.
+        return {**result, "action": "wait", "reason": "claims changed"}
 
     open_scope = [by_id[i] for i in scope if by_id[i].get("status") != "closed"]
     working = [b for b in open_scope if b.get("status") == "in_progress"]
@@ -916,15 +1018,82 @@ def remove_worktree(repo: Repo, path: Path, branch: str | None) -> None:
     repo.git("worktree", "prune", cwd=repo.main, check=False)
 
 
+def worktree_bead(repo: Repo, path: Path) -> dict[str, Any] | None:
+    # Includes legacy worktrees named after a bead, created before pointers
+    # were recorded. Never let omitting --bead bypass ownership checks.
+    for bead in Beads(repo).all():
+        if path == repo.worktree_root() / bead["id"] or (
+                meta(bead, "enact_worktree_host") == host_name() and
+                meta(bead, "enact_worktree") == str(path)) or any(
+                    r.get("host") == host_name() and r.get("path") == str(path)
+                    for r in recovery_records(bead)):
+            return bead
+    return None
+
+
+def verified_worktree(repo: Repo, path: Path, branch: str) -> None:
+    if (not path.is_dir() or find_repo(path).common != repo.common or
+            repo.git("rev-parse", "--abbrev-ref", "HEAD", cwd=path) != branch):
+        raise Fail(f"recovery worktree does not match recorded repository/branch: {path}", code=2)
+
+
+@serialized
 def cmd_worktree(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
+    path = repo.worktree_root() / args.name
     branch = f"enact/{args.name}"
+    sync(repo)
+    bead = worktree_bead(repo, path)
+    actor = require_actor(None) if bead else None
+    if bead:
+        # Retain direct CLI use for never-assigned beads by claiming first.
+        if (not bead.get("assignee") and not recovery_records(bead) and
+                not meta(bead, "enact_reservation") and args.action == "create"):
+            if not claim(repo, bead["id"], actor, {}):
+                raise Fail("worktree claim lost", code=3)
+            bead = Beads(repo).show(bead["id"])
+        require_owner(bead, actor)
     if args.action == "create":
         fetch(repo)
         base = repo.git("rev-parse", repo.remote_ref(repo.config.staging), cwd=repo.main)
-        path = create_worktree(repo, args.name, branch, base)
-        return {"path": str(path), "branch": branch, "base": base}
-    path = repo.worktree_root() / args.name
+        reused = False
+        if bead:
+            records = [r for r in recovery_records(bead)
+                       if r.get("host") == host_name() and r.get("path")]
+            if records:
+                record = records[-1]
+                old = Path(record["path"])
+                if old.exists():
+                    if not record.get("inactive"):
+                        raise Fail("prior worker inactivity is unconfirmed", code=3)
+                    path, branch = old, record["branch"]
+                    verified_worktree(repo, path, branch)
+                    reused = True
+            # Idempotent retries after a lost response, never a blind reset.
+            if not reused and path.exists() and meta(bead, "enact_worktree") == str(path):
+                if meta(bead, "enact_worktree_host") == host_name():
+                    verified_worktree(repo, path, branch)
+                    reused = True
+        if not reused:
+            path = create_worktree(repo, args.name, branch, base)
+        if bead:
+            Beads(repo).set_meta(bead["id"], {
+                "enact_worktree": str(path), "enact_branch": branch,
+                "enact_worktree_host": host_name()}, actor=actor)
+            sync(repo)
+            require_owner(Beads(repo).show(bead["id"]), actor)
+        return {"path": str(path), "branch": branch, "base": base, "recovered": reused}
+    # Explicit removal must not discard unfinished work, including untracked
+    # files. Delivery's own cleanup follows a confirmed push instead.
+    fetch(repo)
+    if path.exists():
+        verified_worktree(repo, path, branch)
+        if repo.git("status", "--porcelain", cwd=path):
+            raise Fail("worktree contains unfinished work; preserve it for recovery", code=2)
+    if (repo.git_ok("rev-parse", "--verify", f"refs/heads/{branch}") and
+            not repo.git_ok("merge-base", "--is-ancestor", branch,
+                            repo.remote_ref(repo.config.staging))):
+        raise Fail("branch contains unpublished commits; preserve it for recovery", code=2)
     remove_worktree(repo, path, branch)
     return {"removed": str(path)}
 
@@ -961,6 +1130,7 @@ def delivery_receipts(repo: Repo) -> Path:
     return path
 
 
+@serialized
 def finish_delivery(repo: Repo, receipt: Path, data: dict[str, Any]) -> dict[str, Any]:
     """Replay bookkeeping after a confirmed push; retain receipt on any failure."""
     result: dict[str, Any] = {"staging": data["head"], "commits": data["commits"]}
@@ -1002,8 +1172,16 @@ def recover_deliveries(repo: Repo) -> list[dict[str, Any]]:
     return recovered
 
 
+@serialized
 def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
+    sync(repo)
+    assigned = worktree_bead(repo, repo.top)
+    if assigned and args.bead and args.bead != assigned["id"]:
+        raise Fail("--bead differs from this worktree's assignment", code=3)
+    args.bead = args.bead or (assigned["id"] if assigned else None)
+    if args.bead:
+        require_owner(Beads(repo).show(args.bead), require_actor(None))
     cfg = repo.config
     if repo.git("status", "--porcelain", "--untracked-files=no"):
         raise Fail("working tree has uncommitted changes; commit them first", code=2)
@@ -1034,6 +1212,9 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
         receipt = delivery_receipts(repo) / f"{head}.json"
         # Write before the remote mutation, so a lost push response is recoverable.
         write_json(receipt, data)
+        if args.bead:
+            sync(repo)
+            require_owner(Beads(repo).show(args.bead), require_actor(None))
         if repo.git_ok("push", "-q", cfg.remote, f"HEAD:refs/heads/{cfg.staging}"):
             result = {"pushed": True, **finish_delivery(repo, receipt, data)}
             if recovered:
@@ -1049,7 +1230,7 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     in_enact_tree = (
         repo.top.resolve().parent == repo.worktree_root().resolve() and repo.top != repo.main
     )
-    if in_enact_tree and not args.keep:
+    if in_enact_tree and not args.keep and not repo.git("status", "--porcelain"):
         os.chdir(repo.main)
         remove_worktree(repo, repo.top, branch if branch.startswith("enact/") else None)
         result["removed_worktree"] = str(repo.top)
@@ -1452,12 +1633,23 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
             "session": meta(b, "enact_session"),
             "vizier": meta(b, "enact_vizier"),
             "updated_at": b.get("updated_at"),
+            "routing": {key: meta(b, "enact_spawn_" + key)
+                        for key in ("host", "provider", "app", "project")},
+            "routing_known": routed_here(b),
+            "reservation": meta(b, "enact_reservation"),
+            "worktree": meta(b, "enact_worktree"),
+            "worktree_host": meta(b, "enact_worktree_host"),
+            "branch": meta(b, "enact_branch"),
+            "recovery": recovery_records(b),
         }
         for b in ours
-        if b.get("status") != "closed"
+        if b.get("status") != "closed" and b.get("assignee")
     ]
     unarchived = [
-        {"bead": b["id"], "session": meta(b, "enact_session")}
+        {"bead": b["id"], "session": meta(b, "enact_session"),
+         "routing": {key: meta(b, "enact_spawn_" + key)
+                     for key in ("host", "provider", "app", "project")},
+         "routing_known": routed_here(b)}
         for b in ours
         if b.get("status") == "closed"
         and meta(b, "enact_session")
@@ -1486,19 +1678,71 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def routed_here(bead: dict[str, Any]) -> bool:
+    # Missing routing is uncertainty, never evidence a chat is absent.
+    return (meta(bead, "enact_spawn_host") == host_name() and
+            meta(bead, "enact_spawn_provider") == provider() and
+            meta(bead, "enact_spawn_app") == os.environ.get("ENACT_APP", provider()) and
+            bool(meta(bead, "enact_spawn_project")))
+
+
+@serialized
 def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
-    """Return an abandoned bead to the queue (its session is gone)."""
+    """Relinquish work, or hand off an explicitly confirmed inactive owner."""
     repo = find_repo()
     beads = Beads(repo)
+    actor = require_actor(args.actor)
+    sync(repo)
+    bead = beads.show(args.bead)
+    owner = bead.get("assignee")
+    if not owner or bead.get("status") == "closed":
+        raise Fail("no active assignment to release", code=3)
+    own_reservation = (owner.startswith("vizier:") and
+                       meta(bead, "enact_vizier") == actor and
+                       not meta(bead, "enact_session"))
+    if owner != actor and not own_reservation:
+        target = meta(bead, "enact_session") or meta(bead, "enact_vizier")
+        if (not routed_here(bead) or args.expected_owner != owner or
+                not target or args.expected_session != target or
+                not args.inactive or not args.evidence):
+            raise Fail("release requires the current owner, routed inactive session "
+                       "and successful lookup evidence; unknown is not inactive", code=3)
+    path = meta(bead, "enact_worktree")
+    branch = meta(bead, "enact_branch")
+    work_host = meta(bead, "enact_worktree_host")
+    # Legacy sessions did not record a worktree pointer. Discover only a
+    # local, correctly registered tree; never guess a remote filesystem path.
+    legacy = repo.worktree_root() / args.bead
+    if not path and meta(bead, "enact_spawn_host") == host_name() and legacy.exists():
+        path, branch, work_host = str(legacy), f"enact/{args.bead}", host_name()
+        verified_worktree(repo, legacy, branch)
+    record = {"owner": owner, "session": meta(bead, "enact_session"),
+              "vizier": meta(bead, "enact_vizier"),
+              "provider": meta(bead, "enact_spawn_provider"),
+              "app": meta(bead, "enact_spawn_app"),
+              "project": meta(bead, "enact_spawn_project"),
+              "spawn_host": meta(bead, "enact_spawn_host"),
+              "host": work_host, "path": path, "branch": branch,
+              "inactive": args.inactive or "relinquished",
+              "evidence": args.evidence or "current owner explicitly released",
+              "released": now(), "reason": args.reason}
+    if path and work_host == host_name() and Path(path).exists():
+        verified_worktree(repo, Path(path), branch)
+        record["head"] = repo.git("rev-parse", "HEAD", cwd=Path(path))
+    records = recovery_records(bead) + [record]
     beads.run(
         "update", args.bead, "--assignee", "", "--status", "open",
+        "--set-metadata", "enact_recovery=" + json.dumps(records),
         "--unset-metadata", "enact_vizier", "--unset-metadata", "enact_session",
         "--unset-metadata", "enact_actor", "--unset-metadata", "enact_archived",
-        actor=args.actor or session_actor(),
-    )
-    beads.run("comments", "add", args.bead, f"Released by Enact: {args.reason}",
-              actor=args.actor or session_actor())
-    return {"released": args.bead, "sync": sync(repo)}
+        "--unset-metadata", "enact_reservation", actor=actor)
+    result = sync(repo)
+    saved = beads.show(args.bead)
+    if saved.get("assignee") or recovery_records(saved) != records:
+        raise Fail("release lost during sync; recheck ownership", code=3)
+    beads.run("comments", "add", args.bead, f"Released by Enact: {args.reason}", actor=actor)
+    sync(repo)
+    return {"released": args.bead, "recovery": record, "sync": result}
 
 
 def cmd_lock(args: argparse.Namespace) -> dict[str, Any]:
@@ -1695,6 +1939,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("start", cmd_start, "Take over a bead reserved for this session by the vizier.")
     p.add_argument("bead")
     p.add_argument("--actor")
+    p.add_argument("--reservation", help="token from the spawn prompt")
 
     p = add("close", cmd_close, "Close a bead, auto-close finished epics, sync.")
     p.add_argument("bead")
@@ -1705,6 +1950,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("bead")
     p.add_argument("pairs", nargs="+")
     p.add_argument("--actor")
+    p.add_argument("--expected-session", help="Marshal archive target")
 
     p = add("next", cmd_next, "Vizier step: reserve the next bead to spawn, or wait.")
     p.add_argument("--epic", required=True)
@@ -1740,6 +1986,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("bead")
     p.add_argument("--reason", required=True)
     p.add_argument("--actor")
+    p.add_argument("--expected-owner", help="exact observed assignee")
+    p.add_argument("--expected-session", help="exact observed child, or vizier if unspawned")
+    p.add_argument("--inactive", choices=["stopped", "archived", "missing"])
+    p.add_argument("--evidence", help="successful provider lookup proving inactivity")
 
     p = add("lock", cmd_lock, "Acquire or release a machine-local named lock.")
     p.add_argument("action", choices=["acquire", "release"])

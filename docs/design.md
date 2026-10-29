@@ -373,3 +373,46 @@ Findings and adjustments made while implementing (2026-10-28):
   the keeper finishes cleanup and records its outcome. Local execution
   evidence is macOS; Windows and Linux use portable stdlib paths but have
   not been executed in this change.
+
+## Ownership and abandoned work (2026-10-29)
+
+- Reservations identify host, provider and vizier session, with a fresh token
+  carried in the spawn prompt. The token authorizes the first handoff; an
+  already recorded child identity must also match. Existing sessions remain
+  usable: a legacy reservation without a token requires its recorded child
+  ID; a worker that
+  already owns the bead can resume. Same-host operations serialize their
+  check/write/sync sequence with the existing portable OS lock. Remote Beads
+  conflicts retain remote-wins semantics and published ownership is checked.
+- Close, metadata changes, release, worktree operations and push check current
+  ownership after sync. Push infers a bead from its tree even when `--bead`
+  is omitted, and checks again immediately before publishing. Ownership is a
+  cooperative helper protocol: raw git/Beads writes and unmodified older
+  helpers cannot be fenced. Upgrade resumed workers before they act. Recovery
+  must first establish inactivity; it is not permission to preempt a live
+  command between its final check and remote git publication.
+- Actual creator routing uses `enact_spawn_host/provider/app/project`, apart
+  from targeting `enact_host/provider`. App defaults to the provider and
+  project to the main checkout; the vizier records an actual app/project ID
+  when the desktop supplies one. Status surfaces routing uncertainty for old
+  records. Missing provider/app/project, unsupported tools, transient failures
+  and failed lookups never establish inactivity. A live vizier can backfill
+  its known app/project route through `meta` before a Marshal handoff. The
+  Marshal supplies the exact observed owner and child (or vizier for an
+  unspawned reservation), a confirmed
+  inactive state and successful lookup evidence when releasing another owner.
+- Release retains worktree pointers and appends `enact_recovery` records with
+  old ownership, route, host, path, branch, local head and inactivity evidence.
+  The current worker may explicitly relinquish its own assignment. A new
+  local owner reuses the verified abandoned git worktree without resetting,
+  cleaning or rebasing it; all commits, tracked edits and untracked files
+  survive. Inspect against staging before continuing. A remote replacement
+  starts from staging and retains the original recovery record, including its
+  original host; it cannot transfer unpublished files across machines.
+- Worktree creation records its host/path/branch and can be retried. A
+  never-assigned bead is claimed for direct CLI work; released beads must be
+  reassigned first. Explicit removal refuses dirty or unpublished work,
+  including branch commits whose checkout directory has disappeared, and
+  successful delivery retains a tree with untracked artifacts. Durable
+  delivery receipt replay may append factual already-pushed commits after
+  reassignment; it does not authorize new publication by an old worker.

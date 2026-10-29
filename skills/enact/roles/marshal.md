@@ -16,45 +16,57 @@ after errors.
 
 - `git -C <enact repo> pull --ff-only` to pick up framework changes.
 - `enact status`: prints the `working` beads spawned on this host by this
-  host app (with `session`, `assignee`, `updated_at`; a Codex vizier's beads
-  are its own Marshal's job), closed but `unarchived` sessions, the slow-CI
-  runner (`ci`), `staging` tip, the Justiciar lock and open Steward beads.
+  host app (with `session`, `assignee`, `updated_at`, actual `routing`,
+  `routing_known`, worktree pointers and recovery history), closed but
+  `unarchived` sessions, the slow-CI runner (`ci`), `staging` tip, the
+  Justiciar lock and open Steward beads.
   `pending_deliveries` identifies epics still awaiting green master or required
   Stewards, even if those epics are closed. Keep their viziers in recovery
   through the host app that owns them.
-- In Claude Desktop, load the session tools (`list_sessions`, `get_session`,
-  `send_message`, `archive_session`) with ToolSearch.
+- Route by actual `routing.host/provider/app/project`, never by targeting
+  `enact_host` or `enact_provider`. In Claude Desktop load `list_sessions`,
+  `get_session`, `send_message`, `archive_session` with ToolSearch. In Codex
+  use `list_threads`, `read_thread`, `wait_threads`, `send_message_to_thread`
+  and `set_thread_archived` with the owning host. Missing routing, unsupported
+  tools, timeouts and lookup errors are unknown, never proof of inactivity.
 
 ## 3. Act
 
 For each **working** bead:
 
-- **Reserved but no session** (assignee `vizier:<host>`, no `session`): the
-  vizier crashed between reserving and spawning. If it has been more than
-  30 minutes since `updated_at`, `enact release <bead> --reason "reserved, no
-  session"`.
-- **Session gone** (`get_session` fails, or the session is archived): the
-  work was abandoned. `enact release <bead> --reason "session <id> gone"`.
-  Another session restarts it from a fresh worktree.
+- **Reserved but no session** (`vizier:...` assignee): inspect its recorded
+  vizier. Age alone is insufficient. After 30 minutes, release only if a
+  successful lookup confirms that vizier is inactive and no child was bound.
+- **Confirmed inactive**: archived, explicitly stopped, or an authoritative
+  successful lookup confirming absence (not a failed lookup). Re-read the
+  bead and use `enact release <bead> --expected-owner <assignee>
+  --expected-session <session> --inactive <stopped|archived|missing>
+  --evidence "<lookup and result>" --reason "<why>"`. For an unspawned
+  reservation, pass its vizier as expected session. Exit 3 means stale state
+  or unknown routing; inspect again instead of forcing release. The helper
+  preserves the old route and unfinished work; a replacement can reuse a
+  confirmed abandoned local worktree or start fresh on another machine.
 - **Session idle** (not running, its last turn ended, the bead is still open,
   and nothing has changed for more than 20 minutes): it likely stopped on a
   usage limit, a capacity error or an early turn end. Send it:
   "Marshal: your Enact bead <bead> is still open. Resume work now (check
   `bd show <bead>` and your worktree); if you are truly finished, close it
   with `enact close`." If you already nudged the same session in the
-  previous two sweeps with no progress, release the bead instead.
+  previous two sweeps with no progress, confirm it is still inactive, then
+  release with the exact observed owner, session and lookup evidence above.
 - **Running**: leave it alone.
 
 Then:
 
 - **Unarchived** closed sessions: archive them, then
-  `enact meta <bead> enact_archived=true`.
+  `enact meta <bead> enact_archived=true --expected-session <session>`.
 - **Slow CI**: if `ci.running` is false and the staging tip differs from
   `ci.last_tested`, run `enact ci --detach`.
 - **Justiciar lock**: if its state is `active` or `spawning` and its holder's
-  session is archived or gone, or the lock is older than 2 hours with no
-  sign of activity, `enact justiciar break`. If it is `requested` for more
-  than an hour, the vizier is not picking it up; treat that like a dead
+  session is confirmed archived or absent by a successful routed lookup,
+  `enact justiciar break`. Age or lookup errors alone do not prove absence.
+  If it is `requested` for more than an hour, the vizier is not picking it
+  up; treat that like a dead
   vizier, below.
 - **Vizier**: find this project's vizier sessions (titles starting with
   🔮) with `list_sessions`. If a vizier for an open epic or pending delivery

@@ -14,8 +14,10 @@ those changes.
 
 Implementers leave issues they found for you as comments on your own bead.
 Treat each as a lead to confirm. Also check open beads in the run
-(`bd list --parent <epic> --json`): if your fixes fully cover one, close it
-with `enact close <id> --reason "obsolete: fixed by <your bead>"`.
+(`bd list --parent <epic> --json`): if your fixes fully cover an unassigned
+one, `enact claim <id>` first, then close it with
+`enact close <id> --reason "obsolete: fixed by <your bead>"`. Never take over
+another worker's assignment; leave the evidence on that bead instead.
 
 ## Review
 

@@ -12,9 +12,11 @@ checks); 3 means you lost a race.
 
 ## Start
 
-1. Run `enact start <bead>` from the project's main checkout. It moves the
-   bead from the vizier's reservation to your session ID and prints the bead.
-   Exit 3 means it belongs to someone else: report that and end your turn.
+1. Run the `enact start <bead> --reservation <token>` command in your spawn
+   prompt from the project's main checkout. It binds that reservation to your
+   session ID. Older prompts without a token use `enact start <bead>` only
+   after the vizier records your exact session ID. Exit 3 means ownership
+   changed: stop, report it and end your turn; never overwrite the new owner.
 2. Title your session `<emoji> [<bead>] <short imperative summary>` with
    `set_session_title` on `self` (Claude Desktop) or `set_thread_title`
    (Codex). The emoji is in your prompt.
@@ -28,8 +30,13 @@ checks); 3 means you lost a race.
 ## Work
 
 - Create your worktree with `enact worktree create <bead>` and work only in
-  the printed `path`. It is cut from the newest `origin/staging`. Never edit
-  the main checkout, and never touch another session's worktree.
+  the printed `path`. New trees start at `origin/staging`. `recovered: true`
+  means the prior owner explicitly released, or a routed lookup confirmed it
+  inactive. Inspect that tree's commits and edits against current staging;
+  preserve useful work and finish it. This is the authorized local handoff.
+  Remote replacements start at the latest pushed state; `enact_recovery`
+  retains the original host, path, branch, head and chat route. Never delete
+  that original work or edit an unassigned tree. Never edit the main checkout.
 - Follow `AGENTS.md` for conventions, commit style and test commands.
 - `enact push --bead <bead>` (run inside the worktree) rebases onto
   `origin/staging`, merges a diverged `master`, runs the fast checks, pushes,
@@ -48,8 +55,11 @@ checks); 3 means you lost a race.
 
 ## Beads
 
-- Use raw `bd ... --json` for reads and writes, then run `enact sync` to
-  publish them to the Dolt remote. `enact claim` and `enact close` sync
+- Use `enact` for ownership, start, close, release and assignment metadata;
+  it fences stale sessions. Do not bypass a rejected operation with raw `bd`
+  or git push. Use raw `bd ... --json` for other reads and writes, then
+  run `enact sync` to publish them to the Dolt remote. `enact claim` and
+  `enact close` sync
   themselves. If `sync` reports dropped local values, another machine changed
   the same bead first; reapply your change only if it still makes sense.
 - Record decisions, surprises and deviations as comments on your bead
@@ -106,8 +116,8 @@ everything before you close your own bead, then run `enact sync`.
   Then keep doing whatever useful work remains, or wait: the vizier spawns the
   Justiciar and it may message you. "Tests are broken" is never an emergency.
 - **Resumed after an interruption** (usage limit, crash, a Marshal nudge):
-  check `bd show <bead>` and `git status` in your worktree, then continue
-  where you left off.
+  check `bd show <bead>` and `git status` in your worktree. Continue only if
+  you still own the bead; otherwise leave all files intact and end the turn.
 - Never wait for a human, never end your turn mid-task to ask a question, and
   never leave your bead in progress when you stop for good. If you truly
   cannot continue, comment the exact state on the bead and run
