@@ -15,8 +15,9 @@ after errors.
 ## 2. Gather state
 
 - `git -C <enact repo> pull --ff-only` to pick up framework changes.
-- `enact status`: prints this host's `working` beads (with `session`,
-  `assignee`, `updated_at`), closed but `unarchived` sessions, the slow-CI
+- `enact status`: prints the `working` beads spawned on this host by this
+  host app (with `session`, `assignee`, `updated_at`; a Codex vizier's beads
+  are its own Marshal's job), closed but `unarchived` sessions, the slow-CI
   runner (`ci`), the Justiciar lock and open Steward beads.
 - In Claude Desktop, load the session tools (`list_sessions`, `get_session`,
   `send_message`, `archive_session`) with ToolSearch.

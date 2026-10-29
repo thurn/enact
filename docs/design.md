@@ -147,6 +147,11 @@ in [the desktop support audit](audit-2026-10-29.md).
 - The vizier deletes the Marshal task when its run finishes, unless
   `enact status` still shows working beads on this machine (another epic in
   flight), in which case that run's vizier deletes it later.
+- Reservations record `enact_spawn_provider`, and `enact status` lists only
+  beads spawned by the caller's host app: a Claude Marshal cannot see Codex
+  threads (it would release their beads as "session gone"), and a Codex run
+  must not keep the Claude Marshal alive. Beads reserved before the field
+  existed count for every app.
 
 ## Sage
 

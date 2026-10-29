@@ -69,6 +69,15 @@ class GraphTest(unittest.TestCase):
             follow_up = {"id": "t2", "status": status, "labels": ["role:mason"]}
             self.assertTrue(enact.archivist_waits([archivist, done, follow_up]), status)
 
+    def test_spawned_here_matches_host_and_host_app(self):
+        def bead(**metadata):
+            return {"id": "x-3", "metadata": {"enact_spawn_host": "box", **metadata}}
+
+        self.assertTrue(enact.spawned_here(bead(), "box", "claude"))
+        self.assertTrue(enact.spawned_here(bead(enact_spawn_provider="claude"), "box", "claude"))
+        self.assertFalse(enact.spawned_here(bead(enact_spawn_provider="codex"), "box", "claude"))
+        self.assertFalse(enact.spawned_here(bead(), "other", "claude"))
+
     def test_labeled_beads_spawn_with_their_role(self):
         repo = types.SimpleNamespace(config=enact.Config.parse(""))
         for role in enact.SPAWNED_ROLES:

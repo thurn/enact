@@ -253,9 +253,11 @@ as there is something to do, or after nine minutes. Handle the JSON:
    Archive anything still listed. Then delete the Marshal task
    `enact-marshal-<project-dir-name>` (Codex: its automation), unless
    another run still needs it: skip the deletion if `enact status` lists any
-   `working` beads (another epic in flight on this machine). Finally write a
-   short final report (outcome, bead count, whether the Marshal was deleted,
-   anything for the user to look at) and end the turn. Stay unarchived.
+   `working` beads (another epic in flight on this machine in this host app;
+   `status` already leaves out beads another app's viziers spawned, since
+   their Marshal is a separate task). Finally write a short final report
+   (outcome, bead count, whether the Marshal was deleted, anything for the
+   user to look at) and end the turn. Stay unarchived.
 
 Rules for the loop:
 

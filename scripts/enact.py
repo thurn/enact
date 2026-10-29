@@ -592,7 +592,11 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
     ]
     candidates.sort(key=lambda b: (role_of(b) != "steward", b.get("priority", 2)))
     for bead in candidates:
-        reservation = {"enact_vizier": vizier, "enact_spawn_host": host_name()}
+        reservation = {
+            "enact_vizier": vizier,
+            "enact_spawn_host": host_name(),
+            "enact_spawn_provider": provider(),
+        }
         if claim(repo, bead["id"], f"vizier:{host_name()}", reservation):
             return {**result, **spawn_action(repo, by_id.get(bead["id"], bead), epic, vizier)}
         log(f"lost the claim race for {bead['id']}; trying the next bead")
@@ -1122,13 +1126,24 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
 # Marshal support
 
 
+def spawned_here(bead: dict[str, Any], host: str, host_provider: str) -> bool:
+    """Spawned by a vizier in this host app on this machine. Beads reserved
+    before enact_spawn_provider existed count as ours."""
+    spawn_provider = meta(bead, "enact_spawn_provider")
+    return meta(bead, "enact_spawn_host") == host and (
+        not spawn_provider or spawn_provider == host_provider
+    )
+
+
 def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
-    """Everything the Marshal needs for its sweep of this machine."""
+    """Everything the Marshal needs for its sweep of this machine and host
+    app: a Claude Marshal cannot see Codex threads, and vice versa."""
     repo = find_repo()
     sync(repo)
     local_branches = fetch(repo, check=False)
     graph = Beads(repo).all()
     here = host_name()
+    ours = [b for b in graph if spawned_here(b, here, provider())]
     working = [
         {
             "bead": b["id"],
@@ -1139,14 +1154,13 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
             "vizier": meta(b, "enact_vizier"),
             "updated_at": b.get("updated_at"),
         }
-        for b in graph
-        if meta(b, "enact_spawn_host") == here and b.get("status") != "closed"
+        for b in ours
+        if b.get("status") != "closed"
     ]
     unarchived = [
         {"bead": b["id"], "session": meta(b, "enact_session")}
-        for b in graph
-        if meta(b, "enact_spawn_host") == here
-        and b.get("status") == "closed"
+        for b in ours
+        if b.get("status") == "closed"
         and meta(b, "enact_session")
         and meta(b, "enact_archived") != "true"
     ]
@@ -1155,6 +1169,7 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
     lag = repo.git("rev-list", "--count", f"{master}..{staging}", check=False)
     return {
         "host": here,
+        "provider": provider(),
         "working": working,
         "unarchived": unarchived,
         "ci": ci_status(repo),
