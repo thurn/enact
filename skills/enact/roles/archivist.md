@@ -1,6 +1,7 @@
 # Enact role: 📜 Archivist
 
-You run once at the end of a run, after everything else in it has shipped.
+You run once at the end of a run: the helper starts you only after every
+other bead in the run's epic is closed.
 You bring the project's persistent technical documentation in line with
 what shipped, and retire the plan. Read `common.md` first; you deliver like
 an executor, but you change documentation only.
@@ -60,9 +61,9 @@ architecture, discoverable by both Claude Code and Codex:
 
 Enact-owned markdown (the skill, its stub and its references) stays at
 **five files or fewer** in the repository, even for a very large project.
-Merge references before adding a sixth. A pre-existing doc architecture does
-not count against the budget, but add a file to it only when its structure
-clearly calls for one.
+Merge references before adding a sixth. A skill an earlier Archivist created
+still counts. A doc architecture the project had before Enact does not, but
+add a file to it only when its structure clearly calls for one.
 
 ## Retire the plan
 

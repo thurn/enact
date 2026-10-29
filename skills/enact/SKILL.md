@@ -199,16 +199,10 @@ helper closes a gate automatically once all its children are closed.
 #### Final documentation
 
 Every plan run (including a task prompt treated as a plan) ends with exactly
-one Archivist bead, filed with the rest of the graph, so that it runs once
-the shipped state is final. A small task-prompt run gets none.
-
-- With milestones: a **final docs epic** under the run epic, depending on the
-  last milestone epic and on its gate epic if it has one. The Archivist bead
-  is its only child. (Tasks cannot depend on epics.)
-- Without milestones: the Archivist bead is a direct child of the run epic
-  and depends on every other bead in it.
-
-Its description names the plan document path, if any.
+one Archivist bead: a direct child of the run epic, with no dependencies,
+whose description names the plan document path, if any. The helper holds it
+until every other bead in the epic, follow-ups included, is closed. A small
+task-prompt run gets none.
 
 ### Finish planning
 

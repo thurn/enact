@@ -568,12 +568,21 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
         return {**result, "action": "wait", "reason": "capacity"}
 
     scope = {b["id"] for b in descendants(graph, epic)}
+    # The Archivist documents the shipped state, so it starts only once it is
+    # the last open work in the epic, including follow-ups filed mid-run.
+    archivist_waits = any(
+        by_id[i].get("status") != "closed"
+        and by_id[i].get("issue_type") != "epic"
+        and role_of(by_id[i]) != "archivist"
+        for i in scope
+    )
     ready = beads.json("ready", "-n", "0", "--exclude-type", "epic", "--unassigned") or []
     candidates = [
         b
         for b in ready
         if (b["id"] in scope or (role_of(b) == "steward" and not b.get("parent")))
         and targeted_here(b)
+        and not (archivist_waits and role_of(b) == "archivist")
     ]
     candidates.sort(key=lambda b: (role_of(b) != "steward", b.get("priority", 2)))
     for bead in candidates:

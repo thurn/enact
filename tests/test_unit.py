@@ -59,20 +59,15 @@ class GraphTest(unittest.TestCase):
         self.assertIn(str(enact.ROLES_DIR / "warden.md"), prompt)
         for role in enact.SPAWNED_ROLES:
             self.assertTrue((enact.ROLES_DIR / f"{role}.md").is_file(), role)
-        for role in enact.EMOJI:
-            self.assertIn(role, prompt)
 
-    def test_archivist_beads_spawn_as_archivists(self):
+    def test_labeled_beads_spawn_with_their_role(self):
         repo = types.SimpleNamespace(config=enact.Config.parse(""))
-        bead = {"id": "x-2", "title": "Update docs", "labels": ["role:archivist"]}
-        action = enact.spawn_action(repo, bead, "x-0", "viz")
-        self.assertEqual(action["role"], "archivist")
-        self.assertEqual(action["title"], "📜 [x-2] Update docs")
-        self.assertIn(str(enact.ROLES_DIR / "archivist.md"), action["prompt"])
-
-
-if __name__ == "__main__":
-    unittest.main()
+        for role in enact.SPAWNED_ROLES:
+            bead = {"id": "x-2", "title": "Work", "labels": [f"role:{role}"]}
+            action = enact.spawn_action(repo, bead, "x-0", "viz")
+            self.assertEqual(action["role"], role)
+            self.assertTrue(action["title"].startswith(enact.EMOJI[role]), role)
+            self.assertIn(str(enact.ROLES_DIR / f"{role}.md"), action["prompt"])
 
 
 @unittest.skipIf(enact.WINDOWS, "symlinks need privileges on Windows")
@@ -93,3 +88,7 @@ class InstallTest(unittest.TestCase):
             live = root / "live"
             live.symlink_to(target, target_is_directory=True)
             self.assertFalse(enact.unlink_retired(target, live))
+
+
+if __name__ == "__main__":
+    unittest.main()

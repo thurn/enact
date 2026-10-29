@@ -161,9 +161,9 @@ in [the desktop support audit](audit-2026-10-29.md).
   It deletes the plan document if the repository tracks it, fixes links that
   would dangle, and edits the persistent docs to describe the shipped state
   only, minimally (YAGNI), within the project's existing doc architecture.
-- Tasks cannot depend on epics in Beads, so with milestones the bead sits in
-  a final docs epic that depends on the last milestone (and its gate);
-  without milestones it depends on every other bead in the run epic.
+- `enact next` holds a `role:archivist` bead until it is the last open
+  non-epic bead in the run epic. Planned dependency edges could not cover
+  follow-ups filed mid-run, and tasks cannot depend on epics in Beads.
 - Default architecture when a project has none: one project skill. Claude
   Code reads project skills only from `.claude/skills/`, Codex only from
   `.agents/skills/` (cwd up to the repository root). The content lives in

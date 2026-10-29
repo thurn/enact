@@ -318,6 +318,21 @@ class EnactTest(unittest.TestCase):
         step = self.a.enact("next", "--epic", epic, "--parallel", "3")
         self.assertEqual(step["action"], "wait")
 
+    def test_archivist_waits_until_it_is_the_last_open_work(self):
+        epic = self.a.create("epic", type="epic")
+        work = self.a.create("work", parent=epic, priority=3)
+        archivist = self.a.create("docs", parent=epic, priority=0, labels="role:archivist")
+        self.assertEqual(self.a.enact("next", "--epic", epic, "--parallel", "3")["bead"], work)
+        follow_up = self.a.create("follow-up", parent=epic, priority=3)
+        self.a.enact("start", work, session="exec-1")
+        self.a.enact("close", work, "--reason", "done", session="exec-1")
+        step = self.a.enact("next", "--epic", epic, "--parallel", "3")
+        self.assertEqual(step["bead"], follow_up)
+        self.a.enact("start", follow_up, session="exec-2")
+        self.a.enact("close", follow_up, "--reason", "done", session="exec-2")
+        step = self.a.enact("next", "--epic", epic, "--parallel", "3")
+        self.assertEqual((step["bead"], step["role"]), (archivist, "archivist"))
+
     def test_vizier_reports_deadlock(self):
         epic = self.a.create("epic", type="epic")
         outside = self.a.create("not in the epic")
