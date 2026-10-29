@@ -19,8 +19,8 @@ below.
    Enact uses to resolve Beads merge conflicts. Report anything missing with
    install instructions and stop.
 2. `git -C "$ENACT" pull --ff-only`.
-3. `enact install` links the `enact` and `enact-setup` skills into the
-   user-level skill directories that exist (`~/.claude/skills`,
+3. `enact install` links the `enact`, `enact-intake` and `enact-setup`
+   skills into the user-level skill directories that exist (`~/.claude/skills`,
    `~/.codex/skills`, `~/.agents/skills`), using symlinks or, on Windows,
    directory junctions. It refuses to overwrite unrelated entries: if it
    reports a conflict, show it to the user and ask before removing anything.
@@ -66,6 +66,7 @@ Run from the project's main checkout.
 - `bd list --json` works.
 - `git ls-remote origin staging refs/dolt/data` shows both refs.
 
-Report what you set up, and remind the user that `/enact <plan>` starts a
-run. Claude Desktop runs need bypass or auto permission mode so unattended
-sessions never stop at a prompt.
+Report what you set up, and remind the user that a run starts with
+`/enact-intake <plan>`, which files an epic, then `/enact <epic>`. Claude
+Desktop runs need bypass or auto permission mode so unattended sessions never
+stop at a prompt.

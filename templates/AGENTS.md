@@ -1,8 +1,8 @@
 ## Enact
 
-- This project can run large plans unattended with Enact (`/enact <plan>`);
-  most work does not go through it. Fast and slow check commands are in
-  `.enact.toml`.
+- This project can run large plans unattended with Enact
+  (`/enact-intake <plan>`, then `/enact <epic>`); most work does not go
+  through it. Fast and slow check commands are in `.enact.toml`.
 - Never push straight to `master`. Deliver with
   `python3 ~/enact/scripts/enact.py push`, which rebases onto
   `origin/staging`, runs the fast checks, pushes to `staging` and starts slow

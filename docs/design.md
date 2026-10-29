@@ -38,11 +38,14 @@ of truth for role definitions; this file records the decisions made on top.
 
 ## Vizier
 
-- `/enact <plan|task|epic>`. Existing epic with children = join the run, skip
-  planning.
-- Pre-flight: audit stoppage risks and resolve each with the user up front;
-  refuse to start if any remain. Require a non-prompting permission mode.
-  `git pull --ff-only` in ~/enact. Create the Marshal routine if missing.
+- Split into two user-invoked skills: `/enact-intake <plan>` (the stoppage
+  audit with the user, decomposition, bead filing; prints the `/enact` line)
+  and `/enact <epic> [parallelism]` (runtime checks, then the loop; never asks
+  the user anything). Several viziers may run `/enact` on one epic.
+- Intake: audit stoppage risks and resolve each with the user up front;
+  refuse to file if any remain. `/enact` runtime checks (per machine, no
+  questions): `git pull --ff-only` in ~/enact, project set up, non-prompting
+  permission mode, create the Marshal routine if missing.
 - Decomposition: full graph up front or rolling milestones, at the vizier's
   discretion; "decompose milestone N" beads go to the executor role. Agents
   re-validate stale beads against current code.

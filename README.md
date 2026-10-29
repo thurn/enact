@@ -2,19 +2,21 @@
 
 Enact is a minimal agent orchestration framework for **large, unattended
 project execution** from a desktop agent app (Claude Desktop, Codex
-Desktop). You hand `/enact` a plan, and it decomposes the plan into a
-[Beads](https://github.com/gastownhall/beads) graph and runs every bead in a
-fresh top-level session for days, across machines and model providers,
-synchronized through one GitHub remote.
+Desktop). `/enact-intake` audits a plan with you and files it as a
+[Beads](https://github.com/gastownhall/beads) graph; `/enact` then runs every
+bead in a fresh top-level session for days, across machines and model
+providers, synchronized through one GitHub remote.
 
 Enact has no state of its own beyond the bead graph, no server and no CI
-dependency: one skill, eight short role prompts and a stdlib Python helper.
+dependency: three skills, eight short role prompts and a stdlib Python
+helper.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `skills/enact/SKILL.md` | The vizier (orchestrator) skill: `/enact <plan>` |
+| `skills/enact-intake/SKILL.md` | Plan audit and bead filing: `/enact-intake <plan>` |
+| `skills/enact/SKILL.md` | The vizier (orchestrator) skill: `/enact <epic>` |
 | `skills/enact/roles/*.md` | Role prompts for spawned sessions |
 | `skills/enact-setup/SKILL.md` | Machine and project setup: `/enact-setup` |
 | `scripts/enact.py` | Helper: claims, sync, push, slow CI, locks |
@@ -25,7 +27,7 @@ dependency: one skill, eight short role prompts and a stdlib Python helper.
 
 | Role | Emoji | Started by | Job |
 | --- | --- | --- | --- |
-| Vizier | 🔮 | the user (`/enact`) | Plans, then only spawns, archives and waits |
+| Vizier | 🔮 | the user (`/enact <epic>`) | Only spawns, archives and waits |
 | Executor | ⚒️ | bead | Implements a bead and pushes it to staging |
 | Warden | 🛡️ | bead | Fresh review and fixes of pushed work |
 | Steward | 🚒 | slow-CI failure bead | Makes slow CI green again |
@@ -36,11 +38,13 @@ dependency: one skill, eight short role prompts and a stdlib Python helper.
 
 ## How a run works
 
-1. `/enact <plan>`: the vizier audits the plan for anything that would need a
-   human, resolves those points with you, files the graph (an epic,
-   milestones, role-labeled beads, Warden beads and Mason/Sage gate epics) and
-   creates the hourly Marshal task.
-2. The vizier loops on `enact next --wait 540` inside the turn you started.
+1. `/enact-intake <plan>` audits the plan for anything that would need a
+   human, resolves those points with you, and files the graph (an epic,
+   milestones, role-labeled beads, Warden beads and Mason/Sage gate epics).
+   It ends by printing the `/enact <epic>` line to run.
+2. `/enact <epic> [parallelism]` makes the session the vizier. It asks
+   nothing: it checks the permission mode, creates the hourly Marshal task,
+   then loops on `enact next --wait 540` inside the turn you started.
    Claude Desktop only lets a user-started turn start sessions. Each loop
    reserves the highest-priority ready bead, starts a session for it, records
    the session ID and archives sessions whose beads have closed.

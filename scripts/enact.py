@@ -1130,7 +1130,7 @@ def link_dir(target: Path, link: Path) -> str:
 def cmd_install(args: argparse.Namespace) -> dict[str, Any]:
     linked = {}
     for directory in skill_dirs():
-        for skill in ("enact", "enact-setup"):
+        for skill in ("enact", "enact-intake", "enact-setup"):
             link = directory / skill
             linked[str(link)] = link_dir(ENACT_ROOT / "skills" / skill, link)
     return {"skills": linked}
