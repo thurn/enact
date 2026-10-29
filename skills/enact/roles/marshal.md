@@ -41,9 +41,11 @@ For each **working** bead:
   successful lookup confirming absence (not a failed lookup). Re-read the
   bead and use `enact release <bead> --expected-owner <assignee>
   --expected-session <session> --inactive <stopped|archived|missing>
-  --evidence "<lookup and result>" --reason "<why>"`. For an unspawned
-  reservation, pass its vizier as expected session. Exit 3 means stale state
-  or unknown routing; inspect again instead of forcing release. The helper
+  --evidence "<lookup and result>" --reason "<why>"`. For any vizier
+  reservation, include its observed token with `--reservation <token>`.
+  If no child is bound, pass its vizier as expected session.
+  Exit 3 means stale state or unknown routing;
+  inspect again instead of forcing release. The helper
   preserves the old route and unfinished work; a replacement can reuse a
   confirmed abandoned local worktree or start fresh on another machine.
 - **Session idle** (not running, its last turn ended, the bead is still open,

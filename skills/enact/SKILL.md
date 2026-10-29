@@ -249,13 +249,16 @@ as there is something to do, or after nine minutes. Handle the JSON:
      pass `permission_mode`, so the session inherits yours.
    - Codex: `create_thread` with the same prompt, then title it.
 
-   Then record the session: `enact meta <bead> enact_session=<session id>`.
-   Keep the reservation token in the spawn prompt. Record actual app and
+   Then record the session: `enact meta <bead> enact_session=<session id>
+   --reservation <token>`, using that spawn action's token for all routing
+   changes. Keep the token in the spawn prompt. Record actual app and
    project routing with `enact_spawn_app` and `enact_spawn_project` if the
    returned route differs from the helper's defaults; targeting fields
    `enact_host` and `enact_provider` do not describe an existing chat.
    If spawning is definitively rejected before creating a child, release
-   your unbound reservation: `enact release <bead> --reason "<error>"`.
+   your unbound reservation: `enact release <bead> --reservation <token>
+   --reason "<error>"`. A stale token must never be replaced with a newer
+   token to retry a delayed spawn result or failure.
    For a timeout or uncertain result, inspect the owning app first. Never
    release merely because the lookup failed; use the Marshal handoff rules
    once a child's inactivity is confirmed.

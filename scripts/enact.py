@@ -538,6 +538,10 @@ def cmd_meta(args: argparse.Namespace) -> dict[str, Any]:
     # child can be recorded idempotently, never replaced by a late spawn.
     routing = {"enact_session", "enact_spawn_app", "enact_spawn_project"}
     if set(pairs) <= routing and meta(bead, "enact_vizier") == actor:
+        token = meta(bead, "enact_reservation")
+        if token and args.reservation != token:
+            raise Fail("reservation token missing or changed; check the original spawn action",
+                       code=3)
         assigned = meta(bead, "enact_session")
         if assigned and pairs.get("enact_session", assigned) != assigned:
             raise Fail("worker already bound; release it before replacing", code=3)
@@ -685,7 +689,8 @@ def spawn_action(repo: Repo, bead: dict[str, Any], epic: str, vizier: str) -> di
 LOOP_REMINDER = (
     "Vizier loop: act on this result (archive listed sessions and record "
     "enact_archived=true; start one session per spawn action and record its "
-    "id with `enact meta <bead> enact_session=<id>`), then run `enact next` "
+    "id with `enact meta <bead> enact_session=<id> --reservation <token>` "
+    "using that spawn action's reservation), then run `enact next` "
     "again with the same arguments. Never end your turn before action: done, "
     "including when the epic is closed but delivery or Steward repairs are pending."
 )
@@ -1000,7 +1005,13 @@ def create_worktree(repo: Repo, name: str, branch: str | None, base: str) -> Pat
         if run_shell(repo.config.worktree_create, repo.main, env) != 0:
             raise Fail("worktree create hook failed")
     elif branch:
-        repo.git("worktree", "add", "-q", "-b", branch, str(path), base, cwd=repo.main)
+        if repo.git_ok("rev-parse", "--verify", f"refs/heads/{branch}"):
+            # A missing checkout does not imply that its branch was delivered.
+            # Git still refuses a branch checked out in a live or locked tree.
+            repo.git("worktree", "prune", cwd=repo.main)
+            repo.git("worktree", "add", "-q", str(path), branch, cwd=repo.main)
+        else:
+            repo.git("worktree", "add", "-q", "-b", branch, str(path), base, cwd=repo.main)
     else:
         repo.git("worktree", "add", "-q", "--detach", str(path), base, cwd=repo.main)
     return path
@@ -1075,6 +1086,10 @@ def cmd_worktree(args: argparse.Namespace) -> dict[str, Any]:
                     verified_worktree(repo, path, branch)
                     reused = True
         if not reused:
+            saved_head = repo.git("rev-parse", "--verify", f"refs/heads/{branch}",
+                                  check=False)
+            if saved_head:
+                base, reused = saved_head, True
             path = create_worktree(repo, args.name, branch, base)
         if bead:
             Beads(repo).set_meta(bead["id"], {
@@ -1700,6 +1715,10 @@ def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
     own_reservation = (owner.startswith("vizier:") and
                        meta(bead, "enact_vizier") == actor and
                        not meta(bead, "enact_session"))
+    if owner.startswith("vizier:"):
+        token = meta(bead, "enact_reservation")
+        if token and args.reservation != token:
+            raise Fail("reservation token missing or changed; recheck before releasing", code=3)
     if owner != actor and not own_reservation:
         target = meta(bead, "enact_session") or meta(bead, "enact_vizier")
         if (not routed_here(bead) or args.expected_owner != owner or
@@ -1951,6 +1970,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("pairs", nargs="+")
     p.add_argument("--actor")
     p.add_argument("--expected-session", help="Marshal archive target")
+    p.add_argument("--reservation", help="token from the spawn action for routing changes")
 
     p = add("next", cmd_next, "Vizier step: reserve the next bead to spawn, or wait.")
     p.add_argument("--epic", required=True)
@@ -1988,6 +2008,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--actor")
     p.add_argument("--expected-owner", help="exact observed assignee")
     p.add_argument("--expected-session", help="exact observed child, or vizier if unspawned")
+    p.add_argument("--reservation", help="token of the reservation being released")
     p.add_argument("--inactive", choices=["stopped", "archived", "missing"])
     p.add_argument("--evidence", help="successful provider lookup proving inactivity")
 

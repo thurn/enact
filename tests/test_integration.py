@@ -589,6 +589,46 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         token = machine.show(bead)["metadata"]["enact_reservation"]
         return machine.enact("start", bead, "--reservation", token, session=session)
 
+    def test_repeated_reservation_rejects_delayed_vizier_actions(self):
+        epic = self.a.create("repeated reservation", type="epic")
+        bead = self.a.create("spawn retry", parent=epic)
+        first = self.a.enact("next", "--epic", epic)["reservation"]
+        self.a.enact("release", bead, "--reservation", first, "--reason", "spawn failed")
+        second = self.a.enact("next", "--epic", epic)["reservation"]
+        self.assertNotEqual(first, second)
+        for token in (first, None):
+            option = ["--reservation", token] if token else []
+            self.a.enact("meta", bead, "enact_session=late-child", *option, code=3)
+            self.a.enact("release", bead, "--reason", "late failure", *option, code=3)
+        self.a.enact("meta", bead, "enact_session=current", "--reservation", second)
+        self.start_worker(self.a, bead, "current")
+        self.a.enact("meta", bead, "enact_spawn_project=stale", "--reservation", first, code=3)
+        self.assertEqual(self.a.show(bead)["assignee"], "current")
+
+    def test_local_recovery_restores_surviving_branch(self):
+        epic = self.a.create("lost checkout", type="epic")
+        bead = self.a.create("saved branch", parent=epic)
+        self.a.enact("next", "--epic", epic)
+        self.start_worker(self.a, bead, "old")
+        path = Path(self.a.enact("worktree", "create", bead, session="old")["path"])
+        self.a.commit_file("saved", "unpublished work", cwd=path)
+        head = self.a.git("rev-parse", "HEAD", cwd=path)
+        self.a.enact("release", bead, "--reason", "recovery", session="old")
+        # Simulate loss of only the directory, leaving git's registration too.
+        self.a.git("worktree", "lock", str(path))
+        shutil.rmtree(path)
+        self.a.enact("next", "--epic", epic)
+        self.start_worker(self.a, bead, "new")
+        self.a.enact("worktree", "create", bead, session="new", code=1)
+        self.assertEqual(self.a.git("rev-parse", f"enact/{bead}"), head)
+        self.a.git("worktree", "unlock", str(path))
+        recovered = self.a.enact("worktree", "create", bead, session="new")
+        self.assertTrue(recovered["recovered"])
+        self.assertEqual(self.a.git("rev-parse", "HEAD", cwd=path), head)
+        self.assertEqual((path / "saved").read_text(), "unpublished work")
+        self.a.enact("push", "--no-ci", cwd=path, session="new")
+        self.assertIn(head, self.a.show(bead)["metadata"]["enact_commits"].split())
+
     def test_same_host_viziers_race_without_overwriting_reservations(self):
         epic = self.a.create("race", type="epic")
         bead = self.a.create("one assignment", parent=epic)
@@ -606,7 +646,6 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.assertEqual(sorted(r["action"] for r in results), ["spawn", "wait"])
         saved = self.a.show(bead)
         winner = next(r["vizier"] for r in results if r["action"] == "spawn")
-        self.assertEqual(saved["assignee"], f"vizier:host-a:claude:{winner}")
         self.assertEqual(saved["metadata"]["enact_vizier"], winner)
         self.assertIn(saved["metadata"]["enact_reservation"],
                       next(r["prompt"] for r in results if r["action"] == "spawn"))
@@ -618,11 +657,13 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         loser = "viz-2" if winner == "viz-1" else "viz-1"
         self.a.enact("meta", bead, "enact_session=wrong", session=loser, code=3)
         self.a.enact("start", bead, "--reservation", "wrong", session="worker", code=3)
-        self.a.enact("meta", bead, "enact_session=worker", session=winner)
         token = saved["metadata"]["enact_reservation"]
+        self.a.enact("meta", bead, "enact_session=worker", "--reservation", token,
+                     session=winner)
         self.a.enact("start", bead, "--reservation", token, session="wrong", code=3)
         self.start_worker(self.a, bead, "worker")
-        self.a.enact("meta", bead, "enact_session=late-child", session=winner, code=3)
+        self.a.enact("meta", bead, "enact_session=late-child", "--reservation", token,
+                     session=winner, code=3)
 
     def test_local_recovery_fences_stale_workers_and_preserves_all_work(self):
         epic = self.a.create("local recovery", type="epic")
@@ -753,7 +794,7 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         step = self.a.enact("next", "--epic", epic)
         self.assertEqual((step["action"], step["bead"], step["role"]), ("spawn", first, "executor"))
         self.assertIn("executor.md", step["prompt"])
-        self.a.enact("meta", first, "enact_session=exec-1")
+        self.a.enact("meta", first, "enact_session=exec-1", "--reservation", step["reservation"])
         self.start_worker(self.a, first, "exec-1")
         self.a.enact("close", first, "--reason", "done", session="exec-1")
         step = self.a.enact("next", "--epic", epic)

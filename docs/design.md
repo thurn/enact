@@ -416,3 +416,13 @@ Findings and adjustments made while implementing (2026-10-28):
   successful delivery retains a tree with untracked artifacts. Durable
   delivery receipt replay may append factual already-pushed commits after
   reassignment; it does not authorize new publication by an old worker.
+- Vizier routing writes and reservation releases require the token from the
+  original spawn action. A vizier may reserve the same bead repeatedly, so
+  its identity alone cannot distinguish a delayed response from the current
+  assignment. Legacy reservations without tokens keep their existing flow.
+  Marshal releases of reservations also supply the observed token.
+- If a checkout disappears but its local branch survives, creation restores
+  that branch without resetting its commits. Git rejects a branch still
+  checked out elsewhere, including a locked worktree. Restoring a missing
+  checkout reports the surviving head as its base; new branches still start
+  at staging.
