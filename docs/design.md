@@ -3,6 +3,47 @@
 Outcome of the design interview (2026-10-28). The original brief is the source
 of truth for role definitions; this file records the decisions made on top.
 
+## Audit decisions (2026-10-29)
+
+These decisions supersede conflicting behavior below. They describe the
+agreed target; the runtime skills and helper still need the changes listed
+in [the desktop support audit](audit-2026-10-29.md).
+
+- Audit against local project chats in the current desktop app, preserving
+  Claude Desktop support. Identify supported tools and execution location
+  explicitly rather than treating product names as capability guarantees.
+- Invoking `/enact` (`$enact` in Codex) authorizes creating, messaging and
+  archiving its role chats, and creating and removing its recurring Marshal
+  task. Carry that authorization into the Marshal and worker prompts.
+- A run finishes only when its delivered commits have passed slow CI and
+  reached `master`, including any required Steward fixes. Workers may still
+  close their beads after pushing. Bead closure alone is not run completion.
+- The Justiciar retains broad emergency authority. Direct changes to
+  `master` are exceptional recovery: explain why repairing staging and
+  running CI cannot resolve the emergency, preserve the old SHA, and record
+  the action. Normal completion still requires green slow CI.
+- A replacement worker recovers an abandoned worktree after confirming the
+  previous chat is no longer running. Preserve committed and uncommitted
+  work, inspect it against current staging, and reuse what remains useful.
+  On another machine, preserve the original work and restart from the latest
+  pushed state.
+- On a capable host, the Marshal automatically resumes an unexpectedly
+  stopped vizier, with bounded retries and notification if recovery fails.
+  Respect intentional stops and pauses. Hosts that cannot resume a vizier
+  retain the manual-resume fallback.
+- "Stop" pauses new work for the whole epic across machines and providers.
+  Record the pause in the shared graph, let current workers finish, and
+  require an explicit resume before any vizier starts more work.
+- Every filed fix belongs to the current run. Larger projects may put fixes
+  at the end, but there is no separate backlog. Raise the filing bar: if a
+  finding is not worth fixing in this run, it is not worth filing.
+- If the Justiciar exhausts recovery and progress truly requires new access
+  or a human decision, mark the run blocked, preserve unfinished requirements
+  and work, stop automatic retries, and notify the user with the exact need.
+- If a configured model or reasoning level is unavailable, use the app's
+  default and record the substitution. An explicitly required model remains
+  a blocker rather than an implicit permission to substitute.
+
 ## Git flow
 
 - `staging` is a branch on origin. Worktrees are cut from `origin/staging`.
