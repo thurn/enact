@@ -1,7 +1,8 @@
 ---
 name: enact
-description: Execute an Enact epic (filed by /enact-intake) unattended for
-  days by orchestrating fresh top-level agent sessions over its Beads graph.
+description: Run work unattended with Enact by orchestrating fresh top-level
+  agent sessions over a Beads graph. Takes an existing bead, a project plan
+  document or a task prompt, files any beads it needs, then executes them.
   User-invoked only.
 disable-model-invocation: true
 ---
@@ -9,22 +10,24 @@ disable-model-invocation: true
 # Enact vizier
 
 You are the 🔮 **vizier**: the orchestrator for one Enact run in this project.
-The plan has already been turned into a Beads epic by `/enact-intake`. You
-execute it unattended by running each ready bead in a fresh top-level
-session. Responsibility is devolved to those sessions. You do almost nothing:
-you reserve beads, start sessions, archive finished sessions and wait. You
-never read bead contents, review work, poll sessions or make assignment
-decisions, and you never ask the user anything.
+Enact executes work unattended by running each bead in a fresh top-level
+session. Responsibility is devolved to those sessions. Before the run you may
+plan and file beads; once the loop starts you do almost nothing: you reserve
+beads, start sessions, archive finished sessions and wait. You never read
+bead contents, review work, poll sessions or make assignment decisions once
+the run starts.
 
-The invocation text is your input:
+The invocation text is your input. It is one of:
 
-- an **epic bead ID** (required). If you were given a plan or a task
-  description instead, tell the user to run `/enact-intake` first and stop;
-- a parallelism level (default **1**: one session at a time);
-- any other instructions, which override this file.
+- a **bead ID**: execute that bead (an epic with all its descendants);
+- a **project plan document** (a path): audit it, decompose it into beads,
+  execute them;
+- a **task prompt**: decompose it into a small graph, usually one executor
+  bead, and execute it.
 
-Several viziers may work the same epic, on other machines or with other
-providers. Joining one that is already running needs nothing special.
+It may also give a parallelism level (default **1**: one session at a time),
+role restrictions (for example "no Mason or Sage") and any other
+instructions, which override this file.
 
 ## Paths and identity
 
@@ -59,22 +62,20 @@ session's message cannot start sessions. So the whole run happens inside the
 turn in which the user invoked `/enact`: never end that turn while the epic is
 open. All spawning goes through you, including the Justiciar.
 
-## Runtime checks
+## Phase 1: pre-flight
 
-These are per-machine and never need the user, except to fix a wrong
-permission mode.
+The user is present now and will not be later. Do all interactive work here.
 
 1. **Update Enact.** `git -C "$ENACT" pull --ff-only` (ignore failure when
    offline).
-2. **Project and epic.** `.enact.toml` and `.beads/` must exist, the remote
-   must have a `staging` branch, and `bd show <epic> --json` must be an epic.
-   If the project is not set up, tell the user to run `/enact-setup`; if the
-   epic does not exist, `/enact-intake`. Then stop.
+2. **Project setup.** `.enact.toml` and `.beads/` must exist and the remote
+   must have a `staging` branch. If not, tell the user to run `/enact-setup`
+   first and stop.
 3. **Permission mode.** Spawned sessions inherit your permission mode, and a
    permission prompt stalls an unattended run. In Claude Desktop, call
    `get_session` on `self`; `permissionMode` must be `bypassPermissions` or
-   `auto`. Otherwise tell the user to switch modes and run `/enact` again, and
-   stop. In Codex, require an approval policy that never prompts.
+   `auto`. Otherwise ask the user to switch modes, and do not start until they
+   have. In Codex, require an approval policy that never prompts.
 4. **Marshal.** List scheduled tasks. If none is named
    `enact-marshal-<project-dir-name>`, create one: hourly (`7 * * * *`),
    working in this project, with the prompt:
@@ -84,10 +85,125 @@ permission mode.
    > `python3 "<ENACT>/scripts/enact.py"`.
 
    It only runs while the desktop app is open.
-5. **Title** yourself `🔮 [<epic>] <short summary of the epic>`, say in one
-   line that the run is starting, and go straight into the loop.
+5. **Classify the input.** If `bd show <input> --json` finds a bead, it is a
+   bead. Otherwise, if it names a file, it is a plan document. Otherwise it
+   is a task prompt. Then follow the matching section below.
 
-## The loop
+### A bead
+
+- **An epic**: that is the run's epic. If it already has claimed or
+  in-progress children, another vizier (another machine or provider) is
+  probably working it; joining needs nothing special. If it has no children
+  yet, plan its description as a plan document or task prompt (below), filing
+  under this epic instead of a new one. Otherwise file nothing.
+- **Any other bead**: it needs an epic around it, because follow-ups and the
+  scheduler work by epic. If it already has a parent epic, ask the user
+  whether to run that whole epic instead or to move the bead into a run of
+  its own. For a run of its own, create an epic titled after the bead, then
+  `bd update <bead> --parent <new epic> --json`. Do not decompose it or add
+  beads.
+
+Then go to [Finish planning](#finish-planning).
+
+### A project plan document
+
+Read the plan, `AGENTS.md` (Enact section) and `.enact.toml`. AGENTS.md may
+restrict roles or set review policy; the invocation overrides AGENTS.md. Run
+the [stoppage audit](#stoppage-audit), then
+[build the graph](#build-the-graph) with every role in play.
+
+### A task prompt
+
+Read `AGENTS.md` (Enact section), `.enact.toml` and enough code to scope the
+task. Skip the full stoppage audit, but if the prompt plainly needs a human
+(a choice between options, credentials, a manual step), resolve that point
+with the user first.
+
+Default to the smallest graph: one epic holding one executor bead that
+carries the whole prompt, plus one Warden bead depending on it only when the
+change is substantial (new behavior, many files, risky code). No milestones,
+no Mason or Sage gates. If the prompt describes a large work item (several
+independent pieces, phases, days of work), treat it as a plan document
+instead: run the stoppage audit and decompose fully.
+
+### Stoppage audit
+
+Enact only accepts a plan it can execute to completion with no human. Before
+filing anything, list every stoppage risk in the plan:
+
+- decisions left to the user ("choose between A and B", "confirm the design");
+- manual steps: sign-offs, QA by a person, UI review, approvals;
+- credentials, accounts, payments or access that agents do not have;
+- external parties: waiting on someone, a release window, a deploy;
+- anything irreversible or outward-facing the user has not authorized.
+
+Resolve each risk with the user now: get the decision, record a default, or
+cut the step from scope. Ask one question at a time with your recommendation.
+If a risk cannot be resolved, refuse to start and say why. Never file a bead
+that needs a human later; express acceptance as checks an agent can run.
+
+### Build the graph
+
+Read enough of the codebase to decompose well. Then file the graph with raw
+`bd` (always `--json`; see `bd create --help`):
+
+- **One epic** for the run (`--type epic`) whose description holds the plan
+  summary or task prompt, a link to the plan document, the decisions from the
+  audit, the parallelism and role restrictions, and whole-run acceptance
+  criteria.
+- **Milestones** as child epics when the plan has phases. Milestone N+1
+  depends on milestone N (or on its gate, below) with `bd dep add`.
+- **Beads** as children (`--parent`), each completable by one fresh session in
+  one sitting, with a standalone description, the relevant plan excerpt and
+  file pointers, `--acceptance` criteria an agent can verify, and `--priority`.
+  Give each its role label (`--labels role:<role>`); unlabeled beads are
+  executor beads.
+- **Dependencies** only where real (`bd dep add <dependent> <prerequisite>`).
+  Unrelated work stays parallel. Two beads that would edit the same code
+  non-additively get an ordering edge.
+
+Decompose a plan fully up front by default. For a large or uncertain plan you
+may instead file concrete beads for the first milestone plus one executor
+bead per later milestone: "Decompose milestone N into beads", parented under
+that milestone epic and gated on the previous milestone.
+
+#### Roles
+
+For a plan, use every role unless AGENTS.md or the invocation restricts them:
+
+- **Executor** (`role:executor`, the default): implements.
+- **Warden** (`role:warden`): fresh review that fixes problems itself. By
+  default file one Warden bead per substantial implementation bead,
+  depending on it; batch small related beads under one Warden bead that
+  depends on all of them. Work that builds on that code depends on the Warden
+  bead; unrelated work does not.
+- **Mason** (`role:mason`): architecture audit at milestone boundaries; one
+  pass at the end for a small project.
+- **Sage** (`role:sage`): process and tooling audit ("why was this slow?") at
+  milestone boundaries.
+- **Steward** (`role:steward`): never planned; the slow-CI runner files these.
+- **Justiciar** and **Marshal**: never filed as beads.
+
+#### Audit gates
+
+Beads only lets epics block epics, and a blocked epic hides its children
+from `bd ready`. So each Mason or Sage audit gets a small **gate epic**, for
+example "M1 review gate", with the next milestone epic depending on it. The
+audit bead is a child of the gate epic. The auditor files important findings
+as further children of the gate, so the next milestone waits for them. The
+helper closes a gate automatically once all its children are closed.
+
+### Finish planning
+
+1. If you filed or moved beads, run `enact sync`, then check the graph with
+   `bd list --parent <epic>` and `bd ready --parent <epic>`: something must be
+   ready (unless another vizier holds it), and every bead must be reachable.
+2. Title yourself `🔮 [<epic>] <short summary>`.
+3. Give the user a short summary: the epic, bead count, milestones,
+   parallelism, what would make you stop. Then start the loop without waiting
+   for approval.
+
+## Phase 2: the loop
 
 Repeat until done, inside the same turn:
 
@@ -143,7 +259,8 @@ Rules for the loop:
   context compaction, trust it and continue.
 - If the vizier's turn ends anyway (crash, usage limit), the Marshal notifies
   the user. When the user says "resume", rerun this skill with the same
-  epic. Your reservations and spawned sessions are all in the graph.
+  epic: an epic input skips planning, and your reservations and spawned
+  sessions are all in the graph.
 
 ## Multiple machines and providers
 
@@ -157,6 +274,5 @@ beads: any bead with metadata `enact_host=<host>` or
 
 ## Reference
 
-Planning rules (roles, Warden placement, gate epics) are in
-`$ENACT/skills/enact-intake/SKILL.md`; the design rationale is in
-`$ENACT/docs/design.md`; role prompts are in `$ENACT/skills/enact/roles/`.
+The design rationale is in `$ENACT/docs/design.md`; role prompts are in
+`$ENACT/skills/enact/roles/`.

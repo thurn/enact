@@ -17,7 +17,7 @@
   P0 Steward bead. `enact ci --status` shows the runner and its log.
 - Fast and slow check commands are in `.enact.toml`.
 - Beads live in this repo (`bd`); publish bead changes with `enact sync`.
-- Large plans can run unattended with Enact (`/enact-intake <plan>`, then
-  `/enact <epic>`); most work does not go through it.
+- Work can run unattended with Enact (`/enact <bead|plan|task>`); most work
+  does not go through it.
 - Enact roles in use: all (Executor, Warden, Steward, Mason, Sage).
 - Review policy: one Warden bead per substantial implementation bead.

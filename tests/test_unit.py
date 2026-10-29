@@ -2,6 +2,7 @@
 
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -61,3 +62,23 @@ class GraphTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(enact.WINDOWS, "symlinks need privileges on Windows")
+class InstallTest(unittest.TestCase):
+    def test_unlink_retired_removes_only_dangling_links_to_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, other = root / "skills" / "old", root / "elsewhere"
+            other.mkdir()
+            dangling, unrelated = root / "dangling", root / "unrelated"
+            dangling.symlink_to(target, target_is_directory=True)
+            unrelated.symlink_to(other, target_is_directory=True)
+            self.assertTrue(enact.unlink_retired(target, dangling))
+            self.assertFalse(dangling.is_symlink())
+            self.assertFalse(enact.unlink_retired(target, unrelated))
+            self.assertFalse(enact.unlink_retired(target, root / "missing"))
+            target.mkdir(parents=True)
+            live = root / "live"
+            live.symlink_to(target, target_is_directory=True)
+            self.assertFalse(enact.unlink_retired(target, live))

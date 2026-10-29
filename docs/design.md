@@ -38,14 +38,22 @@ of truth for role definitions; this file records the decisions made on top.
 
 ## Vizier
 
-- Split into two user-invoked skills: `/enact-intake <plan>` (the stoppage
-  audit with the user, decomposition, bead filing; prints the `/enact` line)
-  and `/enact <epic> [parallelism]` (runtime checks, then the loop; never asks
-  the user anything). Several viziers may run `/enact` on one epic.
-- Intake: audit stoppage risks and resolve each with the user up front;
-  refuse to file if any remain. `/enact` runtime checks (per machine, no
-  questions): `git pull --ff-only` in ~/enact, project set up, non-prompting
-  permission mode, create the Marshal routine if missing.
+- One user-invoked skill that scales with its input, `/enact <input>
+  [parallelism]`. (A separate `/enact-intake` planning skill was tried and
+  reverted: one entry point is simpler, and small tasks should not need a
+  planning step.)
+  - Bead: execute it. An epic is the run (joining another vizier's run needs
+    nothing special); a plain bead is wrapped in a new epic, since follow-ups
+    and `enact next` work by epic.
+  - Plan document: full stoppage audit with the user, full decomposition.
+  - Task prompt: smallest graph, one executor bead plus a Warden bead only
+    for substantial changes, no milestones or gates; a prompt describing a
+    large work item is treated as a plan.
+- Pre-flight: audit stoppage risks and resolve each with the user up front;
+  refuse to start if any remain. Require a non-prompting permission mode.
+  `git pull --ff-only` in ~/enact. Create the Marshal routine if missing.
+- `enact install` removes dangling links to retired skills
+  (`enact-intake`).
 - Decomposition: full graph up front or rolling milestones, at the vizier's
   discretion; "decompose milestone N" beads go to the executor role. Agents
   re-validate stale beads against current code.

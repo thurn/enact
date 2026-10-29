@@ -1127,12 +1127,30 @@ def link_dir(target: Path, link: Path) -> str:
     return "linked"
 
 
+# Skills Enact used to ship; install removes their now-dangling links.
+RETIRED_SKILLS = ("enact-intake",)
+
+
+def unlink_retired(target: Path, link: Path) -> bool:
+    if link.exists() or Path(os.path.realpath(link)) != Path(os.path.realpath(target)):
+        return False
+    if link.is_symlink():
+        link.unlink()
+    else:
+        os.rmdir(link)  # a Windows junction
+    return True
+
+
 def cmd_install(args: argparse.Namespace) -> dict[str, Any]:
     linked = {}
     for directory in skill_dirs():
-        for skill in ("enact", "enact-intake", "enact-setup"):
+        for skill in ("enact", "enact-setup"):
             link = directory / skill
             linked[str(link)] = link_dir(ENACT_ROOT / "skills" / skill, link)
+        for skill in RETIRED_SKILLS:
+            link = directory / skill
+            if unlink_retired(ENACT_ROOT / "skills" / skill, link):
+                linked[str(link)] = "removed"
     return {"skills": linked}
 
 
