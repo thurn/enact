@@ -1295,6 +1295,8 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
         return start_ci(repo)
     if args.status:
         return ci_status(repo)
+    if args.check_worker:
+        return ci_check_worker(repo, args.check_worker, args.coordinator)
     if not cfg.slow:
         raise Fail("no [checks] slow command in .enact.toml")
     lock = repo.state / "ci.lock"
@@ -1322,16 +1324,62 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
                         break
                     # Legacy last-tested files have no outcome. Recheck an
                     # unpromoted tip once rather than stranding an old run.
-                result = ci_run_once(repo, tip)
-                write_json(outcome, result)
+                result = ci_supervise_check(repo, tip)
                 results.append(result)
-                last_file.write_text(tip)
         finally:
             release_lock(lock, guard)
         fetch(repo)
         tip = repo.git("rev-parse", repo.remote_ref(cfg.staging), cwd=repo.main)
         if tip == (last_file.read_text().strip() if last_file.exists() else ""):
             return {"ran": results}
+
+
+def ci_supervise_check(repo: Repo, tip: str) -> dict[str, Any]:
+    """Publish the check keeper's PID before authorizing any protected work."""
+    lock = repo.state / "ci.lock"
+    kwargs: dict[str, Any] = {}
+    if WINDOWS:
+        kwargs["creationflags"] = 0x00000200  # NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    output = repo.state / "ci-check.log"
+    with output.open("w", encoding="utf-8") as handle:
+        with subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "ci",
+             "--check-worker", tip, "--coordinator", str(os.getpid())],
+            cwd=repo.main, stdin=subprocess.PIPE, stdout=handle, stderr=handle,
+            **kwargs,
+        ) as worker:
+            # The coordinator still holds the OS guard. Until this atomic
+            # handoff the child can only wait for permission or exit on EOF.
+            write_json(lock, worker.pid)
+            worker.stdin.write(b"run\n")
+            worker.stdin.close()
+            worker.wait()
+    sys.stderr.write(output.read_text(encoding="utf-8", errors="replace")[-20000:])
+    if worker.returncode:
+        raise Fail(f"slow-CI check keeper exited {worker.returncode}; see {output}")
+    return json.loads((repo.state / "ci-result.json").read_text())
+
+
+def ci_check_worker(repo: Repo, tip: str, coordinator: int) -> dict[str, Any]:
+    """Keep the PID lease through checks, cleanup and durable result recording."""
+    lock = repo.state / "ci.lock"
+    if sys.stdin.buffer.readline() != b"run\n":
+        return {"ran": False}  # coordinator died before authorizing this child
+    if lock.read_text().strip() != str(os.getpid()):
+        raise Fail("check keeper was not given CI ownership")
+    try:
+        result = ci_run_once(repo, tip)
+        write_json(repo.state / "ci-result.json", result)
+        (repo.state / "ci-last").write_text(tip)
+        return result
+    finally:
+        # Restore before exiting, so legacy contenders never see a dead
+        # keeper while the live coordinator still owns the OS guard.
+        # If the coordinator died, our stale PID is recoverable after exit.
+        if pid_alive(coordinator):
+            write_json(lock, coordinator)
 
 
 def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
@@ -1674,6 +1722,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("ci", cmd_ci, "Run the coalescing slow-CI loop for this machine.")
     p.add_argument("--detach", action="store_true", help="start the runner in the background")
     p.add_argument("--status", action="store_true", help="report runner state")
+    p.add_argument("--check-worker", help=argparse.SUPPRESS)
+    p.add_argument("--coordinator", type=int, default=0, help=argparse.SUPPRESS)
 
     p = add("worktree", cmd_worktree, "Create or remove a bead worktree cut from staging.")
     p.add_argument("action", choices=["create", "remove"])

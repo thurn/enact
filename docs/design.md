@@ -336,3 +336,37 @@ Findings and adjustments made while implementing (2026-10-28):
 - Deterministic spawned-process tests cover publication, competing stale
   recovery, death before and after publication, and legacy ownership. They
   run in the normal fast suite, which slow CI also includes.
+
+## Slow-check lifetime ownership (2026-10-29)
+
+- The CI coordinator retains the OS guard, but delegates each check to a
+  separate keeper process. Before authorizing that keeper through a private
+  stdin pipe, atomically replace the plain `ci.lock` PID with its PID. A
+  keeper that receives EOF without authorization exits without touching a
+  worktree. Thus coordinator death before launch, between launch and PID
+  publication, or between publication and authorization cannot leave a
+  delayed child able to start unprotected work.
+- An authorized keeper owns worktree creation, the synchronous slow
+  command, worktree removal, promotion and durable result recording. It
+  survives coordinator death and retains the live plain-PID lease, which
+  both current and legacy contenders respect even after the coordinator's
+  OS guard releases. Output goes to `ci-check.log`, independent of the
+  coordinator's pipes. It records `ci-result.json` and `ci-last` itself, so
+  completed orphan checks need not be repeated by a replacement runner.
+- After all protected work, the keeper restores a live coordinator's PID
+  before exiting; otherwise it leaves its own marker for stale recovery.
+  This avoids exposing a dead keeper PID to legacy contenders while a live
+  coordinator continues its loop. Status reports the lease owner's PID,
+  which can differ from the coordinator PID returned by detached startup.
+- This protects against loss of the coordinator, including its startup
+  handoff. The keeper and synchronous command must be allowed to finish;
+  forcibly killing the keeper while leaving its shell descendants alive
+  is outside this protocol. Slow commands must wait for their protected
+  work instead of deliberately detaching it. Existing legacy crash states
+  still require draining old checks before upgrading.
+- Normal slow CI includes a real-git, real-CLI regression with deterministic
+  barriers before spawn, after spawn, after PID publication, after
+  authorization and inside the running check. It kills only the coordinator,
+  checks exclusion and worktree preservation, then verifies recovery and a
+  single completed check. Local execution evidence is macOS; Windows and
+  Linux use portable stdlib paths but have not been executed in this change.

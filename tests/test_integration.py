@@ -6,6 +6,7 @@ machines, then drives the CLI exactly as agents do.
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -39,6 +40,137 @@ def sh(cmd, cwd, check=True, env=None):
     if check and proc.returncode != 0:
         raise AssertionError(f"{cmd} failed in {cwd}:\n{proc.stdout}\n{proc.stderr}")
     return proc.stdout.strip()
+
+
+@unittest.skipUnless(shutil.which("git"), "needs git")
+class CiLifetimeTest(unittest.TestCase):
+    """Real CLI/check processes; barriers make coordinator crashes repeatable."""
+
+    def wait_for(self, predicate):
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.02)
+        self.fail("CI process did not reach the expected state")
+
+    def test_coordinator_crash_across_check_handoff(self):
+        for phase in ("before_spawn", "spawned", "published", "authorized", "running"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                repo, origin = root / "repo", root / "origin.git"
+                sh(["git", "init", "-q", "--bare", "-b", "master", str(origin)], root)
+                sh(["git", "init", "-q", "-b", "master", str(repo)], root)
+                sh(["git", "config", "user.email", "test@example.com"], repo)
+                sh(["git", "config", "user.name", "Test"], repo)
+                command = [sys.executable, "check.py"]
+                slow = (subprocess.list2cmdline(command) if os.name == "nt"
+                        else shlex.join(command))
+                (repo / ".enact.toml").write_text(f"[checks]\nslow = {json.dumps(slow)}\n")
+                (repo / "check.py").write_text(
+                    "import json, os, time\nfrom pathlib import Path\n"
+                    f"root = Path({str(root)!r})\n"
+                    "sentinel = Path.cwd() / 'check-sentinel'\n"
+                    "sentinel.write_text(str(os.getpid()))\n"
+                    "with (root / 'started').open('a') as handle:\n"
+                    "    handle.write(json.dumps([os.getpid(), str(Path.cwd())]) + '\\n')\n"
+                    "(root / 'started-ready').touch()\n"
+                    "while not (root / 'finish-check').exists(): time.sleep(0.02)\n"
+                    "assert sentinel.read_text() == str(os.getpid())\n"
+                )
+                sh(["git", "add", "."], repo)
+                sh(["git", "commit", "-qm", "initial"], repo)
+                sh(["git", "remote", "add", "origin", str(origin)], repo)
+                sh(["git", "push", "-q", "origin", "HEAD:master"], repo)
+                sh(["git", "commit", "-q", "--allow-empty", "-m", "candidate"], repo)
+                sh(["git", "push", "-q", "origin", "HEAD:staging"], repo)
+                tip = sh(["git", "rev-parse", "HEAD"], repo)
+                # Invoke the real CLI with pauses around actual operations.
+                # No lock, subprocess, worktree or result behavior is faked.
+                wrapper = root / "cli.py"
+                wrapper.write_text(
+                    "import importlib.util, os, sys, time\nfrom pathlib import Path\n"
+                    f"spec = importlib.util.spec_from_file_location('enact', {str(SCRIPT)!r})\n"
+                    "enact = importlib.util.module_from_spec(spec)\n"
+                    "sys.modules['enact'] = enact\nspec.loader.exec_module(enact)\n"
+                    "enact.__file__ = __file__\n"
+                    f"root, phase = Path({str(root)!r}), {phase!r}\n"
+                    "def pause():\n"
+                    "    (root / 'paused').write_text(str(os.getpid()))\n"
+                    "    while not (root / 'resume').exists(): time.sleep(0.02)\n"
+                    "original_spawn, original_write = enact.subprocess.Popen, enact.write_json\n"
+                    "def spawn(command, *args, **kwargs):\n"
+                    "    target = '--check-worker' in command\n"
+                    "    if target and phase == 'before_spawn': pause()\n"
+                    "    child = original_spawn(command, *args, **kwargs)\n"
+                    "    if target:\n"
+                    "        if phase == 'spawned': pause()\n"
+                    "    return child\n"
+                    "def write(path, value):\n"
+                    "    original_write(path, value)\n"
+                    "    if path.name == 'ci.lock' and value != os.getpid() and phase == 'published': pause()\n"
+                    "enact.subprocess.Popen, enact.write_json = spawn, write\n"
+                    "if '--check-worker' in sys.argv and phase == 'authorized':\n"
+                    "    original_check = enact.ci_run_once\n"
+                    "    def check(*args):\n"
+                    "        pause()\n"
+                    "        return original_check(*args)\n"
+                    "    enact.ci_run_once = check\n"
+                    "sys.exit(enact.main())\n"
+                )
+                state = repo / ".git" / "enact"
+
+                def cli(*args):
+                    result = subprocess.run(
+                        [sys.executable, str(SCRIPT), "ci", *args], cwd=repo,
+                        text=True, capture_output=True, timeout=10,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    return json.loads(result.stdout)
+
+                with (root / "coordinator.log").open("w") as output:
+                    entrypoint = SCRIPT if phase == "running" else wrapper
+                    coordinator = subprocess.Popen(
+                        [sys.executable, str(entrypoint), "ci"], cwd=repo,
+                        stdout=output, stderr=output, stdin=subprocess.DEVNULL,
+                    )
+                    try:
+                        barrier = root / ("started-ready" if phase == "running" else "paused")
+                        self.wait_for(barrier.exists)
+                        self.assertIn("another runner", cli()["reason"])
+                        coordinator.kill()
+                        coordinator.wait(timeout=10)
+                        if phase in ("authorized", "running"):
+                            self.assertTrue(cli("--status")["running"])
+                            self.assertIn("another runner", cli()["reason"])
+                            (root / "resume").touch()
+                            self.wait_for((root / "started-ready").exists)
+                            pid, cwd = json.loads((root / "started").read_text().splitlines()[0])
+                            sentinel = Path(cwd) / "check-sentinel"
+                            self.assertEqual(sentinel.read_text(), str(pid))
+                            self.assertIn("another runner", cli()["reason"])
+                            self.assertEqual(sentinel.read_text(), str(pid))
+                            (root / "finish-check").touch()
+                            self.wait_for(lambda: (state / "ci-last").exists())
+                            self.wait_for(lambda: not cli("--status")["running"])
+                            self.assertFalse(Path(cwd).exists())
+                        else:
+                            # EOF cancels a child that never got permission.
+                            self.wait_for(lambda: not cli("--status")["running"])
+                            self.assertFalse((root / "started").exists())
+                            (root / "finish-check").touch()
+                        self.assertNotIn("reason", cli())
+                        self.assertEqual(len((root / "started").read_text().splitlines()), 1)
+                        self.assertEqual((state / "ci-last").read_text(), tip)
+                        self.assertEqual(sh(["git", "rev-parse", "master"], origin), tip)
+                    finally:
+                        (root / "resume").touch()
+                        (root / "finish-check").touch()
+                        if coordinator.poll() is None:
+                            coordinator.kill()
+                        coordinator.wait(timeout=10)
+                        # Let any authorized orphan finish before removing its repository.
+                        self.wait_for(lambda: not cli("--status")["running"])
 
 
 class Machine:
@@ -305,6 +437,20 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
 
     # -- slow CI ----------------------------------------------------------
 
+    def ci_without_promotion(self):
+        # Keep the simulated unavailable remote in both the coordinator and
+        # its keeper, while exercising the real CLI and checks in each.
+        harness = self.tmp / "reject-promotion.py"
+        harness.write_text(
+            "import runpy, sys\n"
+            f"module = runpy.run_path({str(SCRIPT)!r}, run_name='fault_test')\n"
+            "namespace = module['cmd_ci'].__globals__\n"
+            "namespace['ci_pass'] = lambda repo, tip: False\n"
+            "namespace['__file__'] = __file__\n"
+            "sys.exit(module['main']())\n"
+        )
+        return json.loads(sh([sys.executable, str(harness), "ci"], self.a.path))
+
     def test_slow_ci_pass_advances_master(self):
         wt = Path(self.a.enact("worktree", "create", "ci1")["path"])
         self.configure_git(wt)
@@ -322,13 +468,7 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         path = Path(self.a.enact("worktree", "create", "promotion")["path"])
         self.a.commit_file("good", "yes", cwd=path)
         pushed = self.a.enact("push", "--no-ci", cwd=path)
-        harness = """
-import argparse, json, runpy, sys
-module = runpy.run_path(sys.argv[1], run_name='fault_test')
-module['cmd_ci'].__globals__['ci_pass'] = lambda repo, tip: False
-print(json.dumps(module['cmd_ci'](argparse.Namespace(detach=False, status=False))))
-"""
-        result = json.loads(sh([sys.executable, "-c", harness, str(SCRIPT)], self.a.path))
+        result = self.ci_without_promotion()
         self.assertTrue(result["ran"][0]["passed"])
         self.assertFalse(result["ran"][0]["master_advanced"])
         self.assertNotEqual(self.remote_sha("master"), pushed["staging"])
@@ -345,19 +485,13 @@ print(json.dumps(module['cmd_ci'](argparse.Namespace(detach=False, status=False)
         self.a.commit_file("good", "yes", cwd=path)
         pushed = self.a.enact("push", "--bead", bead, "--no-ci", cwd=path)
         self.a.enact("close", bead, "--reason", "delivered")
-        harness = """
-import argparse, runpy, sys
-module = runpy.run_path(sys.argv[1], run_name='fault_test')
-module['cmd_ci'].__globals__['ci_pass'] = lambda repo, tip: False
-module['cmd_ci'](argparse.Namespace(detach=False, status=False))
-"""
-        sh([sys.executable, "-c", harness, str(SCRIPT)], self.a.path)
+        self.ci_without_promotion()
         path = Path(self.a.enact("worktree", "create", "unrelated")["path"])
         self.a.commit_file("SLOW", "unrelated failure", cwd=path)
         self.a.enact("push", "--no-ci", cwd=path)
         # Promotion is still unavailable when the newer check fails. Its
         # failure must not erase the older passing candidate or blame its run.
-        sh([sys.executable, "-c", harness, str(SCRIPT)], self.a.path)
+        self.ci_without_promotion()
         self.assertNotEqual(self.remote_sha("master"), pushed["staging"])
         self.a.enact("ci")
         self.assertEqual(self.remote_sha("master"), pushed["staging"])
