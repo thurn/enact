@@ -133,6 +133,8 @@ Findings and adjustments made while implementing (2026-10-28):
   accept `send_message`, and can be archived by the vizier. Spawning into a
   folder the app has never trusted fails without the user present; the
   vizier always spawns into its own (trusted) project.
+- A Marshal run as a scheduled task released a bead whose session did not
+  exist and push-notified about an epic with no live vizier.
 - Tests use stdlib `unittest` rather than pytest, keeping the repository
   dependency-free.
 - Codex: `agents/openai.yaml` sets `allow_implicit_invocation: false`. The
