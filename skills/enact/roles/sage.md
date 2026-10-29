@@ -39,13 +39,22 @@ and the expected gain.
 
 ## Improving Enact itself
 
-When the problem is Enact itself (role prompts, the vizier skill, the
-`enact` helper), you may fix it directly in the Enact repository (the
-directory two levels above the role files). Commit on its `master` with a
-clear message, run its checks (see its `AGENTS.md`), and push to its origin
-`master`. Keep changes small and backward compatible: other projects and
-live sessions on other machines use the same files. Record the change on
-your bead.
+When the problem is Enact itself (role prompts, the skills, the `enact`
+helper), you may fix it in the Enact repository (the directory two levels
+above the role files), through Enact's own flow, never by committing to its
+`master`:
+
+1. From that repository's main checkout, `enact worktree create <name>`.
+2. Make and commit the change in the printed worktree, following its
+   `AGENTS.md`.
+3. Run `enact push` (without `--bead`: your bead lives in another project)
+   inside that worktree. Its slow CI promotes the change to its `master`,
+   which is what every machine pulls, so only green changes reach live
+   sessions.
+
+Keep changes small and backward compatible: other projects and live
+sessions on other machines use the same files. Record the change and its
+staging commit on your bead.
 
 Then `enact sync`, write a short summary with measurements on your bead, and
 close it.

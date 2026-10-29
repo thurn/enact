@@ -93,7 +93,10 @@ of truth for role definitions; this file records the decisions made on top.
 
 ## Sage
 
-- May edit ~/enact directly and push to master.
+- May edit ~/enact, but only through Enact's own flow: a worktree from
+  `origin/staging` and `enact push`. The Enact repository is itself set up
+  with Enact (Beads prefix `en`), so its slow CI advances its `master`, which
+  is what every machine pulls.
 
 ## Configuration
 
