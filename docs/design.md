@@ -84,6 +84,9 @@ of truth for role definitions; this file records the decisions made on top.
   leftovers, restarts a dead CI runner, breaks stale Justiciar locks, pulls
   ~/enact, and push-notifies the user if the vizier's turn has died (it cannot
   respawn one on Claude Desktop).
+- The vizier deletes the Marshal task when its run finishes, unless
+  `enact status` still shows working beads on this machine (another epic in
+  flight), in which case that run's vizier deletes it later.
 
 ## Sage
 

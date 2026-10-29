@@ -198,9 +198,12 @@ as there is something to do, or after nine minutes. Handle the JSON:
    continue the loop. Your next `enact next` call spawns it. This is the one
    case where you act on your own judgment.
 6. **`action: done`**: the epic is closed and nothing of yours is in flight.
-   Archive anything still listed, then write a short final report (outcome,
-   bead count, anything for the user to look at) and end the turn. Stay
-   unarchived.
+   Archive anything still listed. Then delete the Marshal task
+   `enact-marshal-<project-dir-name>` (Codex: its automation), unless
+   another run still needs it: skip the deletion if `enact status` lists any
+   `working` beads (another epic in flight on this machine). Finally write a
+   short final report (outcome, bead count, whether the Marshal was deleted,
+   anything for the user to look at) and end the turn. Stay unarchived.
 
 Rules for the loop:
 
