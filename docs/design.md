@@ -95,12 +95,28 @@ in [the desktop support audit](audit-2026-10-29.md).
     nothing special); a plain bead is wrapped in a new epic, since follow-ups
     and `enact next` work by epic.
   - Plan document: full stoppage audit with the user, full decomposition.
-  - Task prompt: smallest graph, one executor bead plus a Warden bead only
-    for substantial changes, no milestones or gates; a prompt describing a
-    large work item is treated as a plan.
+  - Task prompt: smallest graph, one executor bead, no milestones, gates or
+    Marshal; a prompt describing a large work item is treated as a plan.
+    Review is none, inline or a Warden bead (below).
 - Pre-flight: audit stoppage risks and resolve each with the user up front;
   refuse to start if any remain. Require a non-prompting permission mode.
-  `git pull --ff-only` in ~/enact. Create the Marshal routine if missing.
+  `git pull --ff-only` in ~/enact. Create the Marshal routine if missing,
+  except for a small task-prompt run: hourly recovery is for multi-hour
+  runs, and a small run must not delete a Marshal another run relies on.
+- Small-run overhead (2026-10-29, after en-3cp): a one-feature task prompt
+  took ~29 minutes for ~6 minutes of implementation. Each bead pays a cold
+  start (start, title, re-read bead/epic/AGENTS.md, worktree, push, CI), and
+  an executor's follow-up duplicated what the pending Warden then fixed.
+  - Inline review: a `review:inline` label makes the executor run one
+    fresh-context cold-review subagent on its diff before pushing (one
+    session, one push, one CI run). A Warden bead is kept for large or
+    risky changes or when the user asks for one.
+  - Follow-ups are essential-only (real bugs, missing tests for risky
+    behavior, design problems that will bite soon, broken tooling); every
+    bead costs a session, and filing needs some friction. Mason no longer
+    files lower-value ideas. Issues in code a not-yet-started Warden will
+    review go to that Warden bead as comments; a Warden closes beads its
+    fixes cover.
 - `enact install` removes dangling links to retired skills
   (`enact-intake`).
 - Decomposition: full graph up front or rolling milestones, at the vizier's
@@ -144,6 +160,7 @@ in [the desktop support audit](audit-2026-10-29.md).
   leftovers, restarts a dead CI runner, breaks stale Justiciar locks, pulls
   ~/enact, and push-notifies the user if the vizier's turn has died (it cannot
   respawn one on Claude Desktop).
+- Small task-prompt runs neither create nor delete it.
 - The vizier deletes the Marshal task when its run finishes, unless
   `enact status` still shows working beads on this machine (another epic in
   flight), in which case that run's vizier deletes it later.

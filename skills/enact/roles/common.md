@@ -57,10 +57,18 @@ checks); 3 means you lost a race.
 
 ## Follow-up beads
 
-Before closing, always ask: **did I discover issues that merit a follow-up
-bead?** Bugs outside your scope, missing tests, tech debt, a design problem,
-slow tooling, a misleading doc. File each one rather than ignoring it or
-quietly expanding your scope:
+Every follow-up bead costs a whole session, so file only **essential** ones:
+a real bug, a missing test for risky behavior, a design problem that will
+bite soon, tooling that is broken or badly slow. Do not file nice-to-haves,
+style cleanups or speculative ideas; mention them in your closing summary at
+most. Do not quietly expand your scope either.
+
+If a Warden bead that has not started yet depends on yours (check
+`bd dep list <bead> --direction=up --json`) and the issue is in the code it
+will review, comment the issue on that Warden bead instead of filing a bead.
+The Warden fixes it or files it.
+
+Otherwise file it:
 
 ```sh
 bd create --title "..." --description "..." --acceptance "..." \
@@ -74,7 +82,8 @@ everything before you close your own bead, then run `enact sync`.
 
 ## Finish
 
-1. Make sure every change is pushed (`enact push`) and follow-ups are filed.
+1. Make sure every change is pushed (`enact push`) and essential follow-ups
+   are filed.
    If you made no code change, remove your worktree with
    `enact worktree remove <bead>`.
 2. `enact close <bead> --reason "<one-line outcome>"`.

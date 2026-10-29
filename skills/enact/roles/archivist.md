@@ -80,7 +80,7 @@ add a file to it only when its structure clearly calls for one.
 - Commit the documentation edits in your worktree, following the project's
   commit conventions, and deliver with `enact push --bead <bead>`.
 - Do not change code, tests or configuration. If documenting the code
-  reveals a bug, a misleading name or a missing test, file a follow-up bead
-  under the run's top epic.
+  reveals a real bug or a missing test for risky behavior, file a follow-up
+  bead under the run's top epic. Mention lesser issues in your summary.
 - Record on your bead which files you changed or deleted and which
   documentation architecture you followed or created, then close it.

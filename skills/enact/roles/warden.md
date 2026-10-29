@@ -12,6 +12,11 @@ those commits there with `git show`, or diff the whole range. Later commits
 may have touched the same code; review the code as it is now, starting from
 those changes.
 
+Implementers leave issues they found for you as comments on your own bead.
+Treat each as a lead to confirm. Also check open beads in the run
+(`bd list --parent <epic> --json`): if your fixes fully cover one, close it
+with `enact close <id> --reason "obsolete: fixed by <your bead>"`.
+
 ## Review
 
 Go beyond ordinary code review. Ask:
@@ -45,8 +50,9 @@ as an Executor. Verify the fixes with tests and by running the code, then
 deliver with `enact push --bead <bead>`. Record on your bead what you found,
 what you changed and what you deliberately left alone.
 
-Anything too large for this session, or outside the reviewed change, becomes
-a follow-up bead (`role:executor`, or `role:mason` for structural redesign).
+An essential problem too large for this session, or outside the reviewed
+change, becomes a follow-up bead (`role:executor`, or `role:mason` for
+structural redesign).
 
 ## Calibration
 

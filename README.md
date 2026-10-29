@@ -38,22 +38,23 @@ dependency: two skills, nine short role prompts and a stdlib Python helper.
 ## How a run works
 
 1. `/enact <input> [parallelism]` makes the session the vizier. It checks
-   the permission mode, creates the hourly Marshal task and plans according
-   to the input:
+   the permission mode, plans according to the input and, unless the run is
+   a small task prompt, creates the hourly Marshal task:
    - a **bead** runs as is (a plain bead is wrapped in an epic of its own);
    - a **plan document** is audited for anything that would need a human,
      those points are resolved with you, and it is filed as a full graph (an
      epic, milestones, role-labeled beads, Warden beads, Mason/Sage gate
      epics and a final Archivist bead);
-   - a **task prompt** becomes one executor bead, plus a Warden bead when the
-     change is substantial, unless it describes a large work item.
+   - a **task prompt** becomes one executor bead, reviewed by nobody, by a
+     cold-review subagent inside the executor session, or by a Warden bead
+     for large or risky changes, unless it describes a large work item.
 2. The vizier then loops on `enact next --wait 540` inside the turn you
    started. Claude Desktop only lets a user-started turn start sessions. Each
    loop reserves the highest-priority ready bead, starts a session for it,
    records the session ID and archives sessions whose beads have closed.
 3. Each session runs `enact start`, works in a worktree cut from
    `origin/staging`, delivers with `enact push` (rebase, fast checks, push to
-   staging), files follow-up beads and closes its bead.
+   staging), files essential follow-up beads and closes its bead.
 4. `enact push` starts a coalescing slow-CI runner on the machine. A pass
    fast-forwards `master`; a failure files one P0 Steward bead per OS.
    Local `staging` and `master` are fast-forwarded to track the remote.

@@ -20,8 +20,25 @@ staging. Read `common.md` first; this file adds what is specific to you.
      page, run the script. Do not trust a green suite alone;
    - re-read your full diff against `origin/staging` as a skeptical reviewer
      before pushing.
-5. Deliver with `enact push --bead <bead>`, then follow up and close as
+5. If your bead has the label `review:inline`, get an
+   [inline review](#inline-review) before pushing.
+6. Deliver with `enact push --bead <bead>`, then follow up and close as
    described in `common.md`.
+
+## Inline review
+
+The vizier asks for this instead of a Warden bead when a change deserves a
+fresh look but not a session of its own. After step 4, run one cold-review
+subagent (Claude: the Agent tool; Codex: a spawned agent) with a fresh
+context. Give it the bead's description and acceptance criteria, the
+worktree path and the diff range against `origin/staging`, and ask for the
+Warden's review in `warden.md` (correctness, tests that catch bugs, design),
+reporting confirmed problems only. Do not pass it your reasoning or your
+opinion of the change.
+
+Verify each finding yourself, fix the real ones, re-run the checks, and
+record on your bead what the review found and what you changed or rejected.
+One review round is enough; do not loop.
 
 ## Quality bar
 
@@ -31,12 +48,14 @@ staging. Read `common.md` first; this file adds what is specific to you.
   copy-paste where an existing helper fits.
 - Match the surrounding code's style, naming and comment density.
 - Leave the tree better than you found it in the code you touch, but do not
-  start unrelated refactors. File them as follow-up beads instead.
+  start unrelated refactors. File one as a follow-up bead only if it is
+  essential (`common.md`).
 
 ## Not your job
 
-- Do not run cold-review subagents. Independent review is a separate Warden
-  bead when the vizier planned one.
+- Do not run cold-review subagents unless your bead is labeled
+  `review:inline`. Otherwise independent review is a separate Warden bead
+  when the vizier planned one.
 - Do not wait for slow CI or for review.
 - Do not change other beads' scope or dependencies, except to add an edge for
   a follow-up you filed.

@@ -53,8 +53,8 @@ change. Group related findings; never file one bead per line.
 - **Important** findings that should land before the next milestone become
   children of your **gate epic** (your own bead's parent), so the next
   milestone waits for them.
-- **Lower-value** ideas go under the run's top epic at priority 3 or 4, with
-  no gating.
+- **Lower-value** ideas are not filed. List them in your summary on your
+  bead; each filed bead costs a session.
 
 Check open beads first (`bd list --label role:mason`, and the epic's children)
 so you do not refile existing work. Then `enact sync`, record a short ranked

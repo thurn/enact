@@ -76,16 +76,7 @@ The user is present now and will not be later. Do all interactive work here.
    `get_session` on `self`; `permissionMode` must be `bypassPermissions` or
    `auto`. Otherwise ask the user to switch modes, and do not start until they
    have. In Codex, require an approval policy that never prompts.
-4. **Marshal.** List scheduled tasks. If none is named
-   `enact-marshal-<project-dir-name>`, create one: hourly (`7 * * * *`),
-   working in this project, with the prompt:
-
-   > Read `<ENACT>/skills/enact/roles/marshal.md` and follow it for the Enact
-   > project at `<absolute project path>`. The Enact helper is
-   > `python3 "<ENACT>/scripts/enact.py"`.
-
-   It only runs while the desktop app is open.
-5. **Classify the input.** If `bd show <input> --json` finds a bead, it is a
+4. **Classify the input.** If `bd show <input> --json` finds a bead, it is a
    bead. Otherwise, if it names a file, it is a plan document. Otherwise it
    is a task prompt. Then follow the matching section below.
 
@@ -120,11 +111,20 @@ task. Skip the full stoppage audit, but if the prompt plainly needs a human
 with the user first.
 
 Default to the smallest graph: one epic holding one executor bead that
-carries the whole prompt, plus one Warden bead depending on it only when the
-change is substantial (new behavior, many files, risky code). No milestones,
-no Mason or Sage gates. If the prompt describes a large work item (several
-independent pieces, phases, days of work), treat it as a plan document
-instead: run the stoppage audit and decompose fully.
+carries the whole prompt. No milestones, no Mason or Sage gates, no
+Marshal. Pick the review, following any review wishes in the invocation:
+
+- **none** for a routine change;
+- **inline** (label the executor bead `review:inline`): the executor gets a
+  cold-review subagent before pushing. The default for a change that
+  deserves a second look;
+- **Warden**: a Warden bead depending on the executor bead, only when the
+  change is large or risky (data loss, concurrency, security, many files)
+  or the user asks for one.
+
+If the prompt describes a large work item (several independent pieces,
+phases, days of work), treat it as a plan document instead: run the stoppage
+audit and decompose fully.
 
 ### Stoppage audit
 
@@ -209,8 +209,18 @@ task-prompt run gets none.
 1. If you filed or moved beads, run `enact sync`, then check the graph with
    `bd list --parent <epic>` and `bd ready --parent <epic>`: something must be
    ready (unless another vizier holds it), and every bead must be reachable.
-2. Title yourself `🔮 [<epic>] <short summary>`.
-3. Give the user a short summary: the epic, bead count, milestones,
+2. **Marshal.** Skip this for a small task-prompt run: recovering a short
+   run is not worth an hourly task. Otherwise list scheduled tasks, and if
+   none is named `enact-marshal-<project-dir-name>`, create one: hourly
+   (`7 * * * *`), working in this project, with the prompt:
+
+   > Read `<ENACT>/skills/enact/roles/marshal.md` and follow it for the Enact
+   > project at `<absolute project path>`. The Enact helper is
+   > `python3 "<ENACT>/scripts/enact.py"`.
+
+   It only runs while the desktop app is open.
+3. Title yourself `🔮 [<epic>] <short summary>`.
+4. Give the user a short summary: the epic, bead count, milestones,
    parallelism, what would make you stop. Then start the loop without waiting
    for approval.
 
@@ -252,7 +262,8 @@ as there is something to do, or after nine minutes. Handle the JSON:
 6. **`action: done`**: the epic is closed, nothing of yours is in flight,
    required Stewards are closed, and all run deliveries reached green master.
    A closed epic with `action: wait` is still running; keep the loop alive.
-   Archive anything still listed. Then delete the Marshal task
+   Archive anything still listed. A small run that skipped the Marshal
+   leaves any existing one alone. Otherwise delete the Marshal task
    `enact-marshal-<project-dir-name>` (Codex: its automation), unless
    another run still needs it: skip the deletion if `enact status` lists any
    `working` beads or `pending_deliveries` from another run in this host app.
@@ -273,10 +284,10 @@ Rules for the loop:
   means: stop spawning, let in-flight sessions finish, report, end the turn.
 - Every `enact next` result has a `reminder` field restating the loop. After
   context compaction, trust it and continue.
-- If the vizier's turn ends anyway (crash, usage limit), the Marshal notifies
-  the user. When the user says "resume", rerun this skill with the same
-  epic: an epic input skips planning, and your reservations and spawned
-  sessions are all in the graph.
+- If the vizier's turn ends anyway (crash, usage limit), the Marshal, if the
+  run has one, notifies the user. When the user says "resume", rerun this
+  skill with the same epic: an epic input skips planning, and your
+  reservations and spawned sessions are all in the graph.
 
 ## Multiple machines and providers
 
