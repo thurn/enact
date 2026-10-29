@@ -71,7 +71,7 @@ master_branch = "master"
 fast = "scripts/check-fast"
 slow = "scripts/check"
 [worktree]
-root = "../{repo}-worktrees"
+root = ".worktrees"   # inside the checkout; gitignored
 # create = "scripts/enact-worktree create"   # full replacement hooks
 # remove = "scripts/enact-worktree remove"
 [roles.warden.claude]

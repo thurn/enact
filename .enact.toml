@@ -8,4 +8,4 @@ fast = "python3 -m py_compile scripts/enact.py && python3 -m unittest -q tests.t
 slow = "python3 -m unittest -q tests.test_unit tests.test_integration"
 
 [worktree]
-root = "../{repo}-worktrees"
+root = ".worktrees"

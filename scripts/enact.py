@@ -136,6 +136,10 @@ def require_actor(explicit: str | None) -> str:
 # Repository and configuration
 
 
+# Worktrees live inside the main checkout, ignored by git.
+DEFAULT_WORKTREE_ROOT = ".worktrees"
+
+
 @dataclass(frozen=True)
 class Config:
     remote: str = "origin"
@@ -143,7 +147,7 @@ class Config:
     master: str = "master"
     fast: str | None = None
     slow: str | None = None
-    worktree_root: str = "../{repo}-worktrees"
+    worktree_root: str = DEFAULT_WORKTREE_ROOT
     worktree_create: str | None = None
     worktree_remove: str | None = None
     roles: dict[str, Any] = field(default_factory=dict)
@@ -159,7 +163,7 @@ class Config:
             master=data.get("master_branch", "master"),
             fast=checks.get("fast") or None,
             slow=checks.get("slow") or None,
-            worktree_root=worktree.get("root", "../{repo}-worktrees"),
+            worktree_root=worktree.get("root", DEFAULT_WORKTREE_ROOT),
             worktree_create=worktree.get("create") or None,
             worktree_remove=worktree.get("remove") or None,
             roles=data.get("roles", {}),
@@ -198,6 +202,25 @@ class Repo:
         if not root.is_absolute():
             root = (self.main / root).resolve()
         return root
+
+    def ignore_worktree_root(self, ignore_file: Path) -> str | None:
+        """Make sure git ignores a worktree root inside the main checkout.
+
+        Appends a pattern to `ignore_file` if needed and returns it.
+        """
+        try:
+            rel = self.worktree_root().relative_to(self.main.resolve())
+        except ValueError:
+            return None  # outside the checkout
+        pattern = f"/{rel.as_posix()}/"
+        if self.git_ok("check-ignore", "-q", "--no-index", pattern[1:], cwd=self.main):
+            return None
+        text = ignore_file.read_text(encoding="utf-8") if ignore_file.exists() else ""
+        if text and not text.endswith("\n"):
+            text += "\n"
+        ignore_file.parent.mkdir(parents=True, exist_ok=True)
+        ignore_file.write_text(text + pattern + "\n", encoding="utf-8")
+        return pattern
 
 
 def find_repo(cwd: Path | None = None) -> Repo:
@@ -720,6 +743,8 @@ def create_worktree(repo: Repo, name: str, branch: str | None, base: str) -> Pat
     path = repo.worktree_root() / name
     if path.exists():
         raise Fail(f"worktree path {path} already exists")
+    # `enact setup` puts the root in .gitignore; this covers clones without it.
+    repo.ignore_worktree_root(repo.common / "info" / "exclude")
     path.parent.mkdir(parents=True, exist_ok=True)
     if repo.config.worktree_create:
         env = worktree_env(repo, path, branch or "", base)
@@ -1165,7 +1190,7 @@ fast = "{fast}"
 slow = "{slow}"
 
 [worktree]
-root = "../{{repo}}-worktrees"
+root = ".worktrees"   # inside the checkout; gitignored
 # create = "scripts/enact-worktree create"   # replaces `git worktree add`
 # remove = "scripts/enact-worktree remove"   # replaces `git worktree remove`
 
@@ -1207,6 +1232,7 @@ def cmd_setup(args: argparse.Namespace) -> dict[str, Any]:
         report["beads"] = "bootstrapped from remote"
     else:
         report["beads"] = "present"
+    report["gitignore"] = repo.ignore_worktree_root(repo.main / ".gitignore") or "unchanged"
     repo.git("config", "beads.role", "maintainer", cwd=repo.main, check=False)
     cfg = repo.config
     repo.git("fetch", "-q", cfg.remote, cwd=repo.main, check=False)

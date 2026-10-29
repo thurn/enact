@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+/.worktrees/
 
 # Beads / Dolt files (added by bd init)
 .dolt/

@@ -108,6 +108,13 @@ of truth for role definitions; this file records the decisions made on top.
 
 ## Configuration
 
+- Worktrees live in `.worktrees/` inside the main checkout by default, not in
+  a sibling directory, so a project stays one directory. `enact setup` adds
+  the root to `.gitignore`; `enact worktree create` falls back to
+  `.git/info/exclude` for clones without that entry. The hidden name keeps
+  most tools (pytest, unittest discovery, tsc globs) from descending into it;
+  projects whose tools do not skip dot-directories should exclude it.
+  Projects with an explicit `root` in `.enact.toml` keep it.
 - `.enact.toml`: fast/slow check commands, `[worktree]` root plus optional
   full-replacement `create`/`remove` hooks (env: `ENACT_WORKTREE_PATH`,
   `ENACT_BRANCH`, `ENACT_BASE_SHA`, `ENACT_REPO`), optional

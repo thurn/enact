@@ -126,6 +126,9 @@ class EnactTest(unittest.TestCase):
             machine.git("remote", "add", "origin", str(self.origin))
             machine.git("push", "-q", "origin", "master")
             machine.enact("setup", "--prefix", "tp")  # bd init commits .beads/
+            if machine.git("status", "--porcelain", ".gitignore"):
+                machine.git("add", ".gitignore")
+                machine.git("commit", "-q", "-m", "ignore worktrees")
             machine.git("push", "-q", "origin", "HEAD:master", "HEAD:staging")
             return machine
         sh(["git", "clone", "-q", str(self.origin), str(path)], self.tmp)
@@ -154,6 +157,19 @@ class EnactTest(unittest.TestCase):
     def test_setup_creates_staging_and_beads(self):
         self.assertEqual(self.remote_sha("staging"), self.remote_sha("master"))
         self.assertTrue((self.a.path / ".beads").is_dir())
+        self.assertIn("/.worktrees/", (self.a.path / ".gitignore").read_text())
+
+    def test_worktrees_live_ignored_inside_the_checkout(self):
+        path = Path(self.a.enact("worktree", "create", "inside")["path"])
+        self.assertEqual(path.parent, self.a.path / ".worktrees")
+        self.assertEqual(self.a.git("status", "--porcelain"), "")
+        # A clone whose .gitignore lacks the root falls back to info/exclude.
+        gitignore = self.a.path / ".gitignore"
+        gitignore.write_text(gitignore.read_text().replace("/.worktrees/\n", ""))
+        self.a.git("commit", "-qam", "drop ignore")
+        self.a.enact("worktree", "create", "inside2")
+        self.assertIn("/.worktrees/", (self.a.path / ".git" / "info" / "exclude").read_text())
+        self.assertEqual(self.a.git("status", "--porcelain"), "")
 
     def test_push_from_worktree_records_commits_and_cleans_up(self):
         bead = self.a.create("feature")

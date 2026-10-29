@@ -41,6 +41,7 @@ Run from the project's main checkout.
    propose one.
 4. **Run** `enact setup --prefix <short beads prefix> --master <branch>
    --fast "<cmd>" --slow "<cmd>"`. It writes `.enact.toml` (if missing),
+   adds the worktree root (`/.worktrees/` by default) to `.gitignore`,
    initializes Beads (if missing; `bd init` commits `.beads/` on the current
    branch) or bootstraps the local Beads database from the remote on a fresh
    clone, creates `origin/staging` from the integration branch (if missing)
@@ -60,7 +61,8 @@ Run from the project's main checkout.
    replace any existing instruction to commit or push to the main branch
    directly. Ask the user about anything you are unsure of, such as role
    restrictions or the review policy.
-7. **Commit** `.enact.toml`, the tracked `.beads/` files and `AGENTS.md`, then
+7. **Commit** `.enact.toml`, `.gitignore`, the tracked `.beads/` files and
+   `AGENTS.md`, then
    deliver with `enact push`, which puts the commit on staging. Slow CI
    promotes it to the integration branch when it passes.
 
