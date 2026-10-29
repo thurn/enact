@@ -49,6 +49,16 @@ class GraphTest(unittest.TestCase):
         found = {b["id"] for b in enact.descendants(graph, "e")}
         self.assertEqual(found, {"m1", "t1"})
 
+    def test_run_identity_supports_legacy_hierarchy_and_shared_repairs(self):
+        graph = [{"id": "run", "issue_type": "epic"},
+                 {"id": "milestone", "parent": "run", "issue_type": "epic"},
+                 {"id": "work", "parent": "milestone"}]
+        self.assertEqual(enact.bead_runs(graph[-1], graph), ["run"])
+        repair = {"id": "repair", "metadata": {
+            "enact_runs": "run peer", "enact_run": "run"}}
+        self.assertEqual(enact.bead_runs(repair, graph), ["run", "peer"])
+        self.assertEqual(enact.bead_runs({"id": "unrelated"}, graph), [])
+
     def test_role_defaults_to_executor(self):
         self.assertEqual(enact.role_of({"labels": ["role:warden"]}), "warden")
         self.assertEqual(enact.role_of({"labels": ["ui"]}), "executor")

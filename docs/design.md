@@ -258,3 +258,29 @@ Findings and adjustments made while implementing (2026-10-28):
   live demo run with real sessions in Claude Desktop, then push to
   github.com/thurn/enact master. Codex behavior is written from documentation
   and is unverified.
+
+## Durable delivery and final promotion (2026-10-29)
+
+- Before pushing staging, save a local delivery receipt in the git common
+  directory. It contains the bead, run epics, delivered commits, previous
+  commit history and CI intent. Only retire it after confirmed remote
+  ancestry, published metadata and CI startup. `push`, `next` and `status`
+  recover confirmed receipts; a successful push followed by a failed sync
+  can be retried without new commits. Receipts survive worktree removal.
+- `enact_commits` is an ordered, deduplicated history, including repeated
+  pushes. Sync recovery unions and verifies metadata after remote-wins
+  merges. CI launches an immutable helper snapshot in the git common
+  directory, so self-delivery cannot delete the child's entry point.
+- Assignments record `enact_run`; deliveries and CI failure beads record
+  `enact_runs` (multiple runs may share a Steward). Repeated CI failures
+  retain affected runs. Older beads infer run membership from the parent
+  graph; legacy Stewards can be matched through their failing commit range.
+- `next` reports `done` only after epic closure, no local assignments, closed
+  required Stewards and all run commits being ancestors of remote master.
+  It fetches before checking and restarts missing validation. Unrelated
+  later staging commits and failures cannot prolong a green run. Workers
+  still close after delivery; the vizier owns final promotion waiting.
+- `status.pending_deliveries` retains closed epics needing delivery recovery.
+  CI status includes the last outcome, and a passing check whose promotion
+  push failed can retry promotion without rerunning the same check. Any
+  machine's successful slow CI still suffices; no OS quorum was introduced.

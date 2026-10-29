@@ -249,15 +249,18 @@ as there is something to do, or after nine minutes. Handle the JSON:
    <open beads>"` (exit 3 means one is already requested or active), then
    continue the loop. Your next `enact next` call spawns it. This is the one
    case where you act on your own judgment.
-6. **`action: done`**: the epic is closed and nothing of yours is in flight.
+6. **`action: done`**: the epic is closed, nothing of yours is in flight,
+   required Stewards are closed, and all run deliveries reached green master.
+   A closed epic with `action: wait` is still running; keep the loop alive.
    Archive anything still listed. Then delete the Marshal task
    `enact-marshal-<project-dir-name>` (Codex: its automation), unless
    another run still needs it: skip the deletion if `enact status` lists any
-   `working` beads (another epic in flight on this machine in this host app;
-   `status` already leaves out beads another app's viziers spawned, since
-   their Marshal is a separate task). Finally write a short final report
-   (outcome, bead count, whether the Marshal was deleted, anything for the
-   user to look at) and end the turn. Stay unarchived.
+   `working` beads or `pending_deliveries` from another run in this host app.
+   `working` leaves out beads another app's viziers spawned, since their
+   Marshal is a separate task. Delivery state is shared across apps; preserve
+   recovery for any pending run using this Marshal. Finally write a short
+   final report (outcome, bead count, whether the Marshal was deleted,
+   anything for the user to look at) and end the turn. Stay unarchived.
 
 Rules for the loop:
 

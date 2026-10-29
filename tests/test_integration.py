@@ -169,7 +169,8 @@ class EnactTest(unittest.TestCase):
     def wait_for_ci(self, machine, timeout=60):
         deadline = time.time() + timeout
         while time.time() < deadline:
-            if not machine.enact("ci", "--status")["running"]:
+            status = machine.enact("ci", "--status")
+            if not status["running"] and status["last_tested"] == self.remote_sha("staging"):
                 return
             time.sleep(0.5)
         self.fail("slow CI runner did not finish")
@@ -209,6 +210,63 @@ class EnactTest(unittest.TestCase):
         self.assertEqual(
             self.a.show(bead)["metadata"]["enact_commits"], " ".join(result["commits"])
         )
+
+    def test_repeated_pushes_preserve_ordered_commit_history(self):
+        bead = self.a.create("two deliveries")
+        expected = []
+        for name in ("first", "second"):
+            path = Path(self.a.enact("worktree", "create", bead)["path"])
+            self.a.commit_file(name, name, cwd=path)
+            result = self.a.enact("push", "--bead", bead, "--no-ci", cwd=path)
+            expected += result["commits"]
+        self.assertEqual(self.a.show(bead)["metadata"]["enact_commits"].split(), expected)
+        path = Path(self.a.enact("worktree", "create", bead)["path"])
+        self.assertFalse(self.a.enact("push", "--bead", bead, "--no-ci", cwd=path)["pushed"])
+        self.assertEqual(self.a.show(bead)["metadata"]["enact_commits"].split(), expected)
+
+    def test_push_retry_recovers_after_metadata_sync_failure(self):
+        bead = self.a.create("recover delivery")
+        path = Path(self.a.enact("worktree", "create", bead)["path"])
+        self.a.commit_file("delivered", "yes", cwd=path)
+        head = self.a.git("rev-parse", "HEAD", cwd=path)
+        # Inject only the failed Beads sync; git, Beads writes, and recovery
+        # are real. This represents a network failure after the git push.
+        harness = """
+import argparse, runpy, sys
+module = runpy.run_path(sys.argv[1], run_name='fault_test')
+def fail_sync(repo):
+    raise RuntimeError('injected sync outage')
+module['cmd_push'].__globals__['sync'] = fail_sync
+module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
+                                     no_ci=False, keep=False))
+"""
+        proc = subprocess.run([sys.executable, "-c", harness, str(SCRIPT), bead],
+                              cwd=path, text=True, capture_output=True,
+                              env={**os.environ, **self.a.env()})
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("injected sync outage", proc.stderr)
+        self.assertEqual(self.remote_sha("staging"), head)
+        self.assertTrue(path.exists())
+        # Also exercise losing the local metadata in a remote-wins merge.
+        self.a.bd("update", bead, "--unset-metadata", "enact_commits")
+        result = self.a.enact("push", "--bead", bead, cwd=path)
+        self.assertFalse(result["pushed"])
+        self.assertEqual(result["recovered"][0]["commits"], [head])
+        self.assertFalse(path.exists())
+        self.assertEqual(self.a.show(bead)["metadata"]["enact_commits"], head)
+        self.assertEqual(list((self.a.path / ".git/enact/deliveries").glob("*.json")), [])
+        self.wait_for_ci(self.a)
+        self.assertEqual(self.remote_sha("master"), head)
+
+    def test_self_delivery_keeps_ci_entry_point_after_removing_worktree(self):
+        path = Path(self.a.enact("worktree", "create", "self")["path"])
+        self.a.commit_file("enact.py", SCRIPT.read_text(), cwd=path)
+        result = json.loads(sh([sys.executable, str(path / "enact.py"), "push"],
+                               path, env=self.a.env()))
+        self.assertFalse(path.exists())
+        self.wait_for_ci(self.a)
+        self.assertEqual(self.remote_sha("master"), result["staging"])
+        self.assertTrue(list((self.a.path / ".git/enact").glob("ci-runner-*.py")))
 
     def test_push_rebases_over_peer_and_merges_diverged_master(self):
         b = self.b
@@ -260,6 +318,34 @@ class EnactTest(unittest.TestCase):
         # The checked-out local master follows, files included.
         self.assertEqual(self.a.git("rev-parse", "master"), tip)
         self.assertTrue((self.a.path / "ok.txt").exists())
+
+    def test_passing_ci_retries_a_failed_promotion(self):
+        path = Path(self.a.enact("worktree", "create", "promotion")["path"])
+        self.a.commit_file("good", "yes", cwd=path)
+        pushed = self.a.enact("push", "--no-ci", cwd=path)
+        harness = """
+import argparse, json, runpy, sys
+module = runpy.run_path(sys.argv[1], run_name='fault_test')
+module['cmd_ci'].__globals__['ci_pass'] = lambda repo, tip: False
+print(json.dumps(module['cmd_ci'](argparse.Namespace(detach=False, status=False))))
+"""
+        result = json.loads(sh([sys.executable, "-c", harness, str(SCRIPT)], self.a.path))
+        self.assertTrue(result["ran"][0]["passed"])
+        self.assertFalse(result["ran"][0]["master_advanced"])
+        self.assertNotEqual(self.remote_sha("master"), pushed["staging"])
+        result = self.a.enact("ci")
+        self.assertTrue(result["ran"][0]["master_advanced"])
+        self.assertEqual(self.remote_sha("master"), pushed["staging"])
+
+    def test_legacy_ci_status_rechecks_an_unpromoted_tip(self):
+        path = Path(self.a.enact("worktree", "create", "legacy-ci")["path"])
+        self.a.commit_file("good", "yes", cwd=path)
+        pushed = self.a.enact("push", "--no-ci", cwd=path)
+        (self.a.path / ".git/enact/ci-last").write_text(pushed["staging"])
+        self.assertIsNone(self.a.enact("ci", "--status")["result"])
+        result = self.a.enact("ci")
+        self.assertTrue(result["ran"][0]["passed"])
+        self.assertEqual(self.remote_sha("master"), pushed["staging"])
 
     def test_local_branches_left_alone_when_dirty_or_diverged(self):
         b = self.b
@@ -331,6 +417,47 @@ class EnactTest(unittest.TestCase):
         self.a.enact("close", second, "--reason", "done", session="exec-2")
         self.assertEqual(self.a.show(epic)["status"], "closed")
         self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "done")
+
+    def test_closed_run_waits_for_failed_ci_and_steward_delivery(self):
+        epic = self.a.create("final delivery", type="epic")
+        bead = self.a.create("last task", parent=epic)
+        path = Path(self.a.enact("worktree", "create", bead)["path"])
+        self.a.commit_file("SLOW", "failure", cwd=path)
+        pushed = self.a.enact("push", "--bead", bead, "--no-ci", cwd=path)
+        self.a.enact("close", bead, "--reason", "delivered")
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual((step["action"], step["reason"]), ("wait", "delivery pending"))
+        self.assertEqual(step["delivery"]["pending"], pushed["commits"])
+        self.wait_for_ci(self.a)
+        status = self.a.enact("status")
+        self.assertIn(epic, status["pending_deliveries"])
+        self.assertFalse(status["ci"]["result"]["passed"])
+        steward = status["open_stewards"][0]
+        self.assertIn(epic, self.a.show(steward)["metadata"]["enact_runs"].split())
+        # Legacy failures remain attributable by their recorded failing range.
+        self.a.bd("update", steward, "--unset-metadata", "enact_runs")
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual((step["action"], step["bead"]), ("spawn", steward))
+        self.a.enact("start", steward, session="steward")
+        path = Path(self.a.enact("worktree", "create", steward)["path"])
+        self.a.git("rm", "SLOW", cwd=path)
+        self.a.git("commit", "-qm", "repair slow check", cwd=path)
+        repaired = self.a.enact("push", "--bead", steward, "--no-ci", cwd=path)
+        self.a.enact("close", steward, "--reason", "fixed", session="steward")
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual(step["action"], "wait")
+        self.assertIn(repaired["staging"], step["delivery"]["pending"])
+        self.wait_for_ci(self.a)
+        # Unrelated later staging and its CI failure must not hold this run.
+        path = Path(self.a.enact("worktree", "create", "unrelated")["path"])
+        self.a.commit_file("SLOW", "different run", cwd=path)
+        self.a.enact("push", "--no-ci", cwd=path)
+        self.a.enact("ci")
+        self.assertNotEqual(self.remote_sha("master"), self.remote_sha("staging"))
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual(step["action"], "done")
+        self.assertTrue(step["delivery"]["complete"])
+        self.assertIn(repaired["staging"], step["delivery"]["commits"])
 
 
 if __name__ == "__main__":

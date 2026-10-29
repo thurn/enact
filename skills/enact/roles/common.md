@@ -33,12 +33,16 @@ checks); 3 means you lost a race.
 - Follow `AGENTS.md` for conventions, commit style and test commands.
 - `enact push --bead <bead>` (run inside the worktree) rebases onto
   `origin/staging`, merges a diverged `master`, runs the fast checks, pushes,
-  records the commits on your bead, starts the slow-CI runner and deletes the
-  worktree. On exit 2, fix what it reports (rebase conflicts, failing fast
-  checks) in the same worktree and run it again. Resolving conflicts is your
-  job.
+  appends the commits to your bead, starts the slow-CI runner from a durable
+  helper copy and deletes the worktree. If push succeeds but bookkeeping
+  fails, retry `enact push`: its receipt repairs metadata and CI even with
+  nothing new to push. On exit 2, fix what it reports (rebase conflicts,
+  failing fast checks) in the same worktree and run it again. Resolving
+  conflicts is your job.
 - Slow CI runs after your push without you. Do not wait for it. A failure
-  becomes a Steward bead.
+  becomes a Steward bead linked to affected runs. The vizier keeps the run
+  alive until all delivered commits, including repairs, reach green master;
+  closing your bead does not declare the run complete.
 - Staging may be red because of someone else's change. That alone is not
   your problem. Do not stop for it; fast checks still gate your push.
 

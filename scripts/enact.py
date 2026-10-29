@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import random
@@ -56,6 +57,12 @@ class Fail(Exception):
 
 def log(message: str) -> None:
     print(f"enact: {message}", file=sys.stderr, flush=True)
+
+
+def write_json(path: Path, value: Any) -> None:
+    temp = path.with_suffix(f".{os.getpid()}.tmp")
+    temp.write_text(json.dumps(value), encoding="utf-8")
+    temp.replace(path)
 
 
 def emit(obj: dict[str, Any]) -> None:
@@ -496,6 +503,53 @@ def archivist_waits(run: list[dict[str, Any]]) -> bool:
     )
 
 
+def bead_runs(bead: dict[str, Any], graph: list[dict[str, Any]]) -> list[str]:
+    """Explicit run links also cover unparented Stewards; infer old runs."""
+    runs = (meta(bead, "enact_runs") or "").split()
+    if meta(bead, "enact_run"):
+        runs.append(meta(bead, "enact_run"))
+    by_id = {b["id"]: b for b in graph}
+    current = bead
+    seen = set()
+    while current.get("parent") in by_id and current["id"] not in seen:
+        seen.add(current["id"])
+        current = by_id[current["parent"]]
+    if current.get("issue_type") == "epic":
+        runs.append(current["id"])
+    return list(dict.fromkeys(runs))
+
+
+def run_delivery(repo: Repo, graph: list[dict[str, Any]], epic: str) -> dict[str, Any]:
+    scope = {epic, *(b["id"] for b in descendants(graph, epic))}
+    members = [b for b in graph if b["id"] in scope or epic in bead_runs(b, graph)]
+    # Older CI beads only recorded a failing range. Attribute them by ancestry,
+    # including already-closed repairs, without requiring a metadata migration.
+    while True:
+        commits = list(dict.fromkeys(
+            sha for b in members for sha in (meta(b, "enact_commits") or "").split()
+        ))
+        legacy = []
+        for bead in graph:
+            if bead in members or role_of(bead) != "steward" or meta(bead, "enact_runs"):
+                continue
+            green, sep, tip = (meta(bead, "enact_ci_range") or "").partition("..")
+            if sep and any(repo.git_ok("merge-base", "--is-ancestor", sha, tip)
+                           and not repo.git_ok("merge-base", "--is-ancestor", sha, green)
+                           for sha in commits):
+                legacy.append(bead)
+        if not legacy:
+            break
+        members += legacy
+    master = repo.remote_ref(repo.config.master)
+    pending = [sha for sha in commits if not repo.git_ok(
+        "merge-base", "--is-ancestor", sha, master
+    )]
+    stewards = [b["id"] for b in members
+                if role_of(b) == "steward" and b.get("status") != "closed"]
+    return {"commits": commits, "pending": pending, "stewards": stewards,
+            "complete": not pending and not stewards}
+
+
 def spawn_prompt(role: str, bead: dict[str, Any], epic: str, vizier: str) -> str:
     script = Path(__file__).resolve()
     python = sys.executable or "python3"
@@ -534,11 +588,14 @@ LOOP_REMINDER = (
     "Vizier loop: act on this result (archive listed sessions and record "
     "enact_archived=true; start one session per spawn action and record its "
     "id with `enact meta <bead> enact_session=<id>`), then run `enact next` "
-    "again with the same arguments. Never end your turn while the epic is open."
+    "again with the same arguments. Never end your turn before action: done, "
+    "including when the epic is closed but delivery or Steward repairs are pending."
 )
 
 
 def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any]:
+    fetch(repo)
+    recover_deliveries(repo)
     beads = Beads(repo)
     beads.raw("epic", "close-eligible")
     graph = beads.all()
@@ -574,14 +631,15 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
                 "settings": repo.config.role_settings("justiciar", provider()),
             }
 
-    if by_id[epic].get("status") == "closed" and not inflight:
+    delivery = run_delivery(repo, graph, epic)
+    result["delivery"] = delivery
+    if by_id[epic].get("status") == "closed" and not inflight and delivery["complete"]:
         return {**result, "action": "done"}
     if len(inflight) >= parallel:
         return {**result, "action": "wait", "reason": "capacity"}
 
-    run = descendants(graph, epic)
-    scope = {b["id"] for b in run}
-    hold_archivist = archivist_waits(run)
+    scope = {b["id"] for b in descendants(graph, epic)} | set(delivery["stewards"])
+    hold_archivist = archivist_waits([by_id[i] for i in scope])
     ready = beads.json("ready", "-n", "0", "--exclude-type", "epic", "--unassigned") or []
     candidates = [
         b
@@ -593,6 +651,7 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
     candidates.sort(key=lambda b: (role_of(b) != "steward", b.get("priority", 2)))
     for bead in candidates:
         reservation = {
+            "enact_run": epic,
             "enact_vizier": vizier,
             "enact_spawn_host": host_name(),
             "enact_spawn_provider": provider(),
@@ -609,6 +668,10 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
     stale = stale_hours(open_scope)
     if open_scope and not inflight and stale is not None and stale >= 6:
         return {**result, "action": "deadlock", "reason": f"no change for {stale:.1f}h"}
+    if delivery["pending"]:
+        if repo.config.slow:
+            result["ci"] = start_ci(repo)
+        return {**result, "action": "wait", "reason": "delivery pending"}
     return {**result, "action": "wait", "reason": "nothing ready"}
 
 
@@ -890,37 +953,96 @@ def integrate(repo: Repo) -> None:
             )
 
 
+def delivery_receipts(repo: Repo) -> Path:
+    path = repo.state / "deliveries"
+    path.mkdir(exist_ok=True)
+    return path
+
+
+def finish_delivery(repo: Repo, receipt: Path, data: dict[str, Any]) -> dict[str, Any]:
+    """Replay bookkeeping after a confirmed push; retain receipt on any failure."""
+    result: dict[str, Any] = {"staging": data["head"], "commits": data["commits"]}
+    if data.get("bead"):
+        beads = Beads(repo)
+        # Remote-wins merges can discard a metadata write. Re-read and union,
+        # then verify the published value before retiring the durable receipt.
+        for _ in range(3):
+            bead = beads.show(data["bead"])
+            pairs = {}
+            for key, values in (("enact_commits", data["history"]),
+                                ("enact_runs", data["runs"])):
+                pairs[key] = " ".join(dict.fromkeys(values + (meta(bead, key) or "").split()))
+            beads.set_meta(data["bead"], pairs, actor=session_actor())
+            result["sync"] = sync(repo)
+            saved = beads.show(data["bead"])
+            if all(set(value.split()) <= set((meta(saved, key) or "").split())
+                   for key, value in pairs.items()):
+                break
+        else:
+            raise Fail("delivery metadata lost during sync; retry enact push", code=2)
+    if data["ci"]:
+        result["ci"] = start_ci(repo)
+    receipt.unlink(missing_ok=True)
+    return result
+
+
+def recover_deliveries(repo: Repo) -> list[dict[str, Any]]:
+    """Only replay receipts whose push reached staging or green master."""
+    recovered = []
+    for receipt in sorted(delivery_receipts(repo).glob("*.json")):
+        try:
+            data = json.loads(receipt.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue  # another local session finished this receipt
+        if any(repo.git_ok("merge-base", "--is-ancestor", data["head"], repo.remote_ref(branch))
+               for branch in (repo.config.staging, repo.config.master)):
+            recovered.append(finish_delivery(repo, receipt, data))
+    return recovered
+
+
 def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     cfg = repo.config
     if repo.git("status", "--porcelain", "--untracked-files=no"):
         raise Fail("working tree has uncommitted changes; commit them first", code=2)
+    fetch(repo)
+    recovered = recover_deliveries(repo)
     staging = repo.remote_ref(cfg.staging)
+    result: dict[str, Any] = {"pushed": False, "reason": "nothing to push"}
     for attempt in range(6):
         integrate(repo)
         before = repo.git("rev-parse", staging)
         head = repo.git("rev-parse", "HEAD")
         if head == before:
-            return {"pushed": False, "reason": "nothing to push"}
+            if not recovered:
+                return result
+            result["recovered"] = recovered
+            break
         if cfg.fast and not args.skip_checks:
             if run_shell(cfg.fast, repo.top) != 0:
                 raise Fail("fast checks failed; fix them and run `enact push` again", code=2)
+        commits = repo.git("rev-list", "--reverse", f"{before}..{head}").split()
+        graph = Beads(repo).all() if args.bead else []
+        bead = next((b for b in graph if b["id"] == args.bead), {})
+        if args.bead and not bead:
+            raise Fail(f"bead {args.bead} not found")
+        data = {"bead": args.bead, "head": head, "commits": commits,
+                "history": list(dict.fromkeys((meta(bead, "enact_commits") or "").split() + commits)),
+                "runs": bead_runs(bead, graph), "ci": bool(cfg.slow and not args.no_ci)}
+        receipt = delivery_receipts(repo) / f"{head}.json"
+        # Write before the remote mutation, so a lost push response is recoverable.
+        write_json(receipt, data)
         if repo.git_ok("push", "-q", cfg.remote, f"HEAD:refs/heads/{cfg.staging}"):
+            result = {"pushed": True, **finish_delivery(repo, receipt, data)}
+            if recovered:
+                result["recovered"] = recovered
             break
         log(f"push to {cfg.staging} rejected (attempt {attempt + 1}); re-integrating")
+        fetch(repo)
+        recovered += recover_deliveries(repo)
     else:
         raise Fail(f"could not push to {cfg.staging} after repeated attempts")
-    commits = repo.git("rev-list", "--reverse", f"{before}..{head}").split()
-    result: dict[str, Any] = {"pushed": True, "staging": head, "commits": commits}
     result["local_branches"] = track_local_branches(repo)
-    if args.bead:
-        beads = Beads(repo)
-        beads.set_meta(args.bead, {"enact_commits": " ".join(commits)}, actor=session_actor())
-        beads.run("comments", "add", args.bead,
-                  f"Pushed to {cfg.staging}: {before[:10]}..{head[:10]}", actor=session_actor())
-        result["sync"] = sync(repo)
-    if cfg.slow and not args.no_ci:
-        result["ci"] = start_ci(repo)
     branch = repo.git("rev-parse", "--abbrev-ref", "HEAD")
     in_enact_tree = (
         repo.top.resolve().parent == repo.worktree_root().resolve() and repo.top != repo.main
@@ -987,7 +1109,9 @@ def ci_status(repo: Repo) -> dict[str, Any]:
         except ValueError:
             pid = 0
     last = repo.state / "ci-last"
+    outcome = repo.state / "ci-result.json"
     return {
+        "result": json.loads(outcome.read_text()) if outcome.exists() else None,
         "running": pid_alive(pid),
         "pid": pid or None,
         "last_tested": last.read_text().strip() if last.exists() else None,
@@ -999,16 +1123,24 @@ def start_ci(repo: Repo) -> dict[str, Any]:
     status = ci_status(repo)
     if status["running"]:
         return {"started": False, "reason": "runner already active", **status}
-    log_file = open(repo.state / "ci.log", "a", encoding="utf-8")
-    cmd = [sys.executable, str(Path(__file__).resolve()), "ci"]
+    # The caller may be delivering Enact itself and remove its own worktree.
+    # Keep an immutable copy in the git common directory before launching.
+    source = Path(__file__).read_bytes()
+    runner = repo.state / f"ci-runner-{hashlib.sha256(source).hexdigest()}.py"
+    if not runner.exists():
+        temp = runner.with_suffix(f".{os.getpid()}.tmp")
+        temp.write_bytes(source)
+        temp.replace(runner)
+    cmd = [sys.executable, str(runner), "ci"]
     kwargs: dict[str, Any] = {}
     if WINDOWS:
         kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED | NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
-    proc = subprocess.Popen(
-        cmd, cwd=repo.main, stdout=log_file, stderr=log_file, stdin=subprocess.DEVNULL, **kwargs
-    )
+    with open(repo.state / "ci.log", "a", encoding="utf-8") as log_file:
+        proc = subprocess.Popen(
+            cmd, cwd=repo.main, stdout=log_file, stderr=log_file, stdin=subprocess.DEVNULL, **kwargs
+        )
     return {"started": True, "pid": proc.pid, "log": str(repo.state / "ci.log")}
 
 
@@ -1020,6 +1152,14 @@ def report_ci_failure(repo: Repo, tip: str, green: str, log_tail: str) -> str:
     beads = Beads(repo)
     sync(repo)
     os_name = ci_os()
+    graph = beads.all()
+    runs = list(dict.fromkeys(
+        run_id for bead in graph
+        if any(repo.git_ok("merge-base", "--is-ancestor", sha, tip)
+               and not repo.git_ok("merge-base", "--is-ancestor", sha, green)
+               for sha in (meta(bead, "enact_commits") or "").split())
+        for run_id in bead_runs(bead, graph)
+    ))
     open_stewards = [
         b
         for b in beads.json("list", "--label", "role:steward", "-n", "0") or []
@@ -1033,6 +1173,12 @@ def report_ci_failure(repo: Repo, tip: str, green: str, log_tail: str) -> str:
     if open_stewards:
         bead_id = open_stewards[0]["id"]
         beads.run("comments", "add", bead_id, body)
+        # Preserve inferred legacy associations before replacing the old range.
+        runs += [b["id"] for b in graph if b.get("issue_type") == "epic"
+                 and bead_id in run_delivery(repo, graph, b["id"])["stewards"]]
+        runs = list(dict.fromkeys((meta(open_stewards[0], "enact_runs") or "").split() + runs))
+        beads.set_meta(bead_id, {"enact_runs": " ".join(runs),
+                                 "enact_ci_range": f"{green}..{tip}"})
     else:
         created = beads.json(
             "create",
@@ -1041,7 +1187,8 @@ def report_ci_failure(repo: Repo, tip: str, green: str, log_tail: str) -> str:
             "--acceptance", f"`{repo.config.slow}` passes on {os_name} at the staging tip.",
             "--priority", "0",
             "--labels", "role:steward",
-            "--metadata", json.dumps({"enact_ci_os": os_name, "enact_ci_range": f"{green}..{tip}"}),
+            "--metadata", json.dumps({"enact_ci_os": os_name, "enact_ci_range": f"{green}..{tip}",
+                                     "enact_runs": " ".join(runs)}),
         )
         bead_id = created["id"]
     sync(repo)
@@ -1082,9 +1229,24 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
                 fetch(repo)
                 tip = repo.git("rev-parse", repo.remote_ref(cfg.staging), cwd=repo.main)
                 last = last_file.read_text().strip() if last_file.exists() else ""
+                outcome = repo.state / "ci-result.json"
+                previous = json.loads(outcome.read_text()) if outcome.exists() else {}
                 if tip == last:
-                    break
-                results.append(ci_run_once(repo, tip))
+                    # A passing check can lose a promotion race or network push.
+                    if (previous.get("tip") == tip and previous.get("passed")
+                            and not previous.get("master_advanced")):
+                        previous["master_advanced"] = ci_pass(repo, tip)
+                        write_json(outcome, previous)
+                        results.append(previous)
+                    if previous.get("tip") == tip or repo.git_ok(
+                        "merge-base", "--is-ancestor", tip, repo.remote_ref(cfg.master)
+                    ):
+                        break
+                    # Legacy last-tested files have no outcome. Recheck an
+                    # unpromoted tip once rather than stranding an old run.
+                result = ci_run_once(repo, tip)
+                write_json(outcome, result)
+                results.append(result)
                 last_file.write_text(tip)
         finally:
             lock.unlink(missing_ok=True)
@@ -1141,6 +1303,7 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     sync(repo)
     local_branches = fetch(repo, check=False)
+    recover_deliveries(repo)
     graph = Beads(repo).all()
     here = host_name()
     ours = [b for b in graph if spawned_here(b, here, provider())]
@@ -1174,6 +1337,11 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
         "unarchived": unarchived,
         "ci": ci_status(repo),
         "master_lag": int(lag) if lag.isdigit() else None,
+        "staging": repo.git("rev-parse", staging, check=False),
+        "pending_deliveries": {
+            b["id"]: delivery for b in graph if b.get("issue_type") == "epic"
+            if not (delivery := run_delivery(repo, graph, b["id"]))["complete"]
+        },
         "local_branches": local_branches,
         "justiciar": justiciar_state(repo),
         "open_stewards": [

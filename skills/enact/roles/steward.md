@@ -12,6 +12,8 @@ The slow-CI runner filed your bead. It records:
   analysis: the cause is often visible in the log.
 - `enact_ci_range`: `<last green master>..<failing tip>`, the untested
   commits. Several pushes may be folded into one run.
+- `enact_runs`: affected run epics, retained across repeated failures and
+  repairs. `enact push --bead` records your repair commits for those runs.
 - The description and comments: a log tail for each failing run. More
   comments mean later runs also failed, possibly for other reasons.
 
@@ -38,8 +40,8 @@ The slow-CI runner filed your bead. It records:
 Close once your fix is pushed and passed the slow suite locally. If more
 failures appear in comments that your fix does not cover, fix them too or
 file a separate `role:steward` bead with the evidence. A Steward bead that
-stays open blocks nothing, but master stays frozen at the last green commit
-until slow CI passes again.
+stays open prevents affected runs from completing. Their repair commits must
+reach master through slow CI before the viziers finish.
 
 If the failure is infrastructure (a CI tool missing, disk full, a network
 service down) rather than code, that is an emergency: request a Justiciar as

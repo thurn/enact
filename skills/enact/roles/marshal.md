@@ -18,7 +18,10 @@ after errors.
 - `enact status`: prints the `working` beads spawned on this host by this
   host app (with `session`, `assignee`, `updated_at`; a Codex vizier's beads
   are its own Marshal's job), closed but `unarchived` sessions, the slow-CI
-  runner (`ci`), the Justiciar lock and open Steward beads.
+  runner (`ci`), `staging` tip, the Justiciar lock and open Steward beads.
+  `pending_deliveries` identifies epics still awaiting green master or required
+  Stewards, even if those epics are closed. Keep their viziers in recovery
+  through the host app that owns them.
 - In Claude Desktop, load the session tools (`list_sessions`, `get_session`,
   `send_message`, `archive_session`) with ToolSearch.
 
@@ -54,8 +57,9 @@ Then:
   than an hour, the vizier is not picking it up; treat that like a dead
   vizier, below.
 - **Vizier**: find this project's vizier sessions (titles starting with
-  🔮) with `list_sessions`. If a vizier for an open epic is not running, its
-  loop has died, and a scheduled task cannot restart it in Claude Desktop.
+  🔮) with `list_sessions`. If a vizier for an open epic or pending delivery
+  is not running, its loop has died, and a scheduled task cannot restart it
+  in Claude Desktop.
   Send the user a push notification: "Enact vizier for <epic> stopped; open
   it and say 'resume'." Send this at most once every 6 hours per vizier:
   record it with `enact meta <epic> enact_marshal_notified=<UTC time>` and
