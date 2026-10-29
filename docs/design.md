@@ -182,6 +182,12 @@ in [the desktop support audit](audit-2026-10-29.md).
   most tools (pytest, unittest discovery, tsc globs) from descending into it;
   projects whose tools do not skip dot-directories should exclude it.
   Projects with an explicit `root` in `.enact.toml` keep it.
+- `enact setup` ignores and untracks bd's audit log,
+  `.beads/interactions.jsonl`. bd appends to it on every claim and close in
+  the main checkout, which Enact never commits to, so a tracked copy kept
+  `master` dirty and blocked fast-forwarding it. The issue history it
+  duplicates lives in Dolt. Existing projects pick this up by re-running
+  `enact setup` and committing the result.
 - `.enact.toml`: fast/slow check commands, `[worktree]` root plus optional
   full-replacement `create`/`remove` hooks (env: `ENACT_WORKTREE_PATH`,
   `ENACT_BRANCH`, `ENACT_BASE_SHA`, `ENACT_REPO`), optional

@@ -158,6 +158,9 @@ class EnactTest(unittest.TestCase):
         self.assertEqual(self.remote_sha("staging"), self.remote_sha("master"))
         self.assertTrue((self.a.path / ".beads").is_dir())
         self.assertIn("/.worktrees/", (self.a.path / ".gitignore").read_text())
+        # bd's audit log is ignored, not tracked, so it never dirties master.
+        self.assertEqual(self.a.git("ls-files", ".beads/interactions.jsonl"), "")
+        self.assertIn("/.beads/interactions.jsonl", (self.a.path / ".gitignore").read_text())
 
     def test_worktrees_live_ignored_inside_the_checkout(self):
         path = Path(self.a.enact("worktree", "create", "inside")["path"])

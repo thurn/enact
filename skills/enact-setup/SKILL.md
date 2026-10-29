@@ -41,7 +41,9 @@ Run from the project's main checkout.
    propose one.
 4. **Run** `enact setup --prefix <short beads prefix> --master <branch>
    --fast "<cmd>" --slow "<cmd>"`. It writes `.enact.toml` (if missing),
-   adds the worktree root (`/.worktrees/` by default) to `.gitignore`,
+   adds the worktree root (`/.worktrees/` by default) and bd's audit log
+   (`/.beads/interactions.jsonl`, also removed from the index) to
+   `.gitignore`,
    initializes Beads (if missing; `bd init` commits `.beads/` on the current
    branch) or bootstraps the local Beads database from the remote on a fresh
    clone, creates `origin/staging` from the integration branch (if missing)

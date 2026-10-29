@@ -217,7 +217,10 @@ class Repo:
             rel = self.worktree_root().relative_to(self.main.resolve())
         except ValueError:
             return None  # outside the checkout
-        pattern = f"/{rel.as_posix()}/"
+        return self.ignore(ignore_file, f"/{rel.as_posix()}/")
+
+    def ignore(self, ignore_file: Path, pattern: str) -> str | None:
+        """Append `pattern` to `ignore_file` unless git already ignores it."""
         if self.git_ok("check-ignore", "-q", "--no-index", pattern[1:], cwd=self.main):
             return None
         text = ignore_file.read_text(encoding="utf-8") if ignore_file.exists() else ""
@@ -1278,6 +1281,25 @@ root = ".worktrees"   # inside the checkout; gitignored
 """
 
 
+AUDIT_LOG = ".beads/interactions.jsonl"
+
+
+def untrack_audit_log(repo: Repo) -> str:
+    """Ignore bd's audit log and drop it from the index.
+
+    bd appends to it in the main checkout, which Enact never commits to, so a
+    tracked copy leaves the checkout dirty and blocks fast-forwards. The
+    issue data itself lives in Dolt.
+    """
+    changes = []
+    if repo.ignore(repo.main / ".gitignore", f"/{AUDIT_LOG}"):
+        changes.append("ignored")
+    if repo.git_ok("ls-files", "--error-unmatch", AUDIT_LOG, cwd=repo.main):
+        repo.git("rm", "-q", "--cached", AUDIT_LOG, cwd=repo.main)
+        changes.append("untracked")
+    return " and ".join(changes) or "unchanged"
+
+
 def cmd_setup(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     report: dict[str, Any] = {}
@@ -1311,6 +1333,7 @@ def cmd_setup(args: argparse.Namespace) -> dict[str, Any]:
     else:
         report["beads"] = "present"
     report["gitignore"] = repo.ignore_worktree_root(repo.main / ".gitignore") or "unchanged"
+    report["audit_log"] = untrack_audit_log(repo)
     repo.git("config", "beads.role", "maintainer", cwd=repo.main, check=False)
     cfg = repo.config
     repo.git("fetch", "-q", cfg.remote, cwd=repo.main, check=False)
