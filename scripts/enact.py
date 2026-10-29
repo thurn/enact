@@ -727,6 +727,68 @@ def cmd_justiciar(args: argparse.Namespace) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Local branches that track the remote
+
+TRACKED_OK = ("current", "fast-forwarded", "created")
+
+
+def fetch(repo: Repo, check: bool = True) -> dict[str, str]:
+    repo.git("fetch", "-q", repo.config.remote, cwd=repo.main, check=check)
+    return track_local_branches(repo)
+
+
+def checked_out_branches(repo: Repo) -> dict[str, Path]:
+    """Map each branch ref checked out in a worktree to that worktree."""
+    found: dict[str, Path] = {}
+    path = None
+    for line in repo.git("worktree", "list", "--porcelain", cwd=repo.main).splitlines():
+        if line.startswith("worktree "):
+            path = Path(line[len("worktree "):])
+        elif line.startswith("branch ") and path:
+            found[line[len("branch "):]] = path
+    return found
+
+
+def track_branch(repo: Repo, branch: str, checkout: Path | None) -> str:
+    remote_ref = repo.remote_ref(branch)
+    remote = repo.git("rev-parse", "-q", "--verify", remote_ref, cwd=repo.main, check=False)
+    if not remote:
+        return "no remote branch"
+    ref = f"refs/heads/{branch}"
+    local = repo.git("rev-parse", "-q", "--verify", ref, cwd=repo.main, check=False)
+    if not local:
+        ok = repo.git_ok("branch", "-q", "--track", branch, remote_ref, cwd=repo.main)
+        return "created" if ok else "could not create"
+    if local == remote:
+        return "current"
+    if not repo.git_ok("merge-base", "--is-ancestor", local, remote, cwd=repo.main):
+        return "diverged"
+    if checkout is None:
+        ok = repo.git_ok("update-ref", ref, remote, local, cwd=repo.main)
+        return "fast-forwarded" if ok else "moved concurrently"
+    if repo.git("status", "--porcelain", "--untracked-files=no", cwd=checkout, check=False):
+        return f"checkout {checkout} has local changes"
+    ok = repo.git_ok("merge", "--ff-only", "-q", remote, cwd=checkout)
+    return "fast-forwarded" if ok else f"fast-forward failed in {checkout}"
+
+
+def track_local_branches(repo: Repo) -> dict[str, str]:
+    """Fast-forward local staging and master to their remote branches.
+
+    Best effort: a diverged branch or a dirty checkout is left alone and
+    reported, never fixed.
+    """
+    checkouts = checked_out_branches(repo)
+    result = {}
+    for branch in dict.fromkeys((repo.config.staging, repo.config.master)):
+        state = track_branch(repo, branch, checkouts.get(f"refs/heads/{branch}"))
+        if state not in TRACKED_OK:
+            log(f"local {branch} not updated: {state}")
+        result[branch] = state
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Worktrees
 
 
@@ -773,7 +835,7 @@ def cmd_worktree(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     branch = f"enact/{args.name}"
     if args.action == "create":
-        repo.git("fetch", "-q", repo.config.remote, cwd=repo.main)
+        fetch(repo)
         base = repo.git("rev-parse", repo.remote_ref(repo.config.staging), cwd=repo.main)
         path = create_worktree(repo, args.name, branch, base)
         return {"path": str(path), "branch": branch, "base": base}
@@ -790,7 +852,7 @@ def integrate(repo: Repo) -> None:
     """Rebase onto the remote staging tip, then fold in a diverged master."""
     staging = repo.remote_ref(repo.config.staging)
     master = repo.remote_ref(repo.config.master)
-    repo.git("fetch", "-q", repo.config.remote)
+    fetch(repo)
     if not repo.git_ok("rebase", "-q", staging):
         raise Fail(
             f"rebase onto {staging} hit conflicts: resolve them, run "
@@ -830,6 +892,7 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
         raise Fail(f"could not push to {cfg.staging} after repeated attempts")
     commits = repo.git("rev-list", "--reverse", f"{before}..{head}").split()
     result: dict[str, Any] = {"pushed": True, "staging": head, "commits": commits}
+    result["local_branches"] = track_local_branches(repo)
     if args.bead:
         beads = Beads(repo)
         beads.set_meta(args.bead, {"enact_commits": " ".join(commits)}, actor=session_actor())
@@ -973,7 +1036,10 @@ def ci_pass(repo: Repo, tip: str) -> bool:
     ):
         log(f"{master} is not an ancestor of {tip}; leaving master alone")
         return False
-    return repo.git_ok("push", "-q", cfg.remote, f"{tip}:refs/heads/{cfg.master}")
+    if not repo.git_ok("push", "-q", cfg.remote, f"{tip}:refs/heads/{cfg.master}"):
+        return False
+    track_local_branches(repo)
+    return True
 
 
 def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
@@ -993,7 +1059,7 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
             return {"ran": results, "reason": "another runner holds the lock"}
         try:
             while True:
-                repo.git("fetch", "-q", cfg.remote, cwd=repo.main)
+                fetch(repo)
                 tip = repo.git("rev-parse", repo.remote_ref(cfg.staging), cwd=repo.main)
                 last = last_file.read_text().strip() if last_file.exists() else ""
                 if tip == last:
@@ -1002,7 +1068,7 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
                 last_file.write_text(tip)
         finally:
             lock.unlink(missing_ok=True)
-        repo.git("fetch", "-q", cfg.remote, cwd=repo.main)
+        fetch(repo)
         tip = repo.git("rev-parse", repo.remote_ref(cfg.staging), cwd=repo.main)
         if tip == (last_file.read_text().strip() if last_file.exists() else ""):
             return {"ran": results}
@@ -1044,6 +1110,7 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
     """Everything the Marshal needs for its sweep of this machine."""
     repo = find_repo()
     sync(repo)
+    local_branches = fetch(repo, check=False)
     graph = Beads(repo).all()
     here = host_name()
     working = [
@@ -1076,6 +1143,7 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
         "unarchived": unarchived,
         "ci": ci_status(repo),
         "master_lag": int(lag) if lag.isdigit() else None,
+        "local_branches": local_branches,
         "justiciar": justiciar_state(repo),
         "open_stewards": [
             b["id"] for b in graph if role_of(b) == "steward" and b.get("status") != "closed"
@@ -1242,6 +1310,7 @@ def cmd_setup(args: argparse.Namespace) -> dict[str, Any]:
         report["staging"] = f"created from {base}"
     else:
         report["staging"] = "present"
+    report["local_branches"] = track_local_branches(repo)
     report["beads_remote"] = beads.has_remote()
     if report["beads_remote"]:
         report["sync"] = sync(repo)

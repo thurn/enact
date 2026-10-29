@@ -19,6 +19,14 @@ of truth for role definitions; this file records the decisions made on top.
   - Fail: at most one open P0 Steward bead per project per OS, unparented;
     later failures add a comment with the new range and log excerpt.
 - Machines run slow CI independently; any machine's pass advances master.
+- Local `staging` and `master` track `origin/staging` and `origin/master`
+  (as Tollgate does for local master): every helper fetch, push to staging,
+  slow-CI pass and Marshal `enact status` fast-forwards them. A branch
+  checked out in a worktree (normally `master` in the main checkout) moves
+  with `git merge --ff-only` only when that checkout has no tracked changes;
+  others move with a compare-and-swap `update-ref`. Diverged or dirty
+  branches are left alone and reported (`local_branches`), never rebased:
+  nobody commits on them.
 - Executors keep pushing while staging is red.
 
 ## Beads

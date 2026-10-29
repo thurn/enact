@@ -227,9 +227,30 @@ class EnactTest(unittest.TestCase):
         wt = Path(self.a.enact("worktree", "create", "ci1")["path"])
         self.configure_git(wt)
         self.a.commit_file("ok.txt", "ok", cwd=wt)
-        tip = self.a.enact("push", cwd=wt)["staging"]
+        result = self.a.enact("push", cwd=wt)
+        tip = result["staging"]
+        self.assertEqual(self.a.git("rev-parse", "staging"), tip)
         self.wait_for_ci(self.a)
         self.assertEqual(self.remote_sha("master"), tip)
+        # The checked-out local master follows, files included.
+        self.assertEqual(self.a.git("rev-parse", "master"), tip)
+        self.assertTrue((self.a.path / "ok.txt").exists())
+
+    def test_local_branches_left_alone_when_dirty_or_diverged(self):
+        b = self.clone("b", "host-b", "sess-b")
+        (self.a.path / "check.py").write_text(CHECK_PY + "# local edit\n")
+        before = self.a.git("rev-parse", "master")
+        b.git("checkout", "-q", "-b", "work", "origin/staging")
+        b.commit_file("peer.txt", "peer")
+        b.enact("push", "--no-ci")
+        b.git("push", "-q", "origin", "origin/staging:refs/heads/master")
+        local = self.a.enact("status")["local_branches"]
+        self.assertEqual(local["staging"], "fast-forwarded")
+        self.assertIn("local changes", local["master"])
+        self.assertEqual(self.a.git("rev-parse", "master"), before)
+        self.a.git("checkout", "-q", "check.py")
+        self.a.commit_file("mine.txt", "mine")
+        self.assertEqual(self.a.enact("status")["local_branches"]["master"], "diverged")
 
     def test_slow_ci_failure_files_one_steward_bead(self):
         for name in ("SLOW", "more.txt"):

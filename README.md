@@ -55,6 +55,7 @@ dependency: two skills, eight short role prompts and a stdlib Python helper.
    staging), files follow-up beads and closes its bead.
 4. `enact push` starts a coalescing slow-CI runner on the machine. A pass
    fast-forwards `master`; a failure files one P0 Steward bead per OS.
+   Local `staging` and `master` are fast-forwarded to track the remote.
 
 ## Setup
 

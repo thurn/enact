@@ -14,7 +14,9 @@
      the same worktree and run it again.
 - Never commit to, or push directly to, `master` or `staging`. `master`
   advances only when slow CI passes on `staging`; a slow-CI failure files a
-  P0 Steward bead. `enact ci --status` shows the runner and its log.
+  P0 Steward bead. `enact ci --status` shows the runner and its log. Enact
+  fast-forwards local `staging` and `master` to match the remote, so keep
+  the main checkout clean.
 - Fast and slow check commands are in `.enact.toml`.
 - Beads live in this repo (`bd`); publish bead changes with `enact sync`.
 - Work can run unattended with Enact (`/enact <bead|plan|task>`); most work
