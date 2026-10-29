@@ -366,7 +366,10 @@ Findings and adjustments made while implementing (2026-10-28):
   still require draining old checks before upgrading.
 - Normal slow CI includes a real-git, real-CLI regression with deterministic
   barriers before spawn, after spawn, after PID publication, after
-  authorization and inside the running check. It kills only the coordinator,
-  checks exclusion and worktree preservation, then verifies recovery and a
-  single completed check. Local execution evidence is macOS; Windows and
-  Linux use portable stdlib paths but have not been executed in this change.
+  authorization, inside the running check, before worktree cleanup and
+  before result recording. It kills only the coordinator, checks exclusion
+  and worktree preservation through cleanup, then verifies recovery and a
+  single completed check. Ownership must extend beyond command exit until
+  the keeper finishes cleanup and records its outcome. Local execution
+  evidence is macOS; Windows and Linux use portable stdlib paths but have
+  not been executed in this change.

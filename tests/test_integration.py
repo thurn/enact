@@ -55,7 +55,8 @@ class CiLifetimeTest(unittest.TestCase):
         self.fail("CI process did not reach the expected state")
 
     def test_coordinator_crash_across_check_handoff(self):
-        for phase in ("before_spawn", "spawned", "published", "authorized", "running"):
+        for phase in ("before_spawn", "spawned", "published", "authorized",
+                      "running", "cleanup", "recording"):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory).resolve()
                 repo, origin = root / "repo", root / "origin.git"
@@ -107,9 +108,16 @@ class CiLifetimeTest(unittest.TestCase):
                     "        if phase == 'spawned': pause()\n"
                     "    return child\n"
                     "def write(path, value):\n"
+                    "    if path.name == 'ci-result.json' and phase == 'recording': pause()\n"
                     "    original_write(path, value)\n"
                     "    if path.name == 'ci.lock' and value != os.getpid() and phase == 'published': pause()\n"
                     "enact.subprocess.Popen, enact.write_json = spawn, write\n"
+                    "if '--check-worker' in sys.argv and phase == 'cleanup':\n"
+                    "    original_remove = enact.remove_worktree\n"
+                    "    def remove(*args):\n"
+                    "        pause()\n"
+                    "        return original_remove(*args)\n"
+                    "    enact.remove_worktree = remove\n"
                     "if '--check-worker' in sys.argv and phase == 'authorized':\n"
                     "    original_check = enact.ci_run_once\n"
                     "    def check(*args):\n"
@@ -119,6 +127,8 @@ class CiLifetimeTest(unittest.TestCase):
                     "sys.exit(enact.main())\n"
                 )
                 state = repo / ".git" / "enact"
+                if phase in ("cleanup", "recording"):
+                    (root / "finish-check").touch()
 
                 def cli(*args):
                     result = subprocess.run(
@@ -140,16 +150,20 @@ class CiLifetimeTest(unittest.TestCase):
                         self.assertIn("another runner", cli()["reason"])
                         coordinator.kill()
                         coordinator.wait(timeout=10)
-                        if phase in ("authorized", "running"):
+                        if phase in ("authorized", "running", "cleanup", "recording"):
                             self.assertTrue(cli("--status")["running"])
                             self.assertIn("another runner", cli()["reason"])
-                            (root / "resume").touch()
+                            if phase == "authorized":
+                                (root / "resume").touch()
                             self.wait_for((root / "started-ready").exists)
                             pid, cwd = json.loads((root / "started").read_text().splitlines()[0])
                             sentinel = Path(cwd) / "check-sentinel"
-                            self.assertEqual(sentinel.read_text(), str(pid))
                             self.assertIn("another runner", cli()["reason"])
-                            self.assertEqual(sentinel.read_text(), str(pid))
+                            if phase == "recording":
+                                self.assertFalse(Path(cwd).exists())
+                            else:
+                                self.assertEqual(sentinel.read_text(), str(pid))
+                            (root / "resume").touch()
                             (root / "finish-check").touch()
                             self.wait_for(lambda: (state / "ci-last").exists())
                             self.wait_for(lambda: not cli("--status")["running"])
