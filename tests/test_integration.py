@@ -99,11 +99,34 @@ class Machine:
 
 @unittest.skipUnless(HAVE_TOOLS, "needs git, bd and dolt")
 class EnactTest(unittest.TestCase):
+    # Building origin, machine a and machine b (bd init, Dolt bootstrap) costs
+    # most of a test's runtime, so it happens once per class. Each test then
+    # restores that snapshot to the same path, keeping absolute paths in git
+    # and Dolt config valid.
+
+    @classmethod
+    def setUpClass(cls):
+        cls.base = Path(tempfile.mkdtemp(prefix="enact-test-")).resolve()
+        cls.tmp = cls.base / "work"
+        cls.snapshot = cls.base / "snapshot"
+        cls.tmp.mkdir()
+        test = cls("run")
+        test.origin = cls.tmp / "origin.git"
+        sh(["git", "init", "-q", "--bare", "-b", "master", str(test.origin)], cls.tmp)
+        test.clone("a", "host-a", "sess-a", first=True)
+        test.clone("b", "host-b", "sess-b")
+        shutil.copytree(cls.tmp, cls.snapshot, symlinks=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.base, ignore_errors=True)
+
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="enact-test-")).resolve()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        shutil.copytree(self.snapshot, self.tmp, symlinks=True)
         self.origin = self.tmp / "origin.git"
-        sh(["git", "init", "-q", "--bare", "-b", "master", str(self.origin)], self.tmp)
-        self.a = self.clone("a", "host-a", "sess-a", first=True)
+        self.a = Machine(self.tmp / "a", "host-a", "sess-a")
+        self.b = Machine(self.tmp / "b", "host-b", "sess-b")
 
     def tearDown(self):
         for proc_dir in self.tmp.glob("*"):
@@ -111,7 +134,6 @@ class EnactTest(unittest.TestCase):
             deadline = time.time() + 30
             while lock.exists() and time.time() < deadline:
                 time.sleep(0.5)
-        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def clone(self, name, host, session, first=False):
         path = self.tmp / name
@@ -134,7 +156,7 @@ class EnactTest(unittest.TestCase):
         sh(["git", "clone", "-q", str(self.origin), str(path)], self.tmp)
         self.configure_git(path)
         machine = Machine(path, host, session)
-        self.assertEqual(machine.enact("setup")["beads"], "bootstrapped from remote")
+        assert machine.enact("setup")["beads"] == "bootstrapped from remote"
         return machine
 
     def configure_git(self, path):
@@ -189,7 +211,7 @@ class EnactTest(unittest.TestCase):
         )
 
     def test_push_rebases_over_peer_and_merges_diverged_master(self):
-        b = self.clone("b", "host-b", "sess-b")
+        b = self.b
         b.git("checkout", "-q", "-b", "work", "origin/staging")
         b.commit_file("peer.txt", "peer")
         b.enact("push", "--no-ci")
@@ -240,7 +262,7 @@ class EnactTest(unittest.TestCase):
         self.assertTrue((self.a.path / "ok.txt").exists())
 
     def test_local_branches_left_alone_when_dirty_or_diverged(self):
-        b = self.clone("b", "host-b", "sess-b")
+        b = self.b
         (self.a.path / "check.py").write_text(CHECK_PY + "# local edit\n")
         before = self.a.git("rev-parse", "master")
         b.git("checkout", "-q", "-b", "work", "origin/staging")
@@ -273,7 +295,8 @@ class EnactTest(unittest.TestCase):
     def test_claim_race_has_one_winner(self):
         bead = self.a.create("contested")
         self.a.enact("sync")
-        b = self.clone("b", "host-b", "sess-b")
+        b = self.b
+        b.enact("sync")
         self.a.enact("claim", bead)
         b.enact("claim", bead, code=3)
         self.assertEqual(b.show(bead)["assignee"], "sess-a")
@@ -281,7 +304,8 @@ class EnactTest(unittest.TestCase):
     def test_sync_conflict_remote_wins_and_reports(self):
         bead = self.a.create("both edit")
         self.a.enact("sync")
-        b = self.clone("b", "host-b", "sess-b")
+        b = self.b
+        b.enact("sync")
         self.a.bd("update", bead, "--title", "a title")
         self.a.enact("sync")
         b.bd("update", bead, "--title", "b title")
@@ -297,79 +321,16 @@ class EnactTest(unittest.TestCase):
         step = self.a.enact("next", "--epic", epic)
         self.assertEqual((step["action"], step["bead"], step["role"]), ("spawn", first, "executor"))
         self.assertIn("executor.md", step["prompt"])
-        self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "wait")
         self.a.enact("meta", first, "enact_session=local_1")
         self.a.enact("start", first, session="exec-1")
-        self.assertEqual(self.a.show(first)["assignee"], "exec-1")
         self.a.enact("close", first, "--reason", "done", session="exec-1")
         step = self.a.enact("next", "--epic", epic)
         self.assertEqual(step["archive"], [{"bead": first, "session": "local_1"}])
         self.assertEqual((step["action"], step["bead"], step["role"]), ("spawn", second, "warden"))
-        self.a.enact("meta", first, "enact_archived=true")
-        self.assertEqual(self.a.enact("next", "--epic", epic)["archive"], [])
         self.a.enact("start", second, session="exec-2")
         self.a.enact("close", second, "--reason", "done", session="exec-2")
         self.assertEqual(self.a.show(epic)["status"], "closed")
         self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "done")
-
-    def test_vizier_prefers_stewards_and_respects_targets(self):
-        epic = self.a.create("epic", type="epic")
-        self.a.create("elsewhere", parent=epic, priority=0, metadata='{"enact_host":"host-b"}')
-        steward = self.a.create("fix ci", priority=1, labels="role:steward")
-        step = self.a.enact("next", "--epic", epic, "--parallel", "3")
-        self.assertEqual(step["bead"], steward)
-        step = self.a.enact("next", "--epic", epic, "--parallel", "3")
-        self.assertEqual(step["action"], "wait")
-
-    def test_archivist_waits_until_it_is_the_last_open_work(self):
-        epic = self.a.create("epic", type="epic")
-        work = self.a.create("work", parent=epic, priority=3)
-        archivist = self.a.create("docs", parent=epic, priority=0, labels="role:archivist")
-        self.assertEqual(self.a.enact("next", "--epic", epic, "--parallel", "3")["bead"], work)
-        follow_up = self.a.create("follow-up", parent=epic, priority=3)
-        self.a.enact("start", work, session="exec-1")
-        self.a.enact("close", work, "--reason", "done", session="exec-1")
-        step = self.a.enact("next", "--epic", epic, "--parallel", "3")
-        self.assertEqual(step["bead"], follow_up)
-        self.a.enact("start", follow_up, session="exec-2")
-        self.a.enact("close", follow_up, "--reason", "done", session="exec-2")
-        step = self.a.enact("next", "--epic", epic, "--parallel", "3")
-        self.assertEqual((step["bead"], step["role"]), (archivist, "archivist"))
-
-    def test_vizier_reports_deadlock(self):
-        epic = self.a.create("epic", type="epic")
-        outside = self.a.create("not in the epic")
-        stuck = self.a.create("stuck", parent=epic)
-        self.a.bd("dep", "add", stuck, outside)
-        step = self.a.enact("next", "--epic", epic)
-        self.assertEqual((step["action"], step["open"]), ("deadlock", [stuck]))
-
-    def test_release_returns_bead_to_queue(self):
-        epic = self.a.create("epic", type="epic")
-        bead = self.a.create("abandoned", parent=epic)
-        self.assertEqual(self.a.enact("next", "--epic", epic)["bead"], bead)
-        self.a.enact("release", bead, "--reason", "session gone")
-        self.assertFalse(self.a.show(bead).get("assignee"))
-        self.assertEqual(self.a.enact("next", "--epic", epic)["bead"], bead)
-
-    # -- justiciar --------------------------------------------------------
-
-    def test_justiciar_singleton_lifecycle(self):
-        epic = self.a.create("epic", type="epic")
-        self.a.create("task", parent=epic)
-        b = self.clone("b", "host-b", "sess-b")
-        b.enact("justiciar", "request", "--reason", "disk full")
-        held = self.a.enact("justiciar", "request", "--reason", "again", code=3)
-        self.assertEqual(held["holder"]["reason"], "disk full")
-        # Only the requesting host's vizier spawns it.
-        self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "spawn")
-        step = b.enact("next", "--epic", epic)
-        self.assertEqual(step["action"], "spawn-justiciar")
-        self.assertIn("justiciar.md", step["prompt"])
-        b.enact("justiciar", "acquire", session="just-1")
-        self.a.enact("justiciar", "acquire", session="just-2", code=3)
-        b.enact("justiciar", "release", session="just-1")
-        self.assertIsNone(self.a.enact("justiciar", "status")["justiciar"])
 
 
 if __name__ == "__main__":

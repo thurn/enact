@@ -239,6 +239,13 @@ Findings and adjustments made while implementing (2026-10-28):
   exist and push-notified about an epic with no live vizier.
 - Tests use stdlib `unittest` rather than pytest, keeping the repository
   dependency-free.
+- Slow CI (2026-10-29): the integration suite builds origin and two machines
+  once per class and restores that snapshot to the same path before each
+  test, since `bd init` and bootstrap dominated runtime. Tests of rarely used
+  coordination paths (Justiciar, release, deadlock, steward priority) and the
+  Archivist hold, already unit-tested, were deleted rather than made opt-in: every test runs in fast or slow checks or
+  does not exist. The remaining cost is real: each `bd` call starts embedded
+  Dolt (~0.7s) and `enact next` performs three syncs (~5s each).
 - Codex: `agents/openai.yaml` sets `allow_implicit_invocation: false`. The
   Codex flow is written from documentation and is unverified.
 

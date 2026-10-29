@@ -24,6 +24,9 @@ Go beyond ordinary code review. Ask:
   call order; heavy mocking of internals; duplicated coverage. Replace them
   with fewer black-box tests through public behavior that would actually fail
   on a real regression. Add the missing test for the riskiest behavior.
+  Every test must run in the fast or slow checks. Do not keep a test "to run
+  manually" or move a slow one out of CI into an opt-in suite: nobody runs
+  it, and it rots. Make it cheaper, or delete it.
 - **Design.** Would a different model make whole categories of checks
   unnecessary? Look for duplicated or derivable state, illegal states the
   types allow, nullable modes and boolean flags, responsibilities in the wrong

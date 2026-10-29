@@ -30,6 +30,10 @@ scale than a Warden review:
 - **Bug classes.** For each bug fixed this milestone, what permissive type or
   API admitted it, and what would make it impossible?
 - **Tests.** Suites that would break under a behavior-preserving refactor.
+  Tests outside the fast and slow checks, kept "to run manually": propose
+  making them cheap enough for CI, or deleting them, never keeping them
+  opt-in. Slow checks whose cost is fixture setup rather than the behavior
+  under test.
 - **What comes next.** Read the next milestone's plan: what refactor would
   make it markedly easier or safer to build?
 
