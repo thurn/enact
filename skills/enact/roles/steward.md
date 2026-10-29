@@ -10,8 +10,9 @@ The slow-CI runner filed your bead. It records:
 - `enact_ci_os`: the OS that failed. Prefer fixing it on that OS. If you are
   on a different OS and cannot reproduce, comment and keep going with
   analysis: the cause is often visible in the log.
-- `enact_ci_range`: `<last green master>..<failing tip>`, the untested
-  commits. Several pushes may be folded into one run.
+- `enact_ci_range`: `<last passing commit>..<failing tip>`. The baseline can
+  be a passing commit awaiting promotion after a push failure. Several
+  pushes may be folded into one run.
 - `enact_runs`: affected run epics, retained across repeated failures and
   repairs. `enact push --bead` records your repair commits for those runs.
 - The description and comments: a log tail for each failing run. More

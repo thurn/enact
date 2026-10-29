@@ -284,3 +284,12 @@ Findings and adjustments made while implementing (2026-10-28):
   CI status includes the last outcome, and a passing check whose promotion
   push failed can retry promotion without rerunning the same check. Any
   machine's successful slow CI still suffices; no OS quorum was introduced.
+- Warden recovery checks: retain a passing candidate in its own promotion
+  receipt before attempting the master push. Newer failing checks cannot
+  erase it. Retry that promotion independently of the staging tip, and use
+  its tested commit as the failure baseline so unrelated later failures
+  cannot hold an already-passing run. A peer's promotion of that candidate
+  or a descendant also satisfies the receipt.
+- A Steward's explicit run links may be incomplete when delivery metadata
+  sync recovers after failure reporting. Always supplement those links from
+  the failing range, including closed repairs, before deciding a run is done.

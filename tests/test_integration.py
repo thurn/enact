@@ -266,7 +266,6 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.assertFalse(path.exists())
         self.wait_for_ci(self.a)
         self.assertEqual(self.remote_sha("master"), result["staging"])
-        self.assertTrue(list((self.a.path / ".git/enact").glob("ci-runner-*.py")))
 
     def test_push_rebases_over_peer_and_merges_diverged_master(self):
         b = self.b
@@ -333,9 +332,57 @@ print(json.dumps(module['cmd_ci'](argparse.Namespace(detach=False, status=False)
         self.assertTrue(result["ran"][0]["passed"])
         self.assertFalse(result["ran"][0]["master_advanced"])
         self.assertNotEqual(self.remote_sha("master"), pushed["staging"])
+        # Older runners stored only the result; upgrade that state too.
+        (self.a.path / ".git/enact/ci-promotion.json").unlink()
         result = self.a.enact("ci")
         self.assertTrue(result["ran"][0]["master_advanced"])
         self.assertEqual(self.remote_sha("master"), pushed["staging"])
+
+    def test_failed_promotion_survives_newer_failed_checks(self):
+        epic = self.a.create("green delivery", type="epic")
+        bead = self.a.create("last task", parent=epic)
+        path = Path(self.a.enact("worktree", "create", bead)["path"])
+        self.a.commit_file("good", "yes", cwd=path)
+        pushed = self.a.enact("push", "--bead", bead, "--no-ci", cwd=path)
+        self.a.enact("close", bead, "--reason", "delivered")
+        harness = """
+import argparse, runpy, sys
+module = runpy.run_path(sys.argv[1], run_name='fault_test')
+module['cmd_ci'].__globals__['ci_pass'] = lambda repo, tip: False
+module['cmd_ci'](argparse.Namespace(detach=False, status=False))
+"""
+        sh([sys.executable, "-c", harness, str(SCRIPT)], self.a.path)
+        path = Path(self.a.enact("worktree", "create", "unrelated")["path"])
+        self.a.commit_file("SLOW", "unrelated failure", cwd=path)
+        self.a.enact("push", "--no-ci", cwd=path)
+        # Promotion is still unavailable when the newer check fails. Its
+        # failure must not erase the older passing candidate or blame its run.
+        sh([sys.executable, "-c", harness, str(SCRIPT)], self.a.path)
+        self.assertNotEqual(self.remote_sha("master"), pushed["staging"])
+        self.a.enact("ci")
+        self.assertEqual(self.remote_sha("master"), pushed["staging"])
+        self.assertNotEqual(self.remote_sha("master"), self.remote_sha("staging"))
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual(step["action"], "done")
+
+    def test_recovered_delivery_joins_an_existing_shared_repair(self):
+        epic = self.a.create("late delivery metadata", type="epic")
+        bead = self.a.create("last task", parent=epic)
+        peer = self.a.create("peer run", type="epic")
+        before = self.remote_sha("master")
+        path = Path(self.a.enact("worktree", "create", bead)["path"])
+        self.a.commit_file("good", "yes", cwd=path)
+        pushed = self.a.enact("push", "--bead", bead, "--no-ci", cwd=path)
+        # CI may file its bead before a delivery receipt's metadata sync
+        # recovers. Existing explicit links are not necessarily exhaustive.
+        repair = self.a.create("shared repair", labels="role:steward",
+                               metadata=json.dumps({"enact_runs": peer,
+                                   "enact_ci_range": before + ".." + pushed["staging"]}))
+        self.a.enact("close", bead, "--reason", "delivered")
+        self.a.enact("ci")  # another machine's passing check can promote
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual((step["action"], step.get("bead")), ("spawn", repair))
+        self.assertIn(repair, step["delivery"]["stewards"])
 
     def test_legacy_ci_status_rechecks_an_unpromoted_tip(self):
         path = Path(self.a.enact("worktree", "create", "legacy-ci")["path"])

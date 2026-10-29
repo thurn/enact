@@ -522,15 +522,15 @@ def bead_runs(bead: dict[str, Any], graph: list[dict[str, Any]]) -> list[str]:
 def run_delivery(repo: Repo, graph: list[dict[str, Any]], epic: str) -> dict[str, Any]:
     scope = {epic, *(b["id"] for b in descendants(graph, epic))}
     members = [b for b in graph if b["id"] in scope or epic in bead_runs(b, graph)]
-    # Older CI beads only recorded a failing range. Attribute them by ancestry,
-    # including already-closed repairs, without requiring a metadata migration.
+    # Failure ranges also recover links when delivery metadata arrived after
+    # CI filed the bead. Explicit run links need not be exhaustive.
     while True:
         commits = list(dict.fromkeys(
             sha for b in members for sha in (meta(b, "enact_commits") or "").split()
         ))
         legacy = []
         for bead in graph:
-            if bead in members or role_of(bead) != "steward" or meta(bead, "enact_runs"):
+            if bead in members or role_of(bead) != "steward":
                 continue
             green, sep, tip = (meta(bead, "enact_ci_range") or "").partition("..")
             if sep and any(repo.git_ok("merge-base", "--is-ancestor", sha, tip)
@@ -1110,8 +1110,14 @@ def ci_status(repo: Repo) -> dict[str, Any]:
             pid = 0
     last = repo.state / "ci-last"
     outcome = repo.state / "ci-result.json"
+    promotion = repo.state / "ci-promotion.json"
+    try:
+        pending = json.loads(promotion.read_text())
+    except FileNotFoundError:
+        pending = None  # the runner may retire its receipt during status reads
     return {
         "result": json.loads(outcome.read_text()) if outcome.exists() else None,
+        "pending_promotion": pending,
         "running": pid_alive(pid),
         "pid": pid or None,
         "last_tested": last.read_text().strip() if last.exists() else None,
@@ -1167,7 +1173,7 @@ def report_ci_failure(repo: Repo, tip: str, green: str, log_tail: str) -> str:
     ]
     body = (
         f"Slow CI (`{repo.config.slow}`) failed on {host_name()} ({os_name}) at "
-        f"{tip}. Untested range since last green master: {green}..{tip}.\n\n"
+        f"{tip}. Failing range since last passing commit: {green}..{tip}.\n\n"
         f"Log tail:\n```\n{log_tail}\n```"
     )
     if open_stewards:
@@ -1198,6 +1204,8 @@ def report_ci_failure(repo: Repo, tip: str, green: str, log_tail: str) -> str:
 def ci_pass(repo: Repo, tip: str) -> bool:
     cfg = repo.config
     master = repo.remote_ref(cfg.master)
+    if repo.git_ok("merge-base", "--is-ancestor", tip, master):
+        return True  # a peer already promoted this candidate or its descendant
     if repo.git_ok("rev-parse", "-q", "--verify", master) and not repo.git_ok(
         "merge-base", "--is-ancestor", master, tip
     ):
@@ -1207,6 +1215,25 @@ def ci_pass(repo: Repo, tip: str) -> bool:
         return False
     track_local_branches(repo)
     return True
+
+
+def retry_ci_promotion(repo: Repo) -> dict[str, Any] | None:
+    """Keep a passing candidate independent of newer, possibly failing tests."""
+    receipt = repo.state / "ci-promotion.json"
+    outcome = repo.state / "ci-result.json"
+    previous = json.loads(outcome.read_text()) if outcome.exists() else {}
+    # Upgrade runners that only retained the last test result.
+    if not receipt.exists() and previous.get("passed") and not previous.get("master_advanced"):
+        write_json(receipt, {"tip": previous["tip"]})
+    if not receipt.exists():
+        return None
+    tip = json.loads(receipt.read_text())["tip"]
+    result = {"tip": tip, "passed": True, "master_advanced": ci_pass(repo, tip)}
+    if previous.get("tip") == tip:
+        write_json(outcome, result)
+    if result["master_advanced"]:
+        receipt.unlink(missing_ok=True)
+    return result
 
 
 def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
@@ -1225,6 +1252,10 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
         if not try_lock(lock):
             return {"ran": results, "reason": "another runner holds the lock"}
         try:
+            fetch(repo)
+            promotion = retry_ci_promotion(repo)
+            if promotion:
+                results.append(promotion)
             while True:
                 fetch(repo)
                 tip = repo.git("rev-parse", repo.remote_ref(cfg.staging), cwd=repo.main)
@@ -1232,12 +1263,6 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
                 outcome = repo.state / "ci-result.json"
                 previous = json.loads(outcome.read_text()) if outcome.exists() else {}
                 if tip == last:
-                    # A passing check can lose a promotion race or network push.
-                    if (previous.get("tip") == tip and previous.get("passed")
-                            and not previous.get("master_advanced")):
-                        previous["master_advanced"] = ci_pass(repo, tip)
-                        write_json(outcome, previous)
-                        results.append(previous)
                     if previous.get("tip") == tip or repo.git_ok(
                         "merge-base", "--is-ancestor", tip, repo.remote_ref(cfg.master)
                     ):
@@ -1259,6 +1284,13 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
 def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
     cfg = repo.config
     green = repo.git("rev-parse", repo.remote_ref(cfg.master), cwd=repo.main, check=False) or "?"
+    promotion = repo.state / "ci-promotion.json"
+    if promotion.exists():
+        passed = json.loads(promotion.read_text())["tip"]
+        if repo.git_ok("merge-base", "--is-ancestor", green, passed) and repo.git_ok(
+            "merge-base", "--is-ancestor", passed, tip
+        ):
+            green = passed  # a later failure must not blame already-passing work
     name = f"ci-{tip[:12]}"
     stale = repo.worktree_root() / name
     if stale.exists():
@@ -1275,7 +1307,10 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
     output = (proc.stdout or "") + (proc.stderr or "")
     sys.stderr.write(output[-20000:])
     if proc.returncode == 0:
+        write_json(promotion, {"tip": tip})
         advanced = ci_pass(repo, tip)
+        if advanced:
+            promotion.unlink(missing_ok=True)
         log(f"slow CI passed at {tip[:12]}; master advanced: {advanced}")
         return {"tip": tip, "passed": True, "master_advanced": advanced}
     tail = "\n".join(output.strip().splitlines()[-60:])
