@@ -60,6 +60,15 @@ class GraphTest(unittest.TestCase):
         for role in enact.SPAWNED_ROLES:
             self.assertTrue((enact.ROLES_DIR / f"{role}.md").is_file(), role)
 
+    def test_archivist_waits_for_other_open_work_in_the_run(self):
+        archivist = {"id": "d", "status": "open", "labels": ["role:archivist"]}
+        docs_epic = {"id": "m", "status": "open", "issue_type": "epic"}
+        done = {"id": "t1", "status": "closed"}
+        self.assertFalse(enact.archivist_waits([archivist, docs_epic, done]))
+        for status in ("open", "in_progress", "blocked"):
+            follow_up = {"id": "t2", "status": status, "labels": ["role:mason"]}
+            self.assertTrue(enact.archivist_waits([archivist, done, follow_up]), status)
+
     def test_labeled_beads_spawn_with_their_role(self):
         repo = types.SimpleNamespace(config=enact.Config.parse(""))
         for role in enact.SPAWNED_ROLES:

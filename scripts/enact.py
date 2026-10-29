@@ -487,6 +487,15 @@ def descendants(graph: list[dict[str, Any]], root: str) -> list[dict[str, Any]]:
     return found
 
 
+def archivist_waits(run: list[dict[str, Any]]) -> bool:
+    """The Archivist documents the shipped state, so it starts only once it is
+    the last open work in the run, including follow-ups filed mid-run."""
+    return any(
+        b.get("status") != "closed" and b.get("issue_type") != "epic" and role_of(b) != "archivist"
+        for b in run
+    )
+
+
 def spawn_prompt(role: str, bead: dict[str, Any], epic: str, vizier: str) -> str:
     script = Path(__file__).resolve()
     python = sys.executable or "python3"
@@ -570,22 +579,16 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
     if len(inflight) >= parallel:
         return {**result, "action": "wait", "reason": "capacity"}
 
-    scope = {b["id"] for b in descendants(graph, epic)}
-    # The Archivist documents the shipped state, so it starts only once it is
-    # the last open work in the epic, including follow-ups filed mid-run.
-    archivist_waits = any(
-        by_id[i].get("status") != "closed"
-        and by_id[i].get("issue_type") != "epic"
-        and role_of(by_id[i]) != "archivist"
-        for i in scope
-    )
+    run = descendants(graph, epic)
+    scope = {b["id"] for b in run}
+    hold_archivist = archivist_waits(run)
     ready = beads.json("ready", "-n", "0", "--exclude-type", "epic", "--unassigned") or []
     candidates = [
         b
         for b in ready
         if (b["id"] in scope or (role_of(b) == "steward" and not b.get("parent")))
         and targeted_here(b)
-        and not (archivist_waits and role_of(b) == "archivist")
+        and not (hold_archivist and role_of(b) == "archivist")
     ]
     candidates.sort(key=lambda b: (role_of(b) != "steward", b.get("priority", 2)))
     for bead in candidates:
