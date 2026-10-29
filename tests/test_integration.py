@@ -795,8 +795,18 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         command = ("run", "recover", epic, "--kind", "worker", "--bead", task,
                    "--session", "worker", "--evidence", "successful lookup: idle")
         self.b.enact(*command, code=3)
-        self.assertTrue(self.a.enact(*command)["allowed"])
-        self.assertEqual(self.a.enact(*command)["reason"], "cooldown")
+        # Overlapping Marshal processes cannot both reserve the same nudge.
+        processes = [subprocess.Popen(
+            [sys.executable, str(SCRIPT), *command], cwd=self.a.path, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, **self.a.env(session)}) for session in ("marshal-1", "marshal-2")]
+        results = []
+        for process in processes:
+            out, err = process.communicate(timeout=180)
+            self.assertEqual(process.returncode, 0, (out, err))
+            results.append(json.loads(out))
+        self.assertEqual(sum(result["allowed"] for result in results), 1)
+        self.assertEqual(next(r["reason"] for r in results if not r["allowed"]), "cooldown")
         self.a.enact("run", "pause", epic, "--reason", "user stop")
         self.a.enact(*command, code=3)
         notice = ("run", "recover", epic, "--kind", "notice", "--session", "sess-a",
@@ -828,7 +838,14 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.assertEqual(step["bead"], first)
         self.start_worker(self.a, first, "worker")
         path = Path(self.a.enact("worktree", "create", first, session="worker")["path"])
-        self.a.enact("run", "pause", epic, "--reason", "user requested stop")
+        # A Marshal's earlier active snapshot cannot authorize release after
+        # a different machine pauses the run.
+        self.b.enact("run", "pause", epic, "--reason", "user requested stop")
+        self.a.enact("release", first, "--expected-owner", "worker",
+                     "--expected-session", "worker", "--inactive", "stopped",
+                     "--evidence", "successful lookup: stopped", "--reason", "recovery",
+                     code=3)
+        self.assertEqual(self.a.show(first)["assignee"], "worker")
         self.assertEqual(self.b.enact("next", "--epic", epic)["action"], "paused")
         self.b.enact("claim", second, code=3)
         self.a.enact("start", first, "--reservation", step["reservation"], session="worker", code=3)
@@ -915,6 +932,9 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.assertEqual(status["staging"], self.remote_sha("staging"))
         self.assertTrue(status["sweep_needed"])
         self.assertIn(epic, [r["epic"] for r in status["active_runs"]])
+        peer_status = self.b.enact("status")
+        self.assertIn(epic, peer_status["pending_deliveries"])
+        self.assertFalse(peer_status["sweep_needed"])
         self.assertFalse(status["ci"]["result"]["passed"])
         steward = status["open_stewards"][0]
         self.assertIn(epic, self.a.show(steward)["metadata"]["enact_runs"].split())

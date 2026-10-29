@@ -286,6 +286,9 @@ class GraphTest(unittest.TestCase):
         self.assertTrue(enact.spawned_here(bead(), "box", "claude"))
         self.assertTrue(enact.spawned_here(bead(enact_spawn_provider="claude"), "box", "claude"))
         self.assertFalse(enact.spawned_here(bead(enact_spawn_provider="codex"), "box", "claude"))
+        app = os.environ.get("ENACT_APP", "claude")
+        self.assertTrue(enact.spawned_here(bead(enact_spawn_app=app), "box", "claude"))
+        self.assertFalse(enact.spawned_here(bead(enact_spawn_app=app + "-other"), "box", "claude"))
         self.assertFalse(enact.spawned_here(bead(), "other", "claude"))
 
     def test_labeled_beads_spawn_with_their_role(self):

@@ -1820,11 +1820,12 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
 
 def spawned_here(bead: dict[str, Any], host: str, host_provider: str) -> bool:
     """Spawned by a vizier in this host app on this machine. Beads reserved
-    before enact_spawn_provider existed count as ours."""
+    before provider/app routing existed remain visible for inspection."""
     spawn_provider = meta(bead, "enact_spawn_provider")
+    spawn_app = meta(bead, "enact_spawn_app")
     return meta(bead, "enact_spawn_host") == host and (
         not spawn_provider or spawn_provider == host_provider
-    )
+    ) and (not spawn_app or spawn_app == os.environ.get("ENACT_APP", host_provider))
 
 
 def vizier_routes(bead: dict[str, Any], graph: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1917,8 +1918,8 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
         "working": working,
         "active_runs": active_runs,
         "marshal_name": marshal_name(repo),
-        "sweep_needed": bool(working or unarchived or pending_deliveries or any(
-            r["recoverable"] for r in active_runs)),
+        "sweep_needed": bool(working or unarchived or any(
+            r["recoverable"] or not r["delivery"]["complete"] for r in active_runs)),
         "unarchived": unarchived,
         "ci": ci_status(repo),
         "master_lag": int(lag) if lag.isdigit() else None,
@@ -1948,6 +1949,7 @@ def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
     actor = require_actor(args.actor)
     sync(repo)
     bead = beads.show(args.bead)
+    require_running(bead, beads.all())
     owner = bead.get("assignee")
     if not owner or bead.get("status") == "closed":
         raise Fail("no active assignment to release", code=3)

@@ -468,3 +468,13 @@ Findings and adjustments made while implementing (2026-10-28):
   unchanged, and is removed only when no relevant run or cleanup needs it.
   Desktop tool schemas and the available host capability decide how to
   perform scheduling and messaging; the helper never calls native tools.
+- Warden review: release checks shared holds after syncing, so an earlier
+  Marshal snapshot cannot clear an assignment after a peer has paused it.
+  Held assignments remain intact until explicit resume. Reservation release
+  still requires the exact observed token, including Marshal recovery.
+- Marshal retention counts pending validation for this host/app's runs.
+  Project-wide pending deliveries remain visible in status for diagnosis,
+  but work belonging only to remote hosts or other apps cannot retain an
+  otherwise idle local sweep. Cleanup and CI for local deliveries continue
+  under a hold. Overlapping local recovery requests serialize and reserve
+  only one nudge; uncertain sends still consume that durable reservation.

@@ -51,16 +51,17 @@ from `runs`:
   `enact release <bead> --expected-owner <assignee>
   --expected-session <session> --inactive <stopped|archived|missing>
   --evidence "<successful lookup and result>" --reason "<why>"`.
-  For an unspawned reservation, expected session is its vizier. Exit 3 means
-  ownership or routing changed: do not force release. The helper preserves
+  For a reservation, include its observed `--reservation <token>`; without
+  a child, expected session is its vizier. Exit 3 means the run, ownership or
+  routing changed: do not force release. The helper preserves
   the old route and unfinished work for a replacement. Never release merely
   because a lookup failed or a message could not be delivered.
 
 ## 4. Viziers, validation and cleanup
 
 Use each `active_runs` entry's recorded local route. Paused runs need no
-recovery. Blocked runs permit only a notice of the recorded need; all other
-actions below require `recoverable: true`.
+recovery. Blocked runs permit only a notice of the recorded need. Vizier
+resume requires `recoverable: true`; cleanup and CI continue under holds.
 A registered route carries `authorized` and `parallel`. Legacy inferred
 routes permit inspection and a fallback notice; registration carrying the
 original authorization is required before automatic recovery.
