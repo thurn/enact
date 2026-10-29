@@ -139,6 +139,27 @@ def session_actor() -> str | None:
     return None
 
 
+def session_aliases() -> set[str]:
+    """Every id that names this session. Claude Desktop's start_session returns
+    the host session id, which the vizier records as enact_session, while
+    session_actor() keeps the CLI id so live viziers keep their identity.
+    ENACT_SESSION, when set, is the only name."""
+    if os.environ.get("ENACT_SESSION"):
+        return {os.environ["ENACT_SESSION"]}
+    names = ("CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")
+    return {os.environ[v] for v in names if os.environ.get(v)}
+
+
+def as_owner(actor: str, bead: dict[str, Any]) -> str:
+    """The bead's assignee or bound session when it is another name for actor."""
+    aliases = session_aliases()
+    if actor in aliases:
+        for name in (bead.get("assignee"), meta(bead, "enact_session")):
+            if name and name in aliases:
+                return name
+    return actor
+
+
 def require_actor(explicit: str | None) -> str:
     actor = explicit or session_actor()
     if not actor:
@@ -435,6 +456,7 @@ def sync(repo: Repo) -> dict[str, Any]:
 
 
 def require_owner(bead: dict[str, Any], actor: str, *, closed: bool = False) -> None:
+    actor = as_owner(actor, bead)
     if (bead.get("assignee") != actor or
             (bead.get("status") == "closed" and not closed)):
         raise Fail(f"{bead['id']} belongs to {bead.get('assignee') or 'nobody'} "
@@ -486,6 +508,7 @@ def cmd_start(args: argparse.Namespace) -> dict[str, Any]:
     sync(repo)
     bead = beads.show(args.bead)
     require_running(bead, beads.all())
+    actor = as_owner(actor, bead)
     owner = bead.get("assignee") or ""
     token = meta(bead, "enact_reservation")
     assigned = meta(bead, "enact_session")
@@ -1950,6 +1973,7 @@ def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
     sync(repo)
     bead = beads.show(args.bead)
     require_running(bead, beads.all())
+    actor = as_owner(actor, bead)
     owner = bead.get("assignee")
     if not owner or bead.get("status") == "closed":
         raise Fail("no active assignment to release", code=3)

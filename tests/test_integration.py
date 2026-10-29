@@ -199,17 +199,18 @@ class Machine:
             "ENACT_PROVIDER": "claude",
             "ENACT_SESSION": session or self.session,
             "CLAUDE_CODE_SESSION_ID": "",
+            "CLAUDE_CODE_HOST_SESSION_ID": "",
             "CODEX_THREAD_ID": "",
             "BD_NON_INTERACTIVE": "1",
         }
 
-    def enact(self, *args, code=0, cwd=None, session=None):
+    def enact(self, *args, code=0, cwd=None, session=None, env=None):
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), *args],
             cwd=cwd or self.path,
             text=True,
             capture_output=True,
-            env={**os.environ, **self.env(session)},
+            env={**os.environ, **self.env(session), **(env or {})},
         )
         if proc.returncode != code:
             raise AssertionError(
@@ -588,6 +589,23 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
     def start_worker(self, machine, bead, session):
         token = machine.show(bead)["metadata"]["enact_reservation"]
         return machine.enact("start", bead, "--reservation", token, session=session)
+
+    def test_desktop_worker_answers_to_its_host_session_id(self):
+        # Claude Desktop's start_session returns the host id; the CLI id differs.
+        epic = self.a.create("desktop ids", type="epic")
+        bead = self.a.create("desktop child", parent=epic)
+        token = self.a.enact("next", "--epic", epic)["reservation"]
+        self.a.enact("meta", bead, "enact_session=local_host", "--reservation", token)
+        desktop = {"ENACT_SESSION": "", "CLAUDE_CODE_SESSION_ID": "cli-uuid",
+                   "CLAUDE_CODE_HOST_SESSION_ID": "local_host"}
+        other = {**desktop, "CLAUDE_CODE_HOST_SESSION_ID": "local_other"}
+        self.a.enact("start", bead, "--reservation", token, env=other, code=3)
+        self.a.enact("start", bead, "--reservation", token, env=desktop)
+        saved = self.a.show(bead)
+        self.assertEqual(saved["assignee"], "local_host")
+        self.assertEqual(saved["metadata"]["enact_session"], "local_host")
+        self.a.enact("close", bead, "--reason", "done", env=other, code=3)
+        self.a.enact("close", bead, "--reason", "done", env=desktop)
 
     def test_repeated_reservation_rejects_delayed_vizier_actions(self):
         epic = self.a.create("repeated reservation", type="epic")

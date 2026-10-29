@@ -478,3 +478,15 @@ Findings and adjustments made while implementing (2026-10-28):
   otherwise idle local sweep. Cleanup and CI for local deliveries continue
   under a hold. Overlapping local recovery requests serialize and reserve
   only one nudge; uncertain sends still consume that durable reservation.
+
+## Desktop session ids (2026-10-29)
+
+- Claude Desktop's `start_session` returns the host session id
+  (`local_...`, also `CLAUDE_CODE_HOST_SESSION_ID`), which the vizier records
+  as `enact_session`; `CLAUDE_CODE_SESSION_ID` is a different CLI id. Spawned
+  workers' `enact start` failed with exit 3 until they set `ENACT_SESSION` by
+  hand (four of the playlist_survivors ps-tfn M1 sessions).
+- Start, owner checks and release now treat the host id and the CLI id as
+  names of one session, taking whichever the bead records. The default actor
+  stays the CLI id, so live viziers keep their claims. `ENACT_SESSION`, when
+  set, is still the only name.
