@@ -1,0 +1,11 @@
+# Enact configuration for the Enact repository itself.
+remote = "origin"
+staging_branch = "staging"
+master_branch = "master"
+
+[checks]
+fast = "python3 -m py_compile scripts/enact.py && python3 -m unittest -q tests.test_unit"
+slow = "python3 -m unittest -q tests.test_unit tests.test_integration"
+
+[worktree]
+root = "../{repo}-worktrees"
