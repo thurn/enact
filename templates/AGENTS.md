@@ -1,16 +1,23 @@
 ## Enact
 
-- This project can run large plans unattended with Enact
-  (`/enact-intake <plan>`, then `/enact <epic>`); most work does not go
-  through it. Fast and slow check commands are in `.enact.toml`.
-- Never push straight to `master`. Deliver with
-  `python3 ~/enact/scripts/enact.py push`, which rebases onto
-  `origin/staging`, runs the fast checks, pushes to `staging` and starts slow
-  CI. `master` advances only when slow CI passes.
-- Work in a worktree cut from `origin/staging`
-  (`python3 ~/enact/scripts/enact.py worktree create <name>`), not in the main
-  checkout.
-- Beads live in this repo (`bd`); publish bead changes with
-  `python3 ~/enact/scripts/enact.py sync`.
+`enact` below means `python3 ~/enact/scripts/enact.py` (`py -3` on Windows).
+
+- **Every change goes through a worktree and CI**, whether it is made by a
+  human, an ad hoc agent session or an Enact run:
+  1. From the main checkout, `enact worktree create <short-name>`. Work only
+     in the printed path; never edit or commit in the main checkout.
+  2. Commit there, following this project's commit conventions.
+  3. Run `enact push` in the worktree. It rebases onto `origin/staging`
+     (merging `master` if someone bypassed staging), runs the fast checks,
+     pushes to `staging`, starts slow CI in the background and removes the
+     worktree. On exit code 2, fix the reported conflict or failing check in
+     the same worktree and run it again.
+- Never commit to, or push directly to, `master` or `staging`. `master`
+  advances only when slow CI passes on `staging`; a slow-CI failure files a
+  P0 Steward bead. `enact ci --status` shows the runner and its log.
+- Fast and slow check commands are in `.enact.toml`.
+- Beads live in this repo (`bd`); publish bead changes with `enact sync`.
+- Large plans can run unattended with Enact (`/enact-intake <plan>`, then
+  `/enact <epic>`); most work does not go through it.
 - Enact roles in use: all (Executor, Warden, Steward, Mason, Sage).
 - Review policy: one Warden bead per substantial implementation bead.

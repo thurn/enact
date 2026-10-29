@@ -53,9 +53,13 @@ Run from the project's main checkout.
    means detached), `ENACT_BASE_SHA` and `ENACT_REPO`, and fully replace
    `git worktree add`/`remove`.
 6. **AGENTS.md.** Add an "Enact" section adapted from
-   `$ENACT/templates/AGENTS.md` to the project's conventions and voice. Ask the
-   user about anything you are unsure of, such as role restrictions or the
-   review policy.
+   `$ENACT/templates/AGENTS.md` to the project's conventions and voice. Its
+   rule that **every change**, not only Enact runs, goes through
+   `enact worktree create`, a commit in the worktree and `enact push` (and so
+   through fast checks and slow CI) is required: keep it prominent, and
+   replace any existing instruction to commit or push to the main branch
+   directly. Ask the user about anything you are unsure of, such as role
+   restrictions or the review policy.
 7. **Commit** `.enact.toml`, the tracked `.beads/` files and `AGENTS.md`, then
    deliver with `enact push`, which puts the commit on staging. Slow CI
    promotes it to the integration branch when it passes.
