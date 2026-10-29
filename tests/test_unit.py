@@ -3,6 +3,7 @@
 import importlib.util
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -58,6 +59,16 @@ class GraphTest(unittest.TestCase):
         self.assertIn(str(enact.ROLES_DIR / "warden.md"), prompt)
         for role in enact.SPAWNED_ROLES:
             self.assertTrue((enact.ROLES_DIR / f"{role}.md").is_file(), role)
+        for role in enact.EMOJI:
+            self.assertIn(role, prompt)
+
+    def test_archivist_beads_spawn_as_archivists(self):
+        repo = types.SimpleNamespace(config=enact.Config.parse(""))
+        bead = {"id": "x-2", "title": "Update docs", "labels": ["role:archivist"]}
+        action = enact.spawn_action(repo, bead, "x-0", "viz")
+        self.assertEqual(action["role"], "archivist")
+        self.assertEqual(action["title"], "📜 [x-2] Update docs")
+        self.assertIn(str(enact.ROLES_DIR / "archivist.md"), action["prompt"])
 
 
 if __name__ == "__main__":

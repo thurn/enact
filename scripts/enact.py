@@ -37,8 +37,13 @@ EMOJI = {
     "marshal": "🎖️",
     "mason": "🧱",
     "sage": "📖",
+    "archivist": "📜",
 }
-SPAWNED_ROLES = ("executor", "warden", "steward", "mason", "sage", "justiciar")
+SPAWNED_ROLES = ("executor", "warden", "steward", "mason", "sage", "archivist", "justiciar")
+ROLE_NOTICE = (
+    "Enact roles are prompt files, not skills: never invoke a skill named after a role "
+    f"({', '.join(EMOJI)}). Work fully unattended: nobody will answer questions."
+)
 WINDOWS = os.name == "nt"
 
 
@@ -488,10 +493,7 @@ def spawn_prompt(role: str, bead: dict[str, Any], epic: str, vizier: str) -> str
         f"you were started by vizier {vizier} on host {host_name()}.\n\n"
         f"Read {ROLES_DIR / 'common.md'} and then {ROLES_DIR / (role + '.md')}, "
         f"and follow them. The Enact helper is `\"{python}\" \"{script}\"`, "
-        f"referred to as `enact` in those files.\n\n"
-        "Enact roles are prompt files, not skills: never invoke a skill named "
-        "after a role (executor, warden, steward, mason, sage, justiciar, "
-        "marshal, vizier). Work fully unattended: nobody will answer questions."
+        f"referred to as `enact` in those files.\n\n{ROLE_NOTICE}"
     )
 
 
@@ -675,8 +677,7 @@ def justiciar_prompt(request: dict[str, Any]) -> str:
         f"{request.get('reason', '')}\n\n"
         f"Read {ROLES_DIR / 'common.md'} and then {ROLES_DIR / 'justiciar.md'}, and follow "
         f"them. The Enact helper is `\"{python}\" \"{script}\"`, referred to as `enact`.\n\n"
-        "Enact roles are prompt files, not skills: never invoke a skill named after a role. "
-        "Work fully unattended: nobody will answer questions."
+        f"{ROLE_NOTICE}"
     )
 
 

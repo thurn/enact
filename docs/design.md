@@ -155,6 +155,24 @@ in [the desktop support audit](audit-2026-10-29.md).
   with Enact (Beads prefix `en`), so its slow CI advances its `master`, which
   is what every machine pulls.
 
+## Archivist
+
+- One Archivist bead ends every plan run (small task-prompt runs get none).
+  It deletes the plan document if the repository tracks it, fixes links that
+  would dangle, and edits the persistent docs to describe the shipped state
+  only, minimally (YAGNI), within the project's existing doc architecture.
+- Tasks cannot depend on epics in Beads, so with milestones the bead sits in
+  a final docs epic that depends on the last milestone (and its gate);
+  without milestones it depends on every other bead in the run epic.
+- Default architecture when a project has none: one project skill. Claude
+  Code reads project skills only from `.claude/skills/`, Codex only from
+  `.agents/skills/` (cwd up to the repository root). The content lives in
+  `.agents/skills/<project>/SKILL.md`; `.claude/skills/<project>/SKILL.md` is
+  a stub with the same frontmatter that points at it. No symlinks: git
+  checks them out as plain files on Windows without developer mode. Large
+  projects may add `references/` files next to the content; the skill, stub
+  and references stay at five markdown files or fewer.
+
 ## Configuration
 
 - Worktrees live in `.worktrees/` inside the main checkout by default, not in
@@ -179,7 +197,7 @@ in [the desktop support audit](audit-2026-10-29.md).
   Windows). `enact-setup` per project: beads init, dolt remote, staging
   branch, `.enact.toml`, AGENTS.md bullets.
 - Titles: 🔮 Vizier, ⚒️ Executor, 🛡️ Warden, 🔥 Justiciar, 🚒 Steward,
-  🎖️ Marshal, 🧱 Mason, 📖 Sage; ✅ on completion.
+  🎖️ Marshal, 🧱 Mason, 📖 Sage, 📜 Archivist; ✅ on completion.
 
 ## Implementation notes
 

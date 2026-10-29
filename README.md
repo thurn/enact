@@ -8,7 +8,7 @@ and runs every bead in a fresh top-level session for days, across machines
 and model providers, synchronized through one GitHub remote.
 
 Enact has no state of its own beyond the bead graph, no server and no CI
-dependency: two skills, eight short role prompts and a stdlib Python helper.
+dependency: two skills, nine short role prompts and a stdlib Python helper.
 
 ## Layout
 
@@ -31,6 +31,7 @@ dependency: two skills, eight short role prompts and a stdlib Python helper.
 | Steward | 🚒 | slow-CI failure bead | Makes slow CI green again |
 | Mason | 🧱 | bead (milestone gate) | Architecture audit, files beads |
 | Sage | 📖 | bead (milestone gate) | Process and tooling audit, files beads |
+| Archivist | 📜 | bead (end of a plan run) | Retires the plan, updates docs to the shipped state |
 | Justiciar | 🔥 | `enact justiciar request` | Emergency authority, one per fleet |
 | Marshal | 🎖️ | hourly scheduled task | Nudges stalled sessions, recovers work |
 
@@ -42,8 +43,8 @@ dependency: two skills, eight short role prompts and a stdlib Python helper.
    - a **bead** runs as is (a plain bead is wrapped in an epic of its own);
    - a **plan document** is audited for anything that would need a human,
      those points are resolved with you, and it is filed as a full graph (an
-     epic, milestones, role-labeled beads, Warden beads and Mason/Sage gate
-     epics);
+     epic, milestones, role-labeled beads, Warden beads, Mason/Sage gate
+     epics and a final Archivist bead);
    - a **task prompt** becomes one executor bead, plus a Warden bead when the
      change is substantial, unless it describes a large work item.
 2. The vizier then loops on `enact next --wait 540` inside the turn you

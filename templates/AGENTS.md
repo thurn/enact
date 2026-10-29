@@ -21,5 +21,5 @@
 - Beads live in this repo (`bd`); publish bead changes with `enact sync`.
 - Work can run unattended with Enact (`/enact <bead|plan|task>`); most work
   does not go through it.
-- Enact roles in use: all (Executor, Warden, Steward, Mason, Sage).
+- Enact roles in use: all (Executor, Warden, Steward, Mason, Sage, Archivist).
 - Review policy: one Warden bead per substantial implementation bead.

@@ -181,6 +181,9 @@ For a plan, use every role unless AGENTS.md or the invocation restricts them:
   pass at the end for a small project.
 - **Sage** (`role:sage`): process and tooling audit ("why was this slow?") at
   milestone boundaries.
+- **Archivist** (`role:archivist`): end-of-run documentation cleanup. It
+  retires the plan document and updates the project's technical docs to the
+  shipped state. One per plan run (below).
 - **Steward** (`role:steward`): never planned; the slow-CI runner files these.
 - **Justiciar** and **Marshal**: never filed as beads.
 
@@ -192,6 +195,20 @@ example "M1 review gate", with the next milestone epic depending on it. The
 audit bead is a child of the gate epic. The auditor files important findings
 as further children of the gate, so the next milestone waits for them. The
 helper closes a gate automatically once all its children are closed.
+
+#### Final documentation
+
+Every plan run (including a task prompt treated as a plan) ends with exactly
+one Archivist bead, filed with the rest of the graph, so that it runs once
+the shipped state is final. A small task-prompt run gets none.
+
+- With milestones: a **final docs epic** under the run epic, depending on the
+  last milestone epic and on its gate epic if it has one. The Archivist bead
+  is its only child. (Tasks cannot depend on epics.)
+- Without milestones: the Archivist bead is a direct child of the run epic
+  and depends on every other bead in it.
+
+Its description names the plan document path, if any.
 
 ### Finish planning
 
