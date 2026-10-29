@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import errno
 import hashlib
 import json
 import os
@@ -20,11 +21,12 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 ENACT_ROOT = Path(__file__).resolve().parent.parent
 ROLES_DIR = ENACT_ROOT / "skills" / "enact" / "roles"
@@ -1080,34 +1082,84 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
-def try_lock(path: Path) -> bool:
-    """Create a PID lockfile atomically, replacing it if its owner is dead."""
-    for _ in range(2):
+def try_lock(path: Path) -> BinaryIO | None:
+    """Hold an OS lock and publish a complete PID for legacy runners.
+
+    The guard inode is permanent: unlinking it would let contenders lock
+    different files. The OS releases it even when a runner is killed.
+    """
+    guard = path.with_name(path.name + ".guard").open("a+b")
+    acquired = False
+    try:
         try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
+            if WINDOWS:
+                import msvcrt
+
+                if os.fstat(guard.fileno()).st_size == 0:
+                    guard.write(b"\0")
+                    guard.flush()
+                guard.seek(0)
+                msvcrt.locking(guard.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                return None
+            raise
+        try:
+            with path.open() as existing:
+                observed = os.fstat(existing.fileno())
+                pid = int(existing.read().strip())
+            # An incomplete legacy marker may still have a live writer.
+            if pid <= 0 or pid_alive(pid):
+                return None
+            if not os.path.samestat(observed, path.stat()):
+                return None
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except ValueError:
+            return None
+        # A hard link is create-only and exposes no empty-file interval to
+        # old runners, which still use O_EXCL and read this PID directly.
+        fd, name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+        temporary = Path(name)
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(str(os.getpid()))
             try:
-                pid = int(path.read_text().strip() or "0")
-            except (OSError, ValueError):
-                pid = 0
-            if pid_alive(pid):
-                return False
-            path.unlink(missing_ok=True)
-            continue
-        with os.fdopen(fd, "w") as handle:
-            handle.write(str(os.getpid()))
-        return True
-    return False
+                path.hardlink_to(temporary)
+            except FileExistsError:
+                return None
+        finally:
+            temporary.unlink(missing_ok=True)
+        acquired = True
+        return guard
+    finally:
+        if not acquired:
+            guard.close()
+
+
+def release_lock(path: Path, guard: BinaryIO) -> None:
+    try:
+        try:
+            if path.read_text().strip() == str(os.getpid()):
+                path.unlink()
+        except FileNotFoundError:
+            pass
+    finally:
+        guard.close()
 
 
 def ci_status(repo: Repo) -> dict[str, Any]:
     lock = repo.state / "ci.lock"
     pid = 0
-    if lock.exists():
-        try:
-            pid = int(lock.read_text().strip() or "0")
-        except ValueError:
-            pid = 0
+    try:
+        pid = int(lock.read_text().strip() or "0")
+    except (FileNotFoundError, ValueError):
+        pass
     last = repo.state / "ci-last"
     outcome = repo.state / "ci-result.json"
     promotion = repo.state / "ci-promotion.json"
@@ -1249,7 +1301,8 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
     last_file = repo.state / "ci-last"
     results: list[dict[str, Any]] = []
     while True:
-        if not try_lock(lock):
+        guard = try_lock(lock)
+        if guard is None:
             return {"ran": results, "reason": "another runner holds the lock"}
         try:
             fetch(repo)
@@ -1274,7 +1327,7 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
                 results.append(result)
                 last_file.write_text(tip)
         finally:
-            lock.unlink(missing_ok=True)
+            release_lock(lock, guard)
         fetch(repo)
         tip = repo.git("rev-parse", repo.remote_ref(cfg.staging), cwd=repo.main)
         if tip == (last_file.read_text().strip() if last_file.exists() else ""):

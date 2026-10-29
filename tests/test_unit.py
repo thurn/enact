@@ -1,6 +1,9 @@
-"""Fast tests: pure logic in enact.py that needs no git or Beads."""
+"""Fast tests: helper behavior that needs no git or Beads."""
 
 import importlib.util
+import multiprocessing
+import os
+import subprocess
 import sys
 import tempfile
 import types
@@ -12,6 +15,157 @@ spec = importlib.util.spec_from_file_location("enact", SCRIPT)
 enact = importlib.util.module_from_spec(spec)
 sys.modules["enact"] = enact
 spec.loader.exec_module(enact)
+
+
+def lock_runner(path, mode, connection):
+    """A real contender, with barriers at the two former race windows."""
+    path = Path(path)
+    if mode == "publish":
+        original = enact.os.open
+
+        def paused_open(name, flags, *args, **kwargs):
+            fd = original(name, flags, *args, **kwargs)
+            if flags & os.O_EXCL:
+                connection.send("paused")
+                connection.recv()
+            return fd
+
+        enact.os.open = paused_open
+    elif mode == "stale":
+        original = enact.pid_alive
+
+        def paused_alive(pid):
+            alive = original(pid)
+            connection.send("paused")
+            connection.recv()
+            return alive
+
+        enact.pid_alive = paused_alive
+    elif mode == "legacy":
+        with path.open("x") as handle:
+            connection.send("paused")
+            connection.recv()
+            handle.write(str(os.getpid()))
+        connection.send("entered")
+        connection.recv()
+        path.unlink()
+        return
+    guard = enact.try_lock(path)
+    connection.send("entered" if guard else "busy")
+    if guard:
+        connection.recv()
+        if hasattr(enact, "release_lock"):
+            enact.release_lock(path, guard)
+        else:  # also reproduce the regression against the old helper
+            path.unlink(missing_ok=True)
+    connection.close()
+
+
+class LockTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.path = Path(temporary.name) / "ci.lock"
+        self.context = multiprocessing.get_context("spawn")
+
+    def runner(self, mode="normal"):
+        parent, child = self.context.Pipe()
+        process = self.context.Process(
+            target=lock_runner, args=(str(self.path), mode, child)
+        )
+        process.start()
+        child.close()
+
+        def cleanup():
+            if process.is_alive():
+                process.terminate()
+            process.join(10)
+            parent.close()
+            process.close()
+
+        self.addCleanup(cleanup)
+        return process, parent
+
+    def receive(self, connection):
+        self.assertTrue(connection.poll(10), "runner did not reach its barrier")
+        return connection.recv()
+
+    def finish(self, process, connection):
+        connection.send("release")
+        process.join(10)
+        self.assertEqual(process.exitcode, 0)
+
+    def test_startup_before_pid_publication_excludes_second_runner(self):
+        first, one = self.runner("publish")
+        self.assertEqual(self.receive(one), "paused")
+        second, two = self.runner()
+        self.assertEqual(self.receive(two), "busy")
+        second.join(10)
+        one.send("publish")
+        self.assertEqual(self.receive(one), "entered")
+        self.assertEqual(self.path.read_text(), str(first.pid))
+        self.finish(first, one)
+        self.assertFalse(self.path.exists())
+
+    def test_stale_owner_recovery_excludes_competing_reaper(self):
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait(timeout=10)
+        self.path.write_text(str(dead.pid))
+        first, one = self.runner("stale")
+        self.assertEqual(self.receive(one), "paused")
+        second, two = self.runner()
+        self.assertEqual(self.receive(two), "busy")
+        second.join(10)
+        one.send("recover")
+        self.assertEqual(self.receive(one), "entered")
+        self.assertEqual(self.path.read_text(), str(first.pid))
+        self.finish(first, one)
+
+    def test_crash_before_and_after_publication_recovers(self):
+        for published in (False, True):
+            with self.subTest(published=published):
+                first, one = self.runner("publish")
+                self.assertEqual(self.receive(one), "paused")
+                if published:
+                    one.send("publish")
+                    self.assertEqual(self.receive(one), "entered")
+                first.terminate()
+                first.join(10)
+                second, two = self.runner()
+                self.assertEqual(self.receive(two), "entered")
+                self.finish(second, two)
+                self.assertFalse(self.path.exists())
+
+    def test_legacy_writer_is_respected_before_and_after_publication(self):
+        legacy, old = self.runner("legacy")
+        self.assertEqual(self.receive(old), "paused")
+        for published in (False, True):
+            with self.subTest(published=published):
+                if published:
+                    old.send("publish")
+                    self.assertEqual(self.receive(old), "entered")
+                process, connection = self.runner()
+                self.assertEqual(self.receive(connection), "busy")
+                process.join(10)
+        legacy.terminate()
+        legacy.join(10)
+        process, connection = self.runner()
+        self.assertEqual(self.receive(connection), "entered")
+        self.finish(process, connection)
+
+    def test_stale_observation_cannot_remove_replaced_legacy_owner(self):
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait(timeout=10)
+        self.path.write_text(str(dead.pid))
+        first, one = self.runner("stale")
+        self.assertEqual(self.receive(one), "paused")
+        replacement = self.path.with_name("replacement")
+        replacement.write_text(str(os.getpid()))
+        replacement.replace(self.path)
+        one.send("recover")
+        self.assertEqual(self.receive(one), "busy")
+        first.join(10)
+        self.assertEqual(self.path.read_text(), str(os.getpid()))
 
 
 class ConfigTest(unittest.TestCase):

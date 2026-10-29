@@ -293,3 +293,29 @@ Findings and adjustments made while implementing (2026-10-28):
 - A Steward's explicit run links may be incomplete when delivery metadata
   sync recovers after failure reporting. Always supplement those links from
   the failing range, including closed repairs, before deciding a run is done.
+
+## CI lock publication and recovery (2026-10-29)
+
+- New runners hold a nonblocking OS lock on a permanent `ci.lock.guard`
+  file through PID publication, protected CI work and PID cleanup. POSIX
+  uses `flock`; Windows uses an `msvcrt` byte lock. Never unlink the guard:
+  replacing its inode would split ownership. Process death releases the OS
+  lock without a timeout or another stale-lock election.
+- Write the PID to a private file, close it, then hard-link it create-only
+  as `ci.lock`. Existing helpers still read the same plain PID, without an
+  empty publication window. A killed publisher may leave a harmless private
+  temporary file; it cannot block the next runner. Hard-link support on the
+  local repository filesystem is required; publication errors fail closed.
+- Under the guard, recover complete markers only when their PID is dead
+  and the observed file identity is unchanged. Respect live legacy owners.
+  Empty, malformed and nonpositive legacy markers fail closed: an old
+  writer paused before publication is indistinguishable from an abandoned
+  empty file. Remove such a marker only after confirming no old runner can
+  still publish it. New runners do not create this ambiguous state.
+- Compatibility cannot repair unmodified legacy contenders that already
+  observed a stale owner and later unlink a replacement without checking.
+  The concurrency guarantee applies between updated runners; drain older
+  contenders when upgrading. PID reuse remains conservatively busy.
+- Deterministic spawned-process tests cover publication, competing stale
+  recovery, death before and after publication, and legacy ownership. They
+  run in the normal fast suite, which slow CI also includes.
