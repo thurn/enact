@@ -692,6 +692,25 @@ class CiWatchTest(unittest.TestCase):
         start.assert_not_called()
 
 
+class FetchTest(unittest.TestCase):
+    def test_fetch_retries_ref_lock_contention_only(self):
+        repo = types.SimpleNamespace(config=enact.Config(), main=Path("."))
+        lost = subprocess.CompletedProcess([], 1, "", "error: cannot lock ref 'x'")
+        ok = subprocess.CompletedProcess([], 0, "", "")
+        other = subprocess.CompletedProcess([], 128, "", "fatal: no remote")
+        with mock.patch.object(enact, "track_local_branches", return_value={}), \
+                mock.patch.object(enact.time, "sleep"):
+            with mock.patch.object(enact, "run", side_effect=[lost, lost, ok]) as run:
+                enact.fetch(repo)
+            self.assertEqual(run.call_count, 3)
+            with mock.patch.object(enact, "run", side_effect=[other]) as run:
+                with self.assertRaises(enact.Fail):
+                    enact.fetch(repo)
+            self.assertEqual(run.call_count, 1)
+            with mock.patch.object(enact, "run", side_effect=[lost] * 5):
+                self.assertEqual(enact.fetch(repo, check=False), {})
+
+
 class BeadsReadTest(unittest.TestCase):
     def test_writes_sync_and_unlock_refresh_cached_reads(self):
         with tempfile.TemporaryDirectory() as directory:

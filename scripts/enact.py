@@ -1257,7 +1257,16 @@ TRACKED_OK = ("current", "fast-forwarded", "created")
 
 
 def fetch(repo: Repo, check: bool = True) -> dict[str, str]:
-    repo.git("fetch", "-q", repo.config.remote, cwd=repo.main, check=check)
+    # Embedded Dolt updates refs/remotes/<remote>/__dolt_remote_info__ in this
+    # same repository, so a concurrent sync can make git lose a ref lock.
+    for attempt in range(5):
+        proc = run(["git", "fetch", "-q", repo.config.remote], repo.main, check=False)
+        if proc.returncode == 0 or "cannot lock ref" not in proc.stderr or attempt == 4:
+            break
+        time.sleep(0.2 * (attempt + 1) + random.random() * 0.2)
+    if check and proc.returncode != 0:
+        raise Fail(f"git fetch -q {repo.config.remote} failed ({proc.returncode}): "
+                   f"{(proc.stderr or proc.stdout).strip()[-2000:]}")
     return track_local_branches(repo)
 
 
