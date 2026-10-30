@@ -168,6 +168,10 @@ validation evidence below track the findings from the
   blocked state and unfinished work. Archives completed chats, restarts dead
   CI and pulls ~/enact. Unsupported recovery retains a one-time notice;
   Claude scheduled turns cannot start sessions.
+- Codex Marshals use Sol Light (`gpt-6.1-sol`, reasoning effort `low`).
+  Set this explicitly on creation and reuse so an existing automation does
+  not retain Astra High or inherit the vizier's model. Preserve other
+  automation settings; Claude keeps its supported model defaults.
 - Small task-prompt runs neither create nor delete it.
 - The vizier deletes only its identified Marshal when `enact status`
   reports `sweep_needed: false`. Other relevant active runs between

@@ -274,13 +274,15 @@ task-prompt run gets none.
    seven. In Claude use the supported scheduled-task tools for that name.
    Match legacy names by the absolute project path and owning app in their
    saved prompt; rename a matching task instead of creating a duplicate.
-   Preserve existing settings when updating. Use `mode: "update"` with the
+   In Codex, use Sol Light: `model="gpt-6.1-sol"` and
+   `reasoningEffort="low"` on creation and reuse of existing automations.
+   Preserve other settings when updating. Use `mode: "update"` with the
    resolved ID and all saved fields for migration. For creation use
    `mode: "create"`, `kind: "cron"`, `executionEnvironment: "local"`, the
    selected `projectId`, `status: "ACTIVE"`, and an hourly schedule at minute
    seven. The invocation requests a standalone sweep, so do not make a
-   thread heartbeat. Use the currently supported schema; if it requires a
-   model/effort, choose an available default and record the choice. Save the
+   thread heartbeat. Use the currently supported schema and record the
+   model/effort choice. Claude keeps its supported model defaults. Save the
    actual ID and any legacy aliases in the run's bead comments, then sync.
    Verify the saved ID, project, prompt and ACTIVE state after creation or
    migration. A view response that only renders a card does not confirm
