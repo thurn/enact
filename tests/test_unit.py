@@ -337,7 +337,8 @@ class InstallCliTest(unittest.TestCase):
         self.assertEqual(set(self.install()["skills"].values()), {"present"})
 
     def test_owned_legacy_links_migrate_but_unrelated_entries_survive(self):
-        legacy = self.home / ".codex/skills"
+        self.env["CODEX_HOME"] = str(self.home / "custom-codex")
+        legacy = self.home / "custom-codex/skills"
         for skill in ("enact", "enact-setup"):
             enact.link_dir(enact.ENACT_ROOT / "skills" / skill, legacy / skill)
         unrelated = legacy / "personal"
@@ -347,6 +348,19 @@ class InstallCliTest(unittest.TestCase):
         self.assertFalse((legacy / "enact").exists())
         self.assertFalse((legacy / "enact-setup").exists())
         self.assertEqual((unrelated / "SKILL.md").read_text(), "personal skill")
+        # The same names can belong to someone else; migration must not
+        # remove either a real directory or a link to another checkout.
+        copied = legacy / "enact"
+        copied.mkdir()
+        (copied / "SKILL.md").write_text("user's enact")
+        other = self.home / "other-checkout"
+        other.mkdir()
+        (other / "SKILL.md").write_text("other setup")
+        enact.link_dir(other, legacy / "enact-setup")
+        self.install()
+        self.assertEqual((copied / "SKILL.md").read_text(), "user's enact")
+        self.assertEqual((legacy / "enact-setup").resolve(), other.resolve())
+        self.assertEqual((other / "SKILL.md").read_text(), "other setup")
 
     def test_conflicting_canonical_content_is_preserved(self):
         conflict = self.home / ".agents/skills/enact"

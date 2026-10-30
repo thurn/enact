@@ -282,7 +282,11 @@ task-prompt run gets none.
    thread heartbeat. Use the currently supported schema; if it requires a
    model/effort, choose an available default and record the choice. Save the
    actual ID and any legacy aliases in the run's bead comments, then sync.
-   An uncertain result requires inspecting saved state before retrying.
+   Verify the saved ID, project, prompt and ACTIVE state after creation or
+   migration. A view response that only renders a card does not confirm
+   existence. An uncertain result requires inspecting saved state before
+   retrying; if a verified sweep disappears while needed, preserve evidence
+   and request Justiciar recovery instead of repeatedly recreating it.
    Schedule this prompt with the actual paths and owning host/app:
 
    > Read `<ENACT>/skills/enact/roles/marshal.md` and follow it for the Enact

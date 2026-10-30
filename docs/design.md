@@ -577,3 +577,25 @@ The desktop tool host is `local`, distinct from the OS hostname.
   verified. Its exact ID was recorded on the run for final cleanup; it must
   remain while `sweep_needed` is true. This tests scheduling configuration,
   not execution of a future hourly sweep.
+
+
+### Desktop review and scheduling uncertainty (2026-10-29)
+
+- Warden en-b2c.1.8 independently read both smoke-chat turns and its archive
+  listing. The recorded ready identity, temporary local access check,
+  deliberate turn termination, continuation and cleanup are supported.
+  This remains a bounded continuation test, not a crash-recovery test.
+- After the executor's verified active creation, the replacement Marshal's
+  saved record disappeared by 03:13 UTC on 2026-10-30. Warden inspection
+  confirmed neither that ID nor the legacy ID remained in the configured
+  automation directory. The last archived legacy sweep at 02:04 UTC
+  reported `sweep_needed: true`, retained the sweep and issued no deletion.
+  The cause is unknown; no helper cleanup defect has been established.
+- `automation_update(mode: "view")` returned only a rendered-card receipt,
+  which does not establish existence or active scheduling. Creation and
+  migration must verify the saved ID, project, prompt and active state.
+  If a verified required sweep disappears, preserve the receipts and request
+  Justiciar recovery; do not repeatedly recreate it or claim completion.
+  Scheduling persistence and final cleanup remain open run requirements
+  until recovery supplies evidence. The initial lifecycle smoke remains
+  valid, but it does not establish continuing hourly execution.
