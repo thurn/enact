@@ -105,12 +105,37 @@ def run(
     return proc
 
 
+def git_bash() -> str:
+    """Git for Windows' bash: `ENACT_BASH`, else the `bin/bash.exe` of the git on PATH."""
+    if os.environ.get("ENACT_BASH"):
+        return os.environ["ENACT_BASH"]
+    roots = []
+    if git := shutil.which("git"):
+        roots += list(Path(git).resolve().parents)[:3]  # <root>/cmd/git.exe, <root>/mingw64/bin/git.exe
+    roots.append(Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git")
+    for root in roots:
+        # bin/bash.exe, not usr/bin/bash.exe: the launcher puts usr/bin and mingw64/bin on PATH.
+        if (root / "bin" / "bash.exe").is_file() and (root / "usr" / "bin").is_dir():
+            return str(root / "bin" / "bash.exe")
+    raise Fail("project commands need Git for Windows' bash; install Git for Windows or set ENACT_BASH")
+
+
+def shell_args(command: str) -> dict[str, Any]:
+    """subprocess arguments for a project-configured command (.enact.toml).
+
+    The commands are POSIX shell, so on Windows they run in Git for Windows' bash rather than
+    cmd.exe, which `shell=True` would use.
+    """
+    if WINDOWS:
+        return {"args": [git_bash(), "-c", command]}
+    return {"args": command, "shell": True}
+
+
 def run_shell(command: str, cwd: Path, env: dict[str, str] | None = None) -> int:
     """Run a project-configured shell command, streaming output to stderr."""
     log(f"$ {command}")
     proc = subprocess.run(
-        command,
-        shell=True,
+        **shell_args(command),
         cwd=cwd,
         env={**os.environ, **(env or {})},
         stdout=sys.stderr,
@@ -1888,7 +1913,7 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
     log(f"slow CI on {tip[:12]} in {path}")
     try:
         proc = subprocess.run(
-            cfg.slow, shell=True, cwd=path, text=True, encoding="utf-8", errors="replace",
+            **shell_args(cfg.slow), cwd=path, text=True, encoding="utf-8", errors="replace",
             # One stream, in order: the log tail must end where the check failed.
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
         )

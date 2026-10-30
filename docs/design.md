@@ -233,6 +233,12 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   full-replacement `create`/`remove` hooks (env: `ENACT_WORKTREE_PATH`,
   `ENACT_BRANCH`, `ENACT_BASE_SHA`, `ENACT_REPO`), optional
   `[roles.<role>]` model/effort per host.
+- The check and hook commands are POSIX shell on every OS (2026-10-30). On
+  Windows they run in Git for Windows' `bin/bash.exe` (found next to the
+  `git` on PATH, else under `%ProgramFiles%\Git`; `ENACT_BASH` overrides),
+  not in cmd.exe, so one `.enact.toml` serves macOS, Linux and Windows
+  machines. Git for Windows is already required for git itself; the
+  `bin/` launcher, unlike `usr/bin/bash.exe`, puts the MSYS tools on PATH.
 - AGENTS.md: agent-facing prose bullets (enabled roles, review policy, how to
   use `enact push`).
 

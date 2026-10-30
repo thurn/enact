@@ -292,6 +292,35 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(cfg.role_settings("warden", "codex"), {})
 
 
+class ShellTest(unittest.TestCase):
+    # A POSIX command with the quoting the projects' hooks use: $(...), "$VAR", '...' and &&.
+    COMMAND = """f=$(mktemp) && printf '%s|%s' "$ENACT_X" 'a "b" c' > "$f" && cat "$f"; rm -f "$f\""""
+
+    def test_project_commands_run_in_a_posix_shell(self):
+        proc = subprocess.run(
+            **enact.shell_args(self.COMMAND), env={**os.environ, "ENACT_X": "x y"},
+            capture_output=True, text=True, stdin=subprocess.DEVNULL,
+        )
+        self.assertEqual((proc.returncode, proc.stdout), (0, 'x y|a "b" c'), proc.stderr)
+
+    def test_windows_finds_git_bash_beside_git(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for rel in ("cmd/git.exe", "bin/bash.exe"):
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).touch()
+            (root / "usr" / "bin").mkdir(parents=True)
+            env = {k: v for k, v in os.environ.items() if k != "ENACT_BASH"}
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(enact, "WINDOWS", True), \
+                    mock.patch.object(enact.shutil, "which", return_value=str(root / "cmd" / "git.exe")):
+                args = enact.shell_args("true")
+            self.assertEqual(args, {"args": [str((root / "bin" / "bash.exe").resolve()), "-c", "true"]})
+            with mock.patch.dict(os.environ, {"ENACT_BASH": "custom-bash"}), \
+                    mock.patch.object(enact, "WINDOWS", True):
+                self.assertEqual(enact.shell_args("true")["args"][0], "custom-bash")
+
+
 class GraphTest(unittest.TestCase):
     def test_descendants_are_transitive(self):
         graph = [
