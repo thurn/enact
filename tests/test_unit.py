@@ -203,6 +203,14 @@ class GraphTest(unittest.TestCase):
         found = {b["id"] for b in enact.descendants(graph, "e")}
         self.assertEqual(found, {"m1", "t1"})
 
+    def test_spawn_order_breaks_priority_ties_by_lowest_bead_number(self):
+        ready = [{"id": "ps-e8r.9"}, {"id": "ps-e8r.10"}, {"id": "ps-e8r.1"},
+                 {"id": "ps-e8r.2", "priority": 1},
+                 {"id": "ps-zz", "labels": ["role:steward"], "priority": 3}]
+        ready.sort(key=enact.spawn_order)
+        self.assertEqual([b["id"] for b in ready],
+                         ["ps-zz", "ps-e8r.2", "ps-e8r.1", "ps-e8r.9", "ps-e8r.10"])
+
     def test_run_identity_supports_legacy_hierarchy_and_shared_repairs(self):
         graph = [{"id": "run", "issue_type": "epic"},
                  {"id": "milestone", "parent": "run", "issue_type": "epic"},

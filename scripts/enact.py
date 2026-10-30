@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import shutil
 import socket
 import subprocess
@@ -335,6 +336,12 @@ def role_of(bead: dict[str, Any]) -> str:
         if label.startswith("role:"):
             return label.split(":", 1)[1]
     return "executor"
+
+
+def spawn_order(bead: dict[str, Any]) -> tuple[Any, ...]:
+    """Stewards first, then priority, then lowest bead number (ps-e8r.9 < .10)."""
+    number = [int(p) if p.isdigit() else p for p in re.split(r"(\d+)", bead["id"])]
+    return role_of(bead) != "steward", bead.get("priority", 2), number
 
 
 def targeted_here(bead: dict[str, Any]) -> bool:
@@ -964,7 +971,7 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
         and not stopped_runs(b, graph, epic)
         and not (hold_archivist and role_of(b) == "archivist")
     ]
-    candidates.sort(key=lambda b: (role_of(b) != "steward", b.get("priority", 2)))
+    candidates.sort(key=spawn_order)
     for bead in candidates:
         reservation = {
             "enact_run": epic,
