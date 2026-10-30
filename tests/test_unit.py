@@ -7,9 +7,11 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "enact.py"
 spec = importlib.util.spec_from_file_location("enact", SCRIPT)
@@ -245,6 +247,15 @@ class GraphTest(unittest.TestCase):
         self.assertIsNone(enact.recovery_budget(history, "explicit-resume", 2,
                                                 "2030-01-01T00:00:00+00:00"))
 
+        for limit in (1, 2, 3):
+            with self.subTest(limit=limit):
+                for count in range(limit + 1):
+                    history = [{"epoch": "old", "at": "2020-01-01T00:00:00+00:00"}
+                               for _ in range(count)]
+                    self.assertEqual(enact.recovery_budget(
+                        history, "old", limit, "2030-01-01T00:00:00+00:00"),
+                        "exhausted" if count == limit else None)
+
     def test_marshal_names_distinguish_equal_project_basenames(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -401,6 +412,292 @@ class InstallTest(unittest.TestCase):
             live = root / "live"
             live.symlink_to(target, target_is_directory=True)
             self.assertFalse(enact.unlink_retired(target, live))
+
+
+class ParallelSuiteTest(unittest.TestCase):
+    def test_isolated_lanes_replay_all_test_outcomes(self):
+        from tests import test_integration as integration
+
+        barrier = threading.Barrier(4)
+        fixtures = []
+
+        class Scenario(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                cls.marker = object()
+                fixtures.append(cls.marker)
+                barrier.wait(timeout=10)
+
+            def test_0_success(self):
+                self.assertIn(self.marker, fixtures)
+
+            def test_1_failure(self):
+                self.fail("intentional failure")
+
+            def test_2_error(self):
+                raise RuntimeError("intentional error")
+
+            @unittest.skip("intentional skip")
+            def test_3_skip(self):
+                pass
+
+            @unittest.expectedFailure
+            def test_4_expected_failure(self):
+                self.fail("expected")
+
+            @unittest.expectedFailure
+            def test_5_unexpected_success(self):
+                pass
+
+            def test_6_subtest(self):
+                with self.subTest(value="failure"):
+                    self.fail("subtest failure")
+
+            def test_7_success(self):
+                self.assertIsNotNone(self.marker)
+
+        result = unittest.TestResult()
+        with mock.patch.object(integration, "EnactTest", Scenario), \
+                mock.patch.object(integration.os, "cpu_count", return_value=4):
+            suite = integration.ParallelScenarios(
+                unittest.defaultTestLoader.loadTestsFromTestCase(Scenario))
+            self.assertEqual(suite.countTestCases(), 8)
+            suite.run(result)
+        self.assertEqual(len(set(fixtures)), 4)
+        self.assertEqual(result.testsRun, 8)
+        self.assertEqual(len(result.failures), 2)
+        self.assertEqual(len(result.errors), 1)
+        self.assertEqual(len(result.skipped), 1)
+        self.assertEqual(len(result.expectedFailures), 1)
+        self.assertEqual(len(result.unexpectedSuccesses), 1)
+        self.assertIn("subtest failure", result.failures[1][1] + result.failures[0][1])
+
+    def test_fixture_failures_are_reported(self):
+        from tests import test_integration as integration
+
+        barrier = threading.Barrier(2)
+
+        class Scenario(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                barrier.wait(timeout=10)
+                raise RuntimeError("fixture failure")
+
+            def test_first(self):
+                pass
+
+            def test_second(self):
+                pass
+
+        result = unittest.TestResult()
+        with mock.patch.object(integration, "EnactTest", Scenario), \
+                mock.patch.object(integration.os, "cpu_count", return_value=2):
+            integration.ParallelScenarios(
+                unittest.defaultTestLoader.loadTestsFromTestCase(Scenario)).run(result)
+        self.assertEqual(result.testsRun, 0)
+        self.assertEqual(len(result.errors), 2)
+        self.assertTrue(all("fixture failure" in error for _, error in result.errors))
+
+
+class BeadsReadTest(unittest.TestCase):
+    def test_writes_sync_and_unlock_refresh_cached_reads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".beads").mkdir()
+            (root / ".beads" / "metadata.json").write_text(json.dumps({
+                "dolt_mode": "embedded", "dolt_database": "test",
+            }))
+            repo = enact.Repo(root, root, root / ".git", enact.Config())
+            state, calls = {"title": "initial"}, []
+
+            def command(args, cwd, **kwargs):
+                calls.append(args[1:])
+                if args[0] == "dolt":
+                    if args[1] == "pull":
+                        state["title"] = "remote"
+                    out = {"config": "user.name = Test\nuser.email = t@example.com",
+                           "remote": "origin", "commit": "", "pull": ""}[args[1]]
+                    return subprocess.CompletedProcess(args, 0, out, "")
+                if args[1] == "update":
+                    state["title"] = args[-1]
+                out = (json.dumps([{"id": "work", **state}])
+                       if args[1] in ("show", "list") else "origin")
+                return subprocess.CompletedProcess(args, 0, out, "")
+
+            first, second = enact.Beads(repo), enact.Beads(repo)
+            with mock.patch.object(enact, "run", side_effect=command), \
+                    mock.patch.object(enact.shutil, "which", return_value="dolt"), \
+                    mock.patch.object(enact, "dolt_json", side_effect=[
+                        [{"b": "main"}], [{"local_tip": "sha", "remote_tip": "sha"}],
+                    ]):
+                with enact.ownership_lock(repo):
+                    for reader in (first, second):
+                        self.assertEqual(reader.show("work")["title"], "initial")
+                        self.assertEqual(reader.all()[0]["title"], "initial")
+                    first.show("work")["title"] = "unwritten"
+                    self.assertEqual(second.show("work")["title"], "initial")
+                    self.assertEqual(sum(call[0] == "show" for call in calls), 1)
+                    self.assertEqual(sum(call[0] == "list" for call in calls), 1)
+                    second.run("update", "work", "--title", "local")
+                    self.assertEqual(first.show("work")["title"], "local")
+                    self.assertEqual(first.all()[0]["title"], "local")
+                    enact.sync(repo)
+                    self.assertEqual(first.show("work")["title"], "remote")
+                    self.assertEqual(first.all()[0]["title"], "remote")
+                for title in ("outside", "outside again"):
+                    state["title"] = title
+                    self.assertEqual(first.show("work")["title"], title)
+                    self.assertEqual(first.all()[0]["title"], title)
+
+
+class SyncTest(unittest.TestCase):
+    def test_embedded_commit_failure_cannot_publish(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".beads").mkdir()
+            (root / ".beads" / "metadata.json").write_text(json.dumps({
+                "dolt_mode": "embedded", "dolt_database": "test",
+            }))
+            repo = enact.Repo(root, root, root / ".git", enact.Config())
+            calls = []
+
+            def command(args, cwd, **kwargs):
+                calls.append(args)
+                out = {"config": "user.name = Test\nuser.email = t@example.com",
+                       "remote": "origin", "commit": ""}[args[1]]
+                return subprocess.CompletedProcess(
+                    args, 1 if args[1] == "commit" else 0, out, "disk full")
+
+            with mock.patch.object(enact.shutil, "which", return_value="dolt"), \
+                    mock.patch.object(enact, "run", side_effect=command), \
+                    mock.patch.object(enact, "dolt_json", return_value=[{"b": "topic"}]):
+                with self.assertRaisesRegex(enact.Fail, "disk full"):
+                    enact.sync(repo)
+            self.assertFalse(any(args[1] in ("pull", "push") for args in calls))
+
+    def test_equal_published_tip_needs_no_push(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".beads").mkdir()
+            (root / ".beads" / "metadata.json").write_text(json.dumps({
+                "dolt_mode": "embedded", "dolt_database": "test",
+            }))
+            repo = enact.Repo(root, root, root / ".git", enact.Config())
+            calls = []
+
+            def command(args, cwd, **kwargs):
+                calls.append(args)
+                out = {"config": "user.name = Test\nuser.email = t@example.com",
+                       "remote": "origin", "commit": "no changes added to commit",
+                       "pull": "up to date"}[args[1]]
+                return subprocess.CompletedProcess(args, args[1] == "commit", out, "")
+
+            with mock.patch.object(enact.shutil, "which", return_value="dolt"), \
+                    mock.patch.object(enact, "run", side_effect=command), \
+                    mock.patch.object(enact, "dolt_json", side_effect=[
+                        [{"b": "main"}], [{"local_tip": "sha", "remote_tip": "sha"}],
+                    ]):
+                self.assertTrue(enact.sync(repo)["remote"])
+            self.assertFalse(any(args[1] == "push" for args in calls))
+
+    def test_server_mode_retains_beads_sync(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".beads").mkdir()
+            (root / ".beads" / "metadata.json").write_text('{"dolt_mode":"server"}')
+            repo = enact.Repo(root, root, root / ".git", enact.Config())
+            beads = mock.Mock()
+            beads.raw.return_value = subprocess.CompletedProcess([], 0, "origin", "")
+            with mock.patch.object(enact, "Beads", return_value=beads):
+                self.assertTrue(enact.sync(repo)["remote"])
+            self.assertEqual(beads.raw.call_args_list, [
+                mock.call("dolt", "remote", "list"),
+                mock.call("dolt", "commit", "-m", "enact sync"),
+                mock.call("dolt", "pull"), mock.call("dolt", "push"),
+            ])
+
+
+class CommandPolicyTest(unittest.TestCase):
+    def setUp(self):
+        from tests.policy_fixture import PolicyWorld
+
+        self.a = PolicyWorld(enact)
+        self.addCleanup(self.a.close)
+
+    def start_worker(self, machine, bead, session):
+        token = machine.show(bead)["metadata"]["enact_reservation"]
+        return machine.enact("start", bead, "--reservation", token, session=session)
+
+    def test_desktop_worker_answers_to_its_host_session_id(self):
+        # Claude Desktop's start_session returns the host id; the CLI id differs.
+        epic = self.a.create("desktop ids", type="epic")
+        bead = self.a.create("desktop child", parent=epic)
+        token = self.a.enact("next", "--epic", epic)["reservation"]
+        self.a.enact("meta", bead, "enact_session=local_host", "--reservation", token)
+        desktop = {"ENACT_SESSION": "", "CLAUDE_CODE_SESSION_ID": "cli-uuid",
+                   "CLAUDE_CODE_HOST_SESSION_ID": "local_host"}
+        other = {**desktop, "CLAUDE_CODE_HOST_SESSION_ID": "local_other"}
+        self.a.enact("start", bead, "--reservation", token, env=other, code=3)
+        self.a.enact("start", bead, "--reservation", token, env=desktop)
+        saved = self.a.show(bead)
+        self.assertEqual(saved["assignee"], "local_host")
+        self.assertEqual(saved["metadata"]["enact_session"], "local_host")
+        self.a.enact("close", bead, "--reason", "done", env=other, code=3)
+        self.a.enact("close", bead, "--reason", "done", env=desktop)
+
+    def test_repeated_reservation_rejects_delayed_vizier_actions(self):
+        epic = self.a.create("repeated reservation", type="epic")
+        bead = self.a.create("spawn retry", parent=epic)
+        first = self.a.enact("next", "--epic", epic)["reservation"]
+        self.a.enact("release", bead, "--reservation", first, "--reason", "spawn failed")
+        second = self.a.enact("next", "--epic", epic)["reservation"]
+        self.assertNotEqual(first, second)
+        for token in (first, None):
+            option = ["--reservation", token] if token else []
+            self.a.enact("meta", bead, "enact_session=late-child", *option, code=3)
+            self.a.enact("release", bead, "--reason", "late failure", *option, code=3)
+        self.a.enact("meta", bead, "enact_session=current", "--reservation", second)
+        self.start_worker(self.a, bead, "current")
+        self.a.enact("meta", bead, "enact_spawn_project=stale", "--reservation", first, code=3)
+        self.assertEqual(self.a.show(bead)["assignee"], "current")
+
+    def test_legacy_handoff_requires_recorded_child_and_known_route(self):
+        bead = self.a.create("legacy reservation")
+        self.a.bd("update", bead, "--assignee", "vizier:host-a", "--status", "in_progress",
+                  "--set-metadata", "enact_spawn_host=host-a",
+                  "--set-metadata", "enact_vizier=sess-a")
+        self.a.enact("start", bead, session="wrong", code=3)
+        self.a.enact("meta", bead, "enact_session=legacy")
+        self.a.enact("start", bead, session="legacy")
+        self.a.enact("release", bead, "--reason", "unknown provider", "--expected-owner", "legacy",
+                     "--expected-session", "legacy", "--inactive", "missing", "--evidence",
+                     "unsupported lookup", session="marshal", code=3)
+        self.assertFalse(self.a.enact("status")["working"][0]["routing_known"])
+        self.a.bd("update", bead, "--set-metadata", "enact_spawn_provider=claude")
+        # A provider alone does not prove which app/project can inspect it.
+        self.a.enact("release", bead, "--reason", "unknown app", "--expected-owner", "legacy",
+                     "--expected-session", "legacy", "--inactive", "missing", "--evidence",
+                     "unsupported lookup", session="marshal", code=3)
+        self.a.enact("close", bead, "--reason", "legacy completed", session="legacy")
+
+    def test_vizier_schedules_archives_and_finishes(self):
+        epic = self.a.create("epic", type="epic")
+        first = self.a.create("first", parent=epic, priority=1)
+        second = self.a.create("second", parent=epic, labels="role:warden")
+        self.a.bd("dep", "add", second, first)
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual((step["action"], step["bead"], step["role"]), ("spawn", first, "executor"))
+        self.assertIn("executor.md", step["prompt"])
+        self.a.enact("meta", first, "enact_session=exec-1", "--reservation", step["reservation"])
+        self.start_worker(self.a, first, "exec-1")
+        self.a.enact("close", first, "--reason", "done", session="exec-1")
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual(step["archive"], [{"bead": first, "session": "exec-1"}])
+        self.assertEqual((step["action"], step["bead"], step["role"]), ("spawn", second, "warden"))
+        self.start_worker(self.a, second, "exec-2")
+        self.a.enact("close", second, "--reason", "done", session="exec-2")
+        self.assertEqual(self.a.show(epic)["status"], "closed")
+        self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "done")
 
 
 if __name__ == "__main__":

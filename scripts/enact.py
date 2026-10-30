@@ -292,6 +292,8 @@ class Beads:
         self.env = {"BD_NON_INTERACTIVE": "1"}
 
     def raw(self, *args: str, actor: str | None = None) -> subprocess.CompletedProcess[str]:
+        if args[0] not in {"show", "list", "ready"}:
+            _beads_reads.get(self.repo.common, {}).clear()
         cmd = ["bd"]
         if actor:
             cmd += ["--actor", actor]
@@ -307,12 +309,23 @@ class Beads:
         out = self.run(*args, "--json", actor=actor)
         return json.loads(out) if out.strip() else None
 
+    def read(self, *args: str) -> Any:
+        # A helper-owned lock gives one coherent read phase. Writes and sync
+        # invalidate it; unlocked observers always query Beads directly.
+        cache = _beads_reads.get(self.repo.common)
+        if cache is None:
+            return self.json(*args)
+        if args not in cache:
+            cache[args] = self.run(*args, "--json")
+        out = cache[args]
+        return json.loads(out) if out.strip() else None
+
     def show(self, bead_id: str) -> dict[str, Any]:
-        data = self.json("show", bead_id)
+        data = self.read("show", bead_id)
         return data[0] if isinstance(data, list) else data
 
     def all(self) -> list[dict[str, Any]]:
-        return self.json("list", "--all", "-n", "0") or []
+        return self.read("list", "--all", "-n", "0") or []
 
     def has_remote(self) -> bool:
         proc = self.raw("dolt", "remote", "list")
@@ -404,6 +417,7 @@ def resolve_remote_wins(repo: Repo) -> list[dict[str, Any]]:
 # Serialize the read/check/write/sync sequence within one clone. Remote
 # conflicts still resolve remote-wins; verify the published owner afterwards.
 _ownership_locks: set[Path] = set()
+_beads_reads: dict[Path, dict[tuple[str, ...], str]] = {}
 
 
 @contextlib.contextmanager
@@ -418,10 +432,12 @@ def ownership_lock(repo: Repo):
             raise Fail("ownership operation busy; retry", code=3)
         time.sleep(0.1)
     _ownership_locks.add(path)
+    _beads_reads[repo.common] = {}
     try:
         yield
     finally:
         _ownership_locks.remove(path)
+        _beads_reads.pop(repo.common, None)
         release_lock(path, guard)
 
 
@@ -437,21 +453,67 @@ def serialized(function):
 @serialized
 def sync(repo: Repo) -> dict[str, Any]:
     """Commit local Beads writes, merge the remote and push refs/dolt/data."""
+    _beads_reads.get(repo.common, {}).clear()
     beads = Beads(repo)
-    if not beads.has_remote():
+    # Embedded databases need no Beads schema/engine initialization to sync.
+    # Keep the bd path for server mode and installations without the CLI.
+    metadata = repo.main / ".beads" / "metadata.json"
+    settings = json.loads(metadata.read_text(encoding="utf-8")) if metadata.exists() else {}
+    embedded = (repo.config.remote == "origin"
+                and settings.get("dolt_mode", "embedded") == "embedded"
+                and settings.get("dolt_database") and shutil.which("dolt"))
+
+    def command(*args: str) -> subprocess.CompletedProcess[str]:
+        if not embedded:
+            return beads.raw("dolt", *args)
+        return run(["dolt", *args], dolt_db_dir(repo), check=False)
+
+    if embedded:
+        config = dict(line.split(" = ", 1) for line in
+                      command("config", "--list").stdout.splitlines() if " = " in line)
+        # bd supplies its own identity; the external CLI requires Dolt config.
+        # Preserve that fallback rather than adding a new setup requirement.
+        embedded = bool(config.get("user.name") and config.get("user.email"))
+    remote = command("remote") if embedded else beads.raw("dolt", "remote", "list")
+    if embedded and remote.returncode != 0:
+        raise Fail(f"dolt remote failed: {(remote.stderr or remote.stdout).strip()}")
+    if embedded and "origin" not in remote.stdout.split():
+        embedded = False  # retain bd's remote selection for custom Dolt remotes
+        remote = beads.raw("dolt", "remote", "list")
+    if remote.returncode != 0 or not remote.stdout.strip():
         return {"remote": False, "dropped": []}
+    branch = (dolt_json(dolt_db_dir(repo), "select active_branch() as b")[0]["b"]
+              if embedded else None)
+    target = [repo.config.remote, branch] if embedded else []
     dropped: list[dict[str, Any]] = []
     for attempt in range(8):
-        beads.raw("dolt", "commit", "-m", "enact sync")
-        pull = beads.raw("dolt", "pull")
+        committed = command("commit", *(["-A"] if embedded else []), "-m", "enact sync")
+        if embedded and committed.returncode != 0:
+            message = (committed.stdout + committed.stderr).lower()
+            if "no changes added to commit" not in message and "nothing to commit" not in message:
+                raise Fail(f"dolt commit failed: {(committed.stderr or committed.stdout).strip()}")
+        pull = command("pull", *target)
         if pull.returncode != 0:
             text = (pull.stdout + pull.stderr).lower()
-            if "no branches found" in text:
+            if ("no branches found" in text or
+                    (embedded and f'branch "{branch}" not found on remote' in text)):
                 pass  # first push of this database to the remote
-            elif "conflict" not in text:
+            elif "conflict" in text:
+                dropped += resolve_remote_wins(repo)
+            else:
                 raise Fail(f"bd dolt pull failed: {(pull.stderr or pull.stdout).strip()}")
-            dropped += resolve_remote_wins(repo)
-        push = beads.raw("dolt", "push")
+        if embedded:
+            remote_ref = f"{repo.config.remote}/{branch}".replace("'", "''")
+            try:
+                heads = dolt_json(dolt_db_dir(repo),
+                                  f"select hashof('HEAD') as local_tip, "
+                                  f"hashof('{remote_ref}') as remote_tip")[0]
+            except Fail:
+                pass  # absent first-push ref or older CLI: use normal push
+            else:
+                if heads["local_tip"] == heads["remote_tip"]:
+                    return {"remote": True, "dropped": dropped}
+        push = command("push", *target)
         if push.returncode == 0:
             return {"remote": True, "dropped": dropped}
         log(f"beads push rejected (attempt {attempt + 1}); retrying")

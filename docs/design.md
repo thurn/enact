@@ -621,3 +621,68 @@ The desktop tool host is `local`, distinct from the OS hostname.
   Retain the sweep while `sweep_needed` is true. If it disappears again,
   preserve the new evidence and return to incident recovery, not a loop of
   blind replacements.
+
+
+## Slow-check runtime (2026-10-29)
+
+- Keep all scenarios in the normal fast+slow checks. Independent integration
+  scenarios take work from a queue in up to eight lanes, bounded by CPU count.
+  Start the measured longest scenarios first to avoid a serial tail. Each lane
+  creates its own bare origin, clones and absolute-path snapshot, then uses
+  unittest's usual fixture lifecycle. Database prefixes are unique per lane and
+  temporary Dolt configurations disable telemetry. A lane never edits another
+  lane's repository or database. CI/check subprocess races remain real.
+- Lane results are replayed on the runner thread, including setup/teardown
+  errors, subtest failures, skips and durations. Fast regressions exercise
+  concurrent fixture isolation and failure reporting. Focused test names still
+  run directly and sequentially for debugging; no test is opt-in. Four serial
+  policy stories (desktop identity, reservation callbacks, legacy routing and
+  archive scheduling) run through the public CLI parser and commands against a
+  small in-memory Beads port in the fast suite. Their assertions are retained.
+  Real Beads dependency readiness has its own focused scenario, including a
+  higher-priority blocked dependent. All persistence, synchronization, racing
+  claims, filesystem recovery, shared holds and delivery checks continue to use
+  real git, Beads and Dolt. Recovery-budget counts are checked in fast policy
+  tests; the real graph scenario verifies a saved attempt, cooldown, seeded
+  prior hourly sweeps, exhaustion, shared blocking and an explicit resume.
+- Embedded databases using the default remote can synchronize through the Dolt
+  CLI without repeatedly opening Beads' schema engine. Preserve the existing
+  commit/pull/push order for new tips, local ownership lock, remote-wins
+  conflict reporting, retries and ownership verification after publication.
+  Commit failures other than an empty working set abort before pull/push.
+  Initial databases may have no remote branch yet; publication uses an ordinary
+  push, never a forced database push.
+- Within an ownership lock, reuse identical Beads show/list reads across helper
+  instances. Every write attempt and every synchronization clears those reads;
+  leaving the lock discards them. Cache raw JSON so each caller receives
+  independent objects. Unlocked observers query Beads directly. Verification
+  after publication therefore reads fresh values, including ownership and shared
+  holds.
+- An embedded sync still commits and pulls before comparing local and remote
+  commit hashes. Equal hashes need no redundant push. A clean working set alone
+  proves nothing: a real regression verifies that an already-committed
+  unpublished bead reaches the other clone.
+- Server mode, missing Dolt CLI/identity, and nondefault project remotes keep
+  the Beads synchronization path. Tests explicitly configure temporary Dolt
+  identities rather than relying on the developer's home directory; a real
+  synchronization regression also covers the identity-free fallback.
+- Measurements use macOS/Python 3.14 on jarvis. Earlier 55-test receipt:
+  2215.320 seconds. The original blocked-history scenario took 251.014 seconds;
+  the worker-recovery scenario took 235.406 seconds including setup (212.809
+  seconds in its body). Instrumenting the helper's existing subprocess boundary
+  attributed 27 syncs to 56.581 seconds in Beads push, 43.705 in pull, 22.420 in
+  remote probes and 20.765 in commit; git fetch totaled 0.502 seconds. Direct
+  synchronization reduced the blocked-history body to 101.619 seconds before
+  adding isolated lanes.
+- Reproduce isolated scenario timings by passing either recovery method's fully
+  qualified name to `python3 -m unittest -v`. Python 3.12+ can add `--durations
+  0` to the normal fast+slow command for per-scenario timings, including time
+  spent contending with other lanes.
+- Final normal checks pass all 64 tests in 334.951 seconds (5m35s), versus the
+  original 55 tests in 2215.320 seconds (36m55s). Fast checks pass 33 tests in
+  1.953 seconds. No scenario is outside configured CI. These are observed wall
+  times on the host above, including concurrent subprocesses. A twelve-lane
+  trial took 417.638 seconds for 63 tests versus 379.435 seconds with eight
+  lanes; keep the lower cap rather than adding contention. Moving the four
+  serial policy stories to the fast suite brought the complete 64-test run near
+  the documented five-minute budget.

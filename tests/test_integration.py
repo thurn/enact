@@ -4,8 +4,10 @@ Each test builds a bare "origin" plus clones that stand in for separate
 machines, then drives the CLI exactly as agents do.
 """
 
+import concurrent.futures
 import json
 import os
+import queue
 import shlex
 import shutil
 import subprocess
@@ -256,6 +258,7 @@ class EnactTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.base = Path(tempfile.mkdtemp(prefix="enact-test-")).resolve()
+        cls.prefix = "tp" + os.urandom(4).hex()
         cls.tmp = cls.base / "work"
         cls.snapshot = cls.base / "snapshot"
         cls.tmp.mkdir()
@@ -296,7 +299,8 @@ class EnactTest(unittest.TestCase):
             machine.git("commit", "-q", "-m", "init")
             machine.git("remote", "add", "origin", str(self.origin))
             machine.git("push", "-q", "origin", "master")
-            machine.enact("setup", "--prefix", "tp")  # bd init commits .beads/
+            machine.enact("setup", "--prefix", self.prefix)  # bd init commits .beads/
+            self.configure_dolt(machine)
             if machine.git("status", "--porcelain", ".gitignore"):
                 machine.git("add", ".gitignore")
                 machine.git("commit", "-q", "-m", "ignore worktrees")
@@ -306,7 +310,15 @@ class EnactTest(unittest.TestCase):
         self.configure_git(path)
         machine = Machine(path, host, session)
         assert machine.enact("setup")["beads"] == "bootstrapped from remote"
+        self.configure_dolt(machine)
         return machine
+
+    def configure_dolt(self, machine):
+        metadata = json.loads((machine.path / ".beads" / "metadata.json").read_text())
+        db = machine.path / ".beads" / "embeddeddolt" / metadata["dolt_database"]
+        sh(["dolt", "config", "--local", "--add", "metrics.disabled", "true"], db)
+        sh(["dolt", "config", "--local", "--add", "user.name", "Test"], db)
+        sh(["dolt", "config", "--local", "--add", "user.email", "t@example.com"], db)
 
     def configure_git(self, path):
         sh(["git", "config", "user.email", "t@example.com"], path)
@@ -595,39 +607,6 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         token = machine.show(bead)["metadata"]["enact_reservation"]
         return machine.enact("start", bead, "--reservation", token, session=session)
 
-    def test_desktop_worker_answers_to_its_host_session_id(self):
-        # Claude Desktop's start_session returns the host id; the CLI id differs.
-        epic = self.a.create("desktop ids", type="epic")
-        bead = self.a.create("desktop child", parent=epic)
-        token = self.a.enact("next", "--epic", epic)["reservation"]
-        self.a.enact("meta", bead, "enact_session=local_host", "--reservation", token)
-        desktop = {"ENACT_SESSION": "", "CLAUDE_CODE_SESSION_ID": "cli-uuid",
-                   "CLAUDE_CODE_HOST_SESSION_ID": "local_host"}
-        other = {**desktop, "CLAUDE_CODE_HOST_SESSION_ID": "local_other"}
-        self.a.enact("start", bead, "--reservation", token, env=other, code=3)
-        self.a.enact("start", bead, "--reservation", token, env=desktop)
-        saved = self.a.show(bead)
-        self.assertEqual(saved["assignee"], "local_host")
-        self.assertEqual(saved["metadata"]["enact_session"], "local_host")
-        self.a.enact("close", bead, "--reason", "done", env=other, code=3)
-        self.a.enact("close", bead, "--reason", "done", env=desktop)
-
-    def test_repeated_reservation_rejects_delayed_vizier_actions(self):
-        epic = self.a.create("repeated reservation", type="epic")
-        bead = self.a.create("spawn retry", parent=epic)
-        first = self.a.enact("next", "--epic", epic)["reservation"]
-        self.a.enact("release", bead, "--reservation", first, "--reason", "spawn failed")
-        second = self.a.enact("next", "--epic", epic)["reservation"]
-        self.assertNotEqual(first, second)
-        for token in (first, None):
-            option = ["--reservation", token] if token else []
-            self.a.enact("meta", bead, "enact_session=late-child", *option, code=3)
-            self.a.enact("release", bead, "--reason", "late failure", *option, code=3)
-        self.a.enact("meta", bead, "enact_session=current", "--reservation", second)
-        self.start_worker(self.a, bead, "current")
-        self.a.enact("meta", bead, "enact_spawn_project=stale", "--reservation", first, code=3)
-        self.assertEqual(self.a.show(bead)["assignee"], "current")
-
     def test_local_recovery_restores_surviving_branch(self):
         epic = self.a.create("lost checkout", type="epic")
         bead = self.a.create("saved branch", parent=epic)
@@ -769,24 +748,16 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.a.enact("push", "--no-ci", cwd=original, session="old", code=3)
         self.assertTrue(original.exists())
 
-    def test_legacy_handoff_requires_recorded_child_and_known_route(self):
-        bead = self.a.create("legacy reservation")
-        self.a.bd("update", bead, "--assignee", "vizier:host-a", "--status", "in_progress",
-                  "--set-metadata", "enact_spawn_host=host-a",
-                  "--set-metadata", "enact_vizier=sess-a")
-        self.a.enact("start", bead, session="wrong", code=3)
-        self.a.enact("meta", bead, "enact_session=legacy")
-        self.a.enact("start", bead, session="legacy")
-        self.a.enact("release", bead, "--reason", "unknown provider", "--expected-owner", "legacy",
-                     "--expected-session", "legacy", "--inactive", "missing", "--evidence",
-                     "unsupported lookup", session="marshal", code=3)
-        self.assertFalse(self.a.enact("status")["working"][0]["routing_known"])
-        self.a.bd("update", bead, "--set-metadata", "enact_spawn_provider=claude")
-        # A provider alone does not prove which app/project can inspect it.
-        self.a.enact("release", bead, "--reason", "unknown app", "--expected-owner", "legacy",
-                     "--expected-session", "legacy", "--inactive", "missing", "--evidence",
-                     "unsupported lookup", session="marshal", code=3)
-        self.a.enact("close", bead, "--reason", "legacy completed", session="legacy")
+    def test_scheduler_respects_real_beads_dependencies(self):
+        epic = self.a.create("dependency readiness", type="epic")
+        first = self.a.create("prerequisite", parent=epic, priority=2)
+        second = self.a.create("higher priority dependent", parent=epic, priority=1,
+                               labels="role:warden")
+        self.a.bd("dep", "add", second, first)
+        self.assertEqual(self.a.enact("next", "--epic", epic)["bead"], first)
+        self.a.bd("close", first, "--reason", "fixture prerequisite completed")
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual((step["bead"], step["role"]), (second, "warden"))
 
     def test_claim_race_has_one_winner(self):
         bead = self.a.create("contested")
@@ -796,6 +767,23 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.a.enact("claim", bead)
         b.enact("claim", bead, code=3)
         self.assertEqual(b.show(bead)["assignee"], "sess-a")
+
+    def test_sync_publishes_committed_changes_with_clean_working_set(self):
+        bead = self.a.create("pending commit")
+        sh(["bd", "dolt", "commit", "-m", "unpublished"], self.a.path, env=self.a.env())
+        self.a.enact("sync")
+        self.b.enact("sync")
+        self.assertEqual(self.b.show(bead)["title"], "pending commit")
+
+    def test_sync_without_dolt_cli_identity_keeps_bd_fallback(self):
+        metadata = json.loads((self.a.path / ".beads" / "metadata.json").read_text())
+        db = self.a.path / ".beads" / "embeddeddolt" / metadata["dolt_database"]
+        sh(["dolt", "config", "--local", "--unset", "user.name", "user.email"], db)
+        with tempfile.TemporaryDirectory() as root:
+            bead = self.a.create("identity fallback")
+            self.assertTrue(self.a.enact("sync", env={"DOLT_ROOT_PATH": root})["remote"])
+        self.b.enact("sync")
+        self.assertEqual(self.b.show(bead)["title"], "identity fallback")
 
     def test_sync_conflict_remote_wins_and_reports(self):
         bead = self.a.create("both edit")
@@ -890,21 +878,22 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.a.enact("run", "register", epic, "--authorized", "--parallel", "2")
         command = ("run", "recover", epic, "--kind", "vizier", "--session", "sess-a",
                    "--evidence", "successful lookup: stopped")
-        for attempt in range(3):
-            result = self.a.enact(*command)
-            self.assertTrue(result["allowed"])
-            self.assertEqual(result["remaining"], 2 - attempt)
-            self.assertEqual(result["route"]["parallel"], 2)
-            if attempt == 0:
-                self.assertEqual(self.a.enact(*command)["reason"], "cooldown")
-            # Simulate the passage of hourly sweeps in the real shared graph.
-            bead = self.a.show(epic)
-            key = next(k for k in bead["metadata"] if k.startswith("enact_marshal_"))
-            history = bead["metadata"][key]
-            if isinstance(history, str):
-                history = json.loads(history)
-            history[-1]["at"] = "2020-01-01T00:00:00+00:00"
-            self.a.bd("update", epic, "--set-metadata", key + "=" + json.dumps(history))
+        result = self.a.enact(*command)
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["remaining"], 2)
+        self.assertEqual(result["route"]["parallel"], 2)
+        self.assertEqual(self.a.enact(*command)["reason"], "cooldown")
+        # Seed prior hourly sweeps in the real graph. The unit budget test
+        # covers each count; this scenario verifies durable CLI enforcement
+        # and explicit resume, without replaying the same sync-heavy loop.
+        bead = self.a.show(epic)
+        key = next(k for k in bead["metadata"] if k.startswith("enact_marshal_"))
+        history = bead["metadata"][key]
+        if isinstance(history, str):
+            history = json.loads(history)
+        history = [{**history[0], "id": f"{index:032x}",
+                    "at": "2020-01-01T00:00:00+00:00"} for index in range(3)]
+        self.a.bd("update", epic, "--set-metadata", key + "=" + json.dumps(history))
         self.assertEqual(self.a.enact(*command)["reason"], "exhausted")
         self.a.enact("run", "block", epic, "--exhausted", "--reason", "Justiciar: access unavailable")
         self.b.enact("claim", task, code=3)
@@ -919,25 +908,6 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.assertTrue(self.a.enact(*command)["allowed"])
         self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "done")
         self.assertEqual(self.b.enact("next", "--epic", epic)["action"], "done")
-
-    def test_vizier_schedules_archives_and_finishes(self):
-        epic = self.a.create("epic", type="epic")
-        first = self.a.create("first", parent=epic, priority=1)
-        second = self.a.create("second", parent=epic, labels="role:warden")
-        self.a.bd("dep", "add", second, first)
-        step = self.a.enact("next", "--epic", epic)
-        self.assertEqual((step["action"], step["bead"], step["role"]), ("spawn", first, "executor"))
-        self.assertIn("executor.md", step["prompt"])
-        self.a.enact("meta", first, "enact_session=exec-1", "--reservation", step["reservation"])
-        self.start_worker(self.a, first, "exec-1")
-        self.a.enact("close", first, "--reason", "done", session="exec-1")
-        step = self.a.enact("next", "--epic", epic)
-        self.assertEqual(step["archive"], [{"bead": first, "session": "exec-1"}])
-        self.assertEqual((step["action"], step["bead"], step["role"]), ("spawn", second, "warden"))
-        self.start_worker(self.a, second, "exec-2")
-        self.a.enact("close", second, "--reason", "done", session="exec-2")
-        self.assertEqual(self.a.show(epic)["status"], "closed")
-        self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "done")
 
     def test_closed_run_waits_for_failed_ci_and_steward_delivery(self):
         epic = self.a.create("final delivery", type="epic")
@@ -985,6 +955,103 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.assertEqual(step["action"], "done")
         self.assertTrue(step["delivery"]["complete"])
         self.assertIn(repaired["staging"], step["delivery"]["commits"])
+
+
+class ParallelScenarios(unittest.TestSuite):
+    """Run independent scenarios with separate absolute-path fixtures.
+
+    Each lane uses unittest's normal class setup/teardown and its own result.
+    Replay result events on the runner thread, including fixture failures;
+    no result object or repository is shared between lanes.
+    """
+
+    # Start the measured long scenarios first so they cannot form a serial
+    # tail after most lanes have drained. Renaming one only loses priority.
+    long_scenarios = {
+        "test_blocked_acceptance_and_recovery_history_survive_sweeps",
+        "test_closed_run_waits_for_failed_ci_and_steward_delivery",
+        "test_local_recovery_fences_stale_workers_and_preserves_all_work",
+        "test_local_recovery_restores_surviving_branch",
+        "test_shared_run_pause_blocks_peers_but_allows_delivery",
+        "test_worker_recovery_requires_route_and_notices_do_not_restart_holds",
+    }
+
+    def run(self, result, debug=False):
+        if debug:
+            return super().run(result, debug=True)
+        cases = sorted(self, key=lambda case: case._testMethodName not in self.long_scenarios)
+        lanes = min(8, os.cpu_count() or 1, len(cases))
+        if lanes < 2:
+            return super().run(result)
+
+        pending = queue.Queue()
+        for case in cases:
+            pending.put(case)
+
+        def run_lane():
+            # Class fixtures contain absolute git/Dolt paths. Give each lane
+            # a new class so setUpClass creates an independent snapshot.
+            lane = type(EnactTest.__name__, (EnactTest,), {
+                "__module__": __name__, "__qualname__": EnactTest.__qualname__,
+            })
+            events = []
+
+            class LaneResult(unittest.TestResult):
+                def startTest(self, test):
+                    self.started = time.monotonic()
+                    super().startTest(test)
+
+                def stopTest(self, test):
+                    events.append(("addDuration", (test, time.monotonic() - self.started)))
+                    super().stopTest(test)
+
+            def record(name):
+                original = getattr(LaneResult, name)
+
+                def call(self, *args):
+                    events.append((name, args))
+                    return original(self, *args)
+
+                setattr(LaneResult, name, call)
+
+            for name in ("startTest", "stopTest", "addSuccess", "addError",
+                         "addFailure", "addSkip", "addExpectedFailure",
+                         "addUnexpectedSuccess", "addSubTest"):
+                record(name)
+
+            class LaneSuite(unittest.TestSuite):
+                def __iter__(self):
+                    while True:
+                        try:
+                            case = pending.get_nowait()
+                        except queue.Empty:
+                            return
+                        yield lane(case._testMethodName)
+
+                # The queue owns the tests, rather than TestSuite's list.
+                def _removeTestAtIndex(self, index):
+                    pass
+
+            child = LaneResult()
+            child.failfast = result.failfast
+            LaneSuite().run(child)
+            return events
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=lanes) as pool:
+            futures = [pool.submit(run_lane) for _ in range(lanes)]
+            for future in concurrent.futures.as_completed(futures):
+                for name, args in future.result():
+                    callback = getattr(result, name, None)  # addDuration is 3.12+
+                    if callback:
+                        callback(*args)
+        return result
+
+
+def load_tests(loader, standard_tests, pattern):
+    return unittest.TestSuite([
+        loader.loadTestsFromTestCase(CiLifetimeTest),
+        ParallelScenarios(loader.loadTestsFromTestCase(EnactTest)),
+    ])
 
 
 if __name__ == "__main__":
