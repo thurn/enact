@@ -785,6 +785,19 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.b.enact("sync")
         self.assertEqual(self.b.show(bead)["title"], "identity fallback")
 
+    def test_sync_first_publishes_mixed_case_branch(self):
+        databases = []
+        for machine in (self.a, self.b):
+            metadata = json.loads((machine.path / ".beads" / "metadata.json").read_text())
+            databases.append(machine.path / ".beads" / "embeddeddolt" /
+                             metadata["dolt_database"])
+        sh(["dolt", "checkout", "-b", "Review"], databases[0])
+        bead = self.a.create("new branch publication")
+        self.a.enact("sync")
+        sh(["dolt", "fetch", "origin"], databases[1])
+        sh(["dolt", "checkout", "--track", "origin/Review"], databases[1])
+        self.assertEqual(self.b.show(bead)["title"], "new branch publication")
+
     def test_sync_conflict_remote_wins_and_reports(self):
         bead = self.a.create("both edit")
         self.a.enact("sync")

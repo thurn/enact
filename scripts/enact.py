@@ -496,7 +496,7 @@ def sync(repo: Repo) -> dict[str, Any]:
         if pull.returncode != 0:
             text = (pull.stdout + pull.stderr).lower()
             if ("no branches found" in text or
-                    (embedded and f'branch "{branch}" not found on remote' in text)):
+                    (embedded and f'branch "{branch}" not found on remote'.lower() in text)):
                 pass  # first push of this database to the remote
             elif "conflict" in text:
                 dropped += resolve_remote_wins(repo)

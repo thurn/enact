@@ -686,3 +686,13 @@ The desktop tool host is `local`, distinct from the OS hostname.
   lanes; keep the lower cap rather than adding contention. Moving the four
   serial policy stories to the fast suite brought the complete 64-test run near
   the documented five-minute budget.
+- Warden review reproduced first-publication failure for a mixed-case Dolt
+  branch (`Review`): the pull diagnostic was lowercased but its expected branch
+  name was not. Normalize both sides only for error recognition, preserving the
+  actual branch name in pull/push commands. A real two-clone scenario verifies
+  that a new mixed-case branch publishes its bead and the peer can read it.
+  The final Warden run passed all 65 tests in 415.190 seconds; a prior broader
+  64-test run took 477.039 seconds while overlapping reviewer probes. Many
+  unrelated shader compiler processes were consuming CPU during this review.
+  These contended observations do not replace the executor's 334.951-second
+  receipt or imply that every host/load combination meets five minutes.
