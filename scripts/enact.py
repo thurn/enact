@@ -564,6 +564,18 @@ def recovery_records(bead: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 @serialized
+def reassign(beads: Beads, bead_id: str, *fields: str, actor: str) -> None:
+    """Hand over a bead whose owner Enact already fenced. bd 1.3 refuses to
+    overwrite another actor's in_progress claim, and --force cannot be
+    combined with --if-assignee; callers re-read the owner after syncing."""
+    try:
+        beads.run("update", bead_id, *fields, actor=actor)
+    except Fail as error:
+        if "cannot reassign" not in str(error):
+            raise
+        beads.run("update", bead_id, *fields, "--force", actor=actor)
+
+
 def claim(repo: Repo, bead_id: str, actor: str, extra_meta: dict[str, str]) -> bool:
     """Claim a bead fleet-wide. Returns False when another actor won."""
     beads = Beads(repo)
@@ -615,9 +627,9 @@ def cmd_start(args: argparse.Namespace) -> dict[str, Any]:
         # Legacy reservations have no token: only the recorded child may start.
         if (token and args.reservation != token) or (not token and assigned != actor):
             raise Fail("reservation does not match this worker", code=3)
-    beads.run("update", args.bead, "--assignee", actor, "--status", "in_progress",
-              "--set-metadata", f"enact_actor={actor}",
-              "--set-metadata", f"enact_session={actor}", actor=actor)
+    reassign(beads, args.bead, "--assignee", actor, "--status", "in_progress",
+             "--set-metadata", f"enact_actor={actor}",
+             "--set-metadata", f"enact_session={actor}", actor=actor)
     sync(repo)
     bead = beads.show(args.bead)
     require_owner(bead, actor)
@@ -635,6 +647,8 @@ def cmd_close(args: argparse.Namespace) -> dict[str, Any]:
     require_owner(bead, actor, closed=True)
     if bead.get("issue_type") == "epic":
         require_running(bead, beads.all())
+    # bd 1.3 only lets the assignee close, under the exact name it recorded.
+    actor = as_owner(actor, bead)
     beads.run("close", args.bead, "--reason", args.reason, actor=actor)
     result = sync(repo)
     saved = beads.show(args.bead)
@@ -2173,8 +2187,8 @@ def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
         verified_worktree(repo, Path(path), branch)
         record["head"] = repo.git("rev-parse", "HEAD", cwd=Path(path))
     records = recovery_records(bead) + [record]
-    beads.run(
-        "update", args.bead, "--assignee", "", "--status", "open",
+    reassign(
+        beads, args.bead, "--assignee", "", "--status", "open",
         "--set-metadata", "enact_recovery=" + json.dumps(records),
         "--unset-metadata", "enact_vizier", "--unset-metadata", "enact_session",
         "--unset-metadata", "enact_actor", "--unset-metadata", "enact_archived",

@@ -104,10 +104,11 @@ class CiLifetimeTest(unittest.TestCase):
                     "    (root / 'paused').write_text(str(os.getpid()))\n"
                     "    while not (root / 'resume').exists(): time.sleep(0.02)\n"
                     "original_spawn, original_write = enact.subprocess.Popen, enact.write_json\n"
-                    "def spawn(command, *args, **kwargs):\n"
+                    "def spawn(*args, **kwargs):\n"
+                    "    command = args[0] if args else kwargs['args']\n"
                     "    target = '--check-worker' in command\n"
                     "    if target and phase == 'before_spawn': pause()\n"
-                    "    child = original_spawn(command, *args, **kwargs)\n"
+                    "    child = original_spawn(*args, **kwargs)\n"
                     "    if target:\n"
                     "        if phase == 'spawned': pause()\n"
                     "    return child\n"
@@ -759,7 +760,7 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
                                labels="role:warden")
         self.a.bd("dep", "add", second, first)
         self.assertEqual(self.a.enact("next", "--epic", epic)["bead"], first)
-        self.a.bd("close", first, "--reason", "fixture prerequisite completed")
+        self.a.bd("close", first, "--force", "--reason", "fixture prerequisite completed")
         step = self.a.enact("next", "--epic", epic)
         self.assertEqual((step["bead"], step["role"]), (second, "warden"))
 
