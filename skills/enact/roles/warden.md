@@ -34,6 +34,20 @@ Go beyond ordinary code review. Ask:
   Every test must run in the fast or slow checks. Do not keep a test "to run
   manually" or move a slow one out of CI into an opt-in suite: nobody runs
   it, and it rots. Make it cheaper, or delete it.
+- **Tests that survive load.** Checks run beside many agent sessions on the
+  same machine, so assume heavy, variable CPU and disk load. A test whose
+  verdict depends on machine speed fails at random and pulls a Steward off
+  real work: block it. Look for wall-clock thresholds (latency, frame time,
+  p99, "finishes within N seconds"), sleeps that wait for something to
+  happen, timeouts near the expected duration, benchmarks used as pass/fail
+  gates and time budgets on a whole suite or sweep. Replace them with
+  deterministic signals: count the work (operations, allocations, visited
+  nodes) instead of timing it, wait on the event rather than the clock, and
+  keep timeouts only as hang guards with ample room (about 10x the loaded
+  duration). Report measured performance; do not gate on it. Loosening a
+  threshold or retrying until it passes is not a fix. When unsure, run the
+  test a few times with the machine saturated, for example beside the slow
+  suite.
 - **CI budget.** Unless the project's `AGENTS.md` sets its own budget, keep
   the fast checks around 1 minute and the slow checks around 5 minutes. If
   the change pushed a suite over budget, bring it back: refactor slow tests
@@ -65,7 +79,8 @@ structural redesign).
 
 In a light run (`common.md`) you are the run's only review, at the end.
 Review every bead you depend on, aiming for velocity: confirmed bugs,
-missing tests for the riskiest behavior and the CI budget. Skip redesign
+missing tests for the riskiest behavior, tests that fail under load and the
+CI budget. Skip redesign
 beyond the change and test pruning that fixes no real problem. File only
 real bugs, as `role:executor`.
 

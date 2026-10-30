@@ -34,6 +34,12 @@ scale than a Warden review:
   making them cheap enough for CI, or deleting them, never keeping them
   opt-in. Slow checks whose cost is fixture setup rather than the behavior
   under test.
+- **Load-sensitive checks.** Tests and CI steps whose verdict depends on
+  machine speed: wall-clock thresholds, sleeps as synchronization, tight
+  timeouts, performance gates and suite-wide time budgets. Each Steward bead
+  this milestone closed as a flake, a timeout or "already green" points at
+  one. These are important findings: file their replacement with the
+  deterministic checks `warden.md` describes, never a looser threshold.
 - **CI budget.** Time the fast and slow checks. Unless the project's
   `AGENTS.md` sets its own budget, the targets are around 1 minute for fast
   checks and around 5 minutes for slow checks. A suite over budget is an

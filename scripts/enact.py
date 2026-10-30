@@ -1852,6 +1852,23 @@ def report_ci_failure(repo: Repo, tip: str, green: str, log_tail: str) -> str:
     return bead_id
 
 
+def superseding_repair(repo: Repo, tip: str) -> str | None:
+    """A Steward repair for this OS that reached staging after the failing tip.
+    The failure is then stale: the runner's loop retests the newer tip, which
+    files or comments only if the repair did not fix it."""
+    fetch(repo)
+    staging = repo.remote_ref(repo.config.staging)
+    newer = set(repo.git("rev-list", f"{tip}..{staging}", cwd=repo.main).split())
+    if not newer:
+        return None
+    sync(repo)
+    for bead in Beads(repo).all():
+        if (role_of(bead) == "steward" and meta(bead, "enact_ci_os") == ci_os()
+                and newer & set((meta(bead, "enact_commits") or "").split())):
+            return bead["id"]
+    return None
+
+
 def ci_pass(repo: Repo, tip: str) -> bool:
     cfg = repo.config
     master = repo.remote_ref(cfg.master)
@@ -2018,6 +2035,11 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
         log(f"slow CI passed at {tip[:12]}; master advanced: {advanced}")
         return {"tip": tip, "passed": True, "master_advanced": advanced}
     tail = "\n".join(output.strip().splitlines()[-60:])
+    repaired = superseding_repair(repo, tip)
+    if repaired:
+        log(f"slow CI failed at {tip[:12]}, which predates {repaired}'s repair "
+            "on staging; retesting the newer tip before filing")
+        return {"tip": tip, "passed": False, "superseded_by": repaired}
     bead_id = report_ci_failure(repo, tip, green, tail)
     log(f"slow CI failed at {tip[:12]}; steward bead {bead_id}")
     return {"tip": tip, "passed": False, "steward": bead_id}

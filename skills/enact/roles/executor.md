@@ -44,6 +44,9 @@ One review round is enough; do not loop.
 
 - Prefer a few black-box tests through public behavior over many tests that
   restate the implementation. Do not write change-detector tests.
+- No test may depend on machine speed: no wall-clock thresholds, sleeps
+  that wait for something or tight timeouts. Checks run under heavy load
+  (`warden.md`, "Tests that survive load").
 - Keep the design clean: no dead code, no speculative abstractions, no
   copy-paste where an existing helper fits.
 - Match the surrounding code's style, naming and comment density.

@@ -685,6 +685,27 @@ class CiWatchTest(unittest.TestCase):
         result, _ = self.wait([self.steward()], covered | {("sha", "green")})
         self.assertEqual(result["state"], "waiting")
 
+    def superseding(self, graph, newer):
+        repo = types.SimpleNamespace(
+            config=enact.Config(), main=Path("."), remote_ref=lambda branch: f"origin/{branch}",
+            git=lambda *args, **kwargs: newer)
+        beads = mock.Mock()
+        beads.all.return_value = graph
+        with mock.patch.object(enact, "sync"), mock.patch.object(enact, "fetch"), \
+                mock.patch.object(enact, "Beads", return_value=beads):
+            return enact.superseding_repair(repo, "tip")
+
+    def test_a_failure_older_than_a_landed_repair_is_not_filed(self):
+        repair = self.steward()
+        repair["metadata"]["enact_commits"] = "fix"
+        self.assertEqual(self.superseding([repair], "later fix"), "s")
+        # The failing tip already contains the repair, or nothing landed since.
+        self.assertIsNone(self.superseding([repair], "later"))
+        self.assertIsNone(self.superseding([repair], ""))
+        elsewhere = self.steward()
+        elsewhere["metadata"].update(enact_ci_os="plan9", enact_commits="fix")
+        self.assertIsNone(self.superseding([elsewhere], "fix"))
+
     def test_wait_restarts_a_dead_runner_only_for_untested_staging(self):
         _, start = self.wait([], set(), {"running": False, "last_tested": "old"})
         start.assert_called_once()

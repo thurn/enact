@@ -720,3 +720,23 @@ blindly recreate jobs or hand-edit scheduler databases.
 - Follow-ups in a light run are real bugs only, with no review of their
   own; the filer makes the final Warden depend on them so it stays last.
 - No helper changes: the mode is policy applied by skills and role files.
+
+## Stale failures and load-sensitive checks (2026-10-30)
+
+- A playlist_survivors postmortem found no failure spiral: the coalescing
+  runner kept master within about one slow-CI cycle of staging (median 8
+  minutes), and a single red episode explained the largest gaps. Pausing
+  pushes while red or bisecting every batch would cost more throughput
+  than it saves.
+- Two of six Steward beads there were stale: a Steward pushed its repair
+  and closed, then the runner finished an older tip without the repair and
+  filed a new bead, whose Steward found it already fixed. A failure is now
+  not filed when staging gained, after the failing tip, a commit recorded in
+  `enact_commits` of a Steward bead for this OS. The runner's loop retests
+  the newer tip and files or comments only if that fails too. The condition
+  is a landed repair rather than "staging moved on", so a real failure is
+  never deferred indefinitely by a steady stream of pushes.
+- Half of the failures were timing gates tripping under the load of the
+  agents sharing the machine. Warden reviews block tests whose verdict
+  depends on machine speed, Masons file existing ones as important, and
+  Stewards replace the timing dependence instead of loosening thresholds.
