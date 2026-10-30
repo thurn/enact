@@ -657,7 +657,8 @@ blindly recreate jobs or hand-edit scheduler databases.
 - `enact ci --wait <sha>` blocks up to `--timeout` (540 s) and returns
   `passed` once the SHA reaches master, `failed` with the Steward beads whose
   failing range covers it (unassigned or held by this session), or
-  `waiting`. Stewards held by another session count as in repair. While
+  `waiting`. Stewards held by another session count as in repair, and
+  only this OS's Stewards end the wait: any machine's pass promotes master. While
   waiting it restarts a dead runner when staging is untested.
 - On `failed` the session claims the Steward bead and follows the Steward
   role, then watches its repair the same way. Instructions live in the push

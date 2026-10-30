@@ -1748,9 +1748,10 @@ def ci_wait(repo: Repo, sha: str, seconds: int, interval: int) -> dict[str, Any]
         if repo.git_ok("merge-base", "--is-ancestor", sha, master):
             return {"sha": sha, "state": "passed"}
         graph = Beads(repo).all()
-        # A Steward someone else holds is already being repaired: keep waiting.
+        # A Steward someone else holds is already being repaired, and another
+        # OS failing does not stop this one promoting master: keep waiting.
         stewards = [b["id"] for b in graph if role_of(b) == "steward"
-                    and b.get("status") != "closed"
+                    and b.get("status") != "closed" and meta(b, "enact_ci_os") == ci_os()
                     and (b.get("assignee") or "") in session_aliases() | {""}
                     and steward_covers(repo, b, sha)]
         if stewards:

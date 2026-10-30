@@ -663,7 +663,7 @@ class CiWatchTest(unittest.TestCase):
 
     def steward(self, assignee=None):
         return {"id": "s", "labels": ["role:steward"], "assignee": assignee,
-                "metadata": {"enact_ci_range": "green..tip"}}
+                "metadata": {"enact_ci_range": "green..tip", "enact_ci_os": enact.ci_os()}}
 
     def test_wait_reports_promotion(self):
         result, _ = self.wait([], {("sha", "origin/master")})
@@ -676,6 +676,10 @@ class CiWatchTest(unittest.TestCase):
         result, _ = self.wait([self.steward("me")], covered)
         self.assertEqual(result["state"], "failed")
         result, _ = self.wait([self.steward("other")], covered)
+        self.assertEqual(result["state"], "waiting")
+        elsewhere = self.steward()
+        elsewhere["metadata"]["enact_ci_os"] = "plan9"
+        result, _ = self.wait([elsewhere], covered)
         self.assertEqual(result["state"], "waiting")
         # Already-green work is not blamed for a later failure.
         result, _ = self.wait([self.steward()], covered | {("sha", "green")})
