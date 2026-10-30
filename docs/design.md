@@ -636,6 +636,14 @@ The desktop tool host is `local`, distinct from the OS hostname.
   receipts, and verify actual scheduled delivery before declaring recovery.
   A temporary test cadence returns to hourly minute seven afterward. Do not
   hand-edit scheduler databases or bypass unavailable desktop UI access.
+- Recovery delivery was observed in scheduled chat
+  `01a18ae0-f479-7bf2-9956-a43e9fa7baf6`: its completed turn acquired the
+  sweep lock, checked routed worker/vizier state, recorded `sweep_needed`
+  true on `en-bcw`, released the lock and synced. The Sage independently
+  read that turn and its archive listing. The saved exact automation ID
+  remains ACTIVE on hourly minute seven with Sol Light. This establishes
+  actual scheduled delivery after restoration; the earlier disappearance's
+  cause remains unknown. Final deletion still waits for run completion.
 - Saved configuration, scheduled delivery and final cleanup are separate
   evidence. An active file alone proves configuration; an observed scheduled
   chat proves delivery at that time. Neither proves indefinite persistence.
@@ -717,3 +725,9 @@ The desktop tool host is `local`, distinct from the OS hostname.
   unrelated shader compiler processes were consuming CPU during this review.
   These contended observations do not replace the executor's 334.951-second
   receipt or imply that every host/load combination meets five minutes.
+- Final Sage measurement at `e4e1359`: all 68 normal checks passed in
+  273.385 seconds in a fresh worktree on macOS/Python 3.14; separate fast
+  checks passed 36 tests in 4.580 seconds. The slowest concurrent scenario
+  was local abandoned-work recovery at 205.496 seconds, followed by final
+  CI/Steward completion at 192.167 seconds. Scenario times overlap across
+  isolated lanes and must not be summed as suite wall time.
