@@ -21,14 +21,10 @@ use the updated helper; an already-running old helper cannot enforce this
 protocol. Public CLI regressions cover concurrent fresh acquisition at the
 publication boundary, stale takeover, owner-fenced release and recovery.
 
-Outcome of the design interview (2026-10-28). The original brief is the source
-of truth for role definitions; this file records the decisions made on top.
+## Run contracts
 
-## Audit decisions (2026-10-29)
-
-These decisions supersede historical behavior. The implementation and live
-validation evidence below track the findings from the
-[desktop support audit](audit-2026-10-29.md).
+The helper and role prompts enforce these contracts cooperatively; raw git
+and Beads writes and unmodified older helpers remain outside that protocol.
 
 - Audit against local project chats in the current desktop app, preserving
   Claude Desktop support. Identify supported tools and execution location
@@ -81,7 +77,7 @@ validation evidence below track the findings from the
   common dir). Loop: fetch, test the newest `origin/staging` tip, repeat until
   the tip equals the last tested SHA; re-check after releasing the lock. No
   debounce.
-  - Pass: fast-forward `origin/master` to the tested SHA (master = slow CI green).
+  - Pass: fast-forward `origin/master` to the tested SHA (slow CI green).
   - Fail: at most one open P0 Steward bead per project per OS, unparented;
     later failures add a comment with the new range and log excerpt.
 - Machines run slow CI independently; any machine's pass advances master.
@@ -113,9 +109,7 @@ validation evidence below track the findings from the
 ## Vizier
 
 - One user-invoked skill that scales with its input, `/enact <input>
-  [parallelism]`. (A separate `/enact-intake` planning skill was tried and
-  reverted: one entry point is simpler, and small tasks should not need a
-  planning step.)
+  [parallelism]`. One entry point keeps small tasks lightweight.
   - Bead: execute it. An epic is the run (joining another vizier's run needs
     nothing special); a plain bead is wrapped in a new epic, since follow-ups
     and `enact next` work by epic.
@@ -128,20 +122,13 @@ validation evidence below track the findings from the
   `git pull --ff-only` in ~/enact. Create the Marshal routine if missing,
   except for a small task-prompt run: hourly recovery is for multi-hour
   runs, and a small run must not delete a Marshal another run relies on.
-- Small-run overhead (2026-10-29, after en-3cp): a one-feature task prompt
-  took ~29 minutes for ~6 minutes of implementation. Each bead pays a cold
-  start (start, title, re-read bead/epic/AGENTS.md, worktree, push, CI), and
-  an executor's follow-up duplicated what the pending Warden then fixed.
-  - Inline review: a `review:inline` label makes the executor run one
-    fresh-context cold-review subagent on its diff before pushing (one
-    session, one push, one CI run). A Warden bead is kept for large or
-    risky changes or when the user asks for one.
-  - Follow-ups are essential-only (real bugs, missing tests for risky
-    behavior, design problems that will bite soon, broken tooling); every
-    bead costs a session, and filing needs some friction. Mason no longer
-    files lower-value ideas. Issues in code a not-yet-started Warden will
-    review go to that Warden bead as comments; a Warden closes beads its
-    fixes cover.
+- Inline review: a `review:inline` label requires one fresh-context
+  cold-review subagent before pushing. Use a Warden bead for large or risky
+  changes or when the user requests one.
+- Follow-ups are essential-only: real bugs, missing tests for risky behavior,
+  imminent design problems or broken tooling. Each bead costs a session.
+  Comment issues on a not-yet-started Warden that will review the code
+  rather than duplicating its work; a Warden closes beads its fixes cover.
 - `enact install` removes dangling links to retired skills
   (`enact-intake`).
 - Decomposition: full graph up front or rolling milestones, at the vizier's
@@ -239,10 +226,9 @@ validation evidence below track the findings from the
   Projects with an explicit `root` in `.enact.toml` keep it.
 - `enact setup` ignores and untracks bd's audit log,
   `.beads/interactions.jsonl`. bd appends to it on every claim and close in
-  the main checkout, which Enact never commits to, so a tracked copy kept
-  `master` dirty and blocked fast-forwarding it. The issue history it
-  duplicates lives in Dolt. Existing projects pick this up by re-running
-  `enact setup` and committing the result.
+  the main checkout, so tracking it would block fast-forwarding `master`.
+  The issue history it duplicates lives in Dolt. Existing projects pick this
+  up by re-running `enact setup` and committing the result.
 - `.enact.toml`: fast/slow check commands, `[worktree]` root plus optional
   full-replacement `create`/`remove` hooks (env: `ENACT_WORKTREE_PATH`,
   `ENACT_BRANCH`, `ENACT_BASE_SHA`, `ENACT_REPO`), optional
@@ -261,9 +247,7 @@ validation evidence below track the findings from the
 - Titles: 🔮 Vizier, ⚒️ Executor, 🛡️ Warden, 🔥 Justiciar, 🚒 Steward,
   🎖️ Marshal, 🧱 Mason, 📖 Sage, 📜 Archivist; ✅ on completion.
 
-## Implementation notes
-
-Findings and adjustments made while implementing (2026-10-28):
+## Implementation contracts
 
 - Spawned sessions take their bead with `enact start`, which moves the
   assignee from a unique vizier reservation to their own session ID, fenced
@@ -281,23 +265,12 @@ Findings and adjustments made while implementing (2026-10-28):
   entries it has already reported, so a session that refuses archiving
   (still busy) does not make the vizier spin. It is retried at the end of
   each wait.
-- The live demo confirmed that Claude Desktop sessions started with
-  `start_session` inherit bypass permission mode, can retitle themselves,
-  accept `send_message`, and can be archived by the vizier. Spawning into a
-  folder the app has never trusted fails without the user present; the
-  vizier always spawns into its own (trusted) project.
-- A Marshal run as a scheduled task released a bead whose session did not
-  exist and push-notified about an epic with no live vizier.
-- Tests use stdlib `unittest` rather than pytest, keeping the repository
-  dependency-free.
-- Slow CI (2026-10-29): the integration suite builds origin and two machines
-  once per class and restores that snapshot to the same path before each
-  test, since `bd init` and bootstrap dominated runtime. Tests of rarely used
-  coordination paths (Justiciar, release, deadlock, steward priority) and the
-  already unit-tested Archivist hold were deleted rather than made opt-in:
-  every test runs in fast or slow checks or does not exist. The remaining
-  cost is real: each `bd` call starts embedded Dolt (~0.7s) and `enact next`
-  performs three syncs (~5s each).
+- Claude Desktop workers inherit bypass permission mode, can retitle
+  themselves, receive messages and be archived. The vizier spawns into its
+  trusted project: an untrusted folder requires the user present.
+- Tests use stdlib `unittest`, keeping the repository dependency-free. All
+  tests run in configured fast or slow checks; coverage and isolation are
+  described under Slow-check runtime below.
 - Codex: `agents/openai.yaml` sets `allow_implicit_invocation: false`.
   Desktop validation is recorded below; it does not establish other hosts'
   capabilities.
@@ -336,7 +309,7 @@ Findings and adjustments made while implementing (2026-10-28):
   CI status includes the last outcome, and a passing check whose promotion
   push failed can retry promotion without rerunning the same check. Any
   machine's successful slow CI still suffices; no OS quorum was introduced.
-- Warden recovery checks: retain a passing candidate in its own promotion
+- Retain a passing candidate in its own promotion
   receipt before attempting the master push. Newer failing checks cannot
   erase it. Retry that promotion independently of the staging tip, and use
   its tested commit as the failure baseline so unrelated later failures
@@ -503,7 +476,7 @@ Findings and adjustments made while implementing (2026-10-28):
   unchanged, and is removed only when no relevant run or cleanup needs it.
   Desktop tool schemas and the available host capability decide how to
   perform scheduling and messaging; the helper never calls native tools.
-- Warden review: release checks shared holds after syncing, so an earlier
+- Release checks shared holds after syncing, so an earlier
   Marshal snapshot cannot clear an assignment after a peer has paused it.
   Held assignments remain intact until explicit resume. Reservation release
   still requires the exact observed token, including Marshal recovery.
@@ -514,18 +487,14 @@ Findings and adjustments made while implementing (2026-10-28):
   under a hold. Overlapping local recovery requests serialize and reserve
   only one nudge; uncertain sends still consume that durable reservation.
 
-## Desktop session ids (2026-10-29)
+## Desktop session identities
 
-- Claude Desktop's `start_session` returns the host session id
-  (`local_...`, also `CLAUDE_CODE_HOST_SESSION_ID`), which the vizier records
-  as `enact_session`; `CLAUDE_CODE_SESSION_ID` is a different CLI id. Spawned
-  workers' `enact start` failed with exit 3 until they set `ENACT_SESSION` by
-  hand (four of the playlist_survivors ps-tfn M1 sessions).
-- Start, owner checks and release now treat the host id and the CLI id as
-  names of one session, taking whichever the bead records. The default actor
-  stays the CLI id, so live viziers keep their claims. `ENACT_SESSION`, when
-  set, is still the only name.
-
+Claude Desktop's `start_session` returns the host session ID
+(`local_...`, also `CLAUDE_CODE_HOST_SESSION_ID`), which the vizier records
+as `enact_session`. `CLAUDE_CODE_SESSION_ID` is a different CLI ID. Start,
+owner checks and release accept both as aliases, using whichever the bead
+records. The default actor stays the CLI ID to preserve live claims.
+`ENACT_SESSION`, when set, is the only accepted identity.
 
 ## Desktop adapter and installation (2026-10-29)
 
@@ -562,101 +531,57 @@ Findings and adjustments made while implementing (2026-10-28):
 
 ### Codex desktop smoke receipts
 
-On 2026-10-29, executor en-b2c.1.7 used the registered local project
-`facd00e9-d913-430e-ad31-b727ae9a8c18` at `/Users/dthurn/enact` on jarvis.
-The desktop tool host is `local`, distinct from the OS hostname.
+Verified on 2026-10-29 on jarvis (macOS) with registered local project
+`facd00e9-d913-430e-ad31-b727ae9a8c18` at `/Users/dthurn/enact`. The
+desktop tool host is `local`, distinct from the OS hostname. Run beads
+`en-b2c.1.7`, `en-b2c.1.8`, `en-bcw` and `en-b2c.2.2` retain full evidence.
 
-- `create_thread` with local target and omitted model settings returned ready
-  chat `01a18aa6-457d-7fa2-b882-3375bd485d98`, host `local`. The chat's
-  environment reported the identical `CODEX_THREAD_ID`, correct checkout,
-  unrestricted filesystem access and approval policy `never`. It read
-  AGENTS.md, checked the Git root, and wrote/read/deleted a temporary receipt.
-- `wait_threads`, `read_thread` and `list_threads` confirmed its completed
-  turn and idle status. The first turn deliberately ended at a phase marker.
-  `send_message_to_thread` resumed the same chat; the second turn confirmed
-  its ID and local access and returned `SMOKE_RECOVERY_COMPLETE`.
-- `set_thread_archived` returned `archived: true`; `list_archived_threads`
-  independently listed that same ID. No repository changes or Beads claims
-  were made by the smoke chat.
-- This proves bounded local creation, access, inspection, messaging,
-  continuation and archive cleanup. It simulates a stopped workflow, not an
-  operating-system crash or forced app shutdown. Pending creation, rejected
-  model settings, scheduled-turn spawning, Windows and Linux desktop tools
-  were not exercised. Integration tests cover persistent recovery fencing
-  and pause/budget behavior separately; normal run deliveries provide the
-  real staging/slow-CI/promotion evidence.
+- Chat `01a18aa6-457d-7fa2-b882-3375bd485d98` confirms local creation,
+  identical `CODEX_THREAD_ID`, correct checkout, unrestricted filesystem
+  access and approval policy `never`, plus a temporary write/read/delete.
+  Inspection and a follow-up message confirm continuation after deliberate
+  turn termination; archive response and archive listing confirm cleanup.
+  This is a bounded continuation test, not an OS crash or forced shutdown.
+- Paused standalone automation
+  `enact-marshal-acd7df3c75f96b3dfda9-smoke` confirms creation, rename and
+  deletion with saved-record absence. It never ran. No disposable smoke
+  resources remain.
+- Scheduled recovery chat `01a18ae0-f479-7bf2-9956-a43e9fa7baf6` confirms
+  actual delivery: sweep lock acquisition/release, routed worker/vizier
+  checks, retained sweep with `sweep_needed: true` and successful sync.
+  Independent Sage inspection confirms the completed turn and archive
+  listing. Saved automation `enact-marshal-acd7df3c75f96b3dfda9` is verified
+  ACTIVE at inspection on hourly minute seven with `gpt-6.1-sol` / `low`.
+  The run records
+  this exact ID for final vizier cleanup when `sweep_needed` becomes false.
+- Pending creation, rejected model settings, scheduled-turn spawning,
+  Windows and Linux desktop tools are untested. Integration tests separately
+  exercise persistent recovery, ownership, holds and retry budgets. Real
+  run deliveries provide staging/slow-CI/promotion evidence. No OS quorum or
+  indefinite scheduling persistence is claimed.
 
-- Automation lifecycle smoke created a paused standalone job with ID
-  `enact-marshal-acd7df3c75f96b3dfda9-smoke`, inspected its saved TOML, updated
-  its name while retaining the ID and paused state, then deleted it. The
-  tool returned `deleteStatus: deleted`; saved-record absence confirmed it.
-  The job never ran. The tool requires an explicit automation model/effort;
-  this test used available `gpt-6.1-sol` / `low`.
-- The previously reported active legacy sweep `enact-marshal-enact` was
-  absent from saved automation records on inspection, despite an archived
-  02:04 UTC sweep receipt. No legacy sweep was deleted by this executor.
-  After a second complete saved-record scan found no Enact sweep, restored
-  one active standalone job under the helper's stable identity
-  `enact-marshal-acd7df3c75f96b3dfda9`, hourly at minute seven, using the same
-  project and model/effort above. Creation and saved active state were
-  verified. Its exact ID was recorded on the run for final cleanup; it must
-  remain while `sweep_needed` is true. This tests scheduling configuration,
-  not execution of a future hourly sweep.
+### Scheduling evidence and recovery
 
+Configuration, scheduled delivery and final cleanup require separate
+evidence. A rendered `automation_update(mode: "view")` card does not prove
+existence; verify the saved ID, project, prompt and active state. A saved
+active record proves configuration; an observed scheduled chat proves
+delivery at that time. Final cleanup belongs to the vizier after delivery
+and run completion.
 
-### Desktop review and scheduling uncertainty (2026-10-29)
-
-- Warden en-b2c.1.8 independently read both smoke-chat turns and its archive
-  listing. The recorded ready identity, temporary local access check,
-  deliberate turn termination, continuation and cleanup are supported.
-  This remains a bounded continuation test, not a crash-recovery test.
-- After the executor's verified active creation, the replacement Marshal's
-  saved record disappeared by 03:13 UTC on 2026-10-30. Warden inspection
-  confirmed neither that ID nor the legacy ID remained in the configured
-  automation directory. The last archived legacy sweep at 02:04 UTC
-  reported `sweep_needed: true`, retained the sweep and issued no deletion.
-  The cause is unknown; no helper cleanup defect has been established.
-- `automation_update(mode: "view")` returned only a rendered-card receipt,
-  which does not establish existence or active scheduling. Creation and
-  migration must verify the saved ID, project, prompt and active state.
-  If a verified required sweep disappears, preserve the receipts and request
-  Justiciar recovery; do not repeatedly recreate it or claim completion.
-  Scheduling persistence and final cleanup remain open run requirements
-  until recovery supplies evidence. The initial lifecycle smoke remains
-  valid, but it does not establish continuing hourly execution.
-
-### Marshal incident recovery (2026-10-29)
-
-- Justiciar incident `en-bcw` confirmed the replacement absent from both
-  saved automation files and the local scheduler database. The prior tool
-  calls deleted only the separate paused smoke job. Logs did not establish
-  what removed either live sweep; this is not evidence of a helper defect.
-- Recovery uses the supported automation tool after reconciling exact
-  identity and active-run need. Make one observed restoration, preserve
-  receipts, and verify actual scheduled delivery before declaring recovery.
-  A temporary test cadence returns to hourly minute seven afterward. Do not
-  hand-edit scheduler databases or bypass unavailable desktop UI access.
-- Recovery delivery was observed in scheduled chat
-  `01a18ae0-f479-7bf2-9956-a43e9fa7baf6`: its completed turn acquired the
-  sweep lock, checked routed worker/vizier state, recorded `sweep_needed`
-  true on `en-bcw`, released the lock and synced. The Sage independently
-  read that turn and its archive listing. The saved exact automation ID
-  remains ACTIVE on hourly minute seven with Sol Light. This establishes
-  actual scheduled delivery after restoration; the earlier disappearance's
-  cause remains unknown. Final deletion still waits for run completion.
-- Saved configuration, scheduled delivery and final cleanup are separate
-  evidence. An active file alone proves configuration; an observed scheduled
-  chat proves delivery at that time. Neither proves indefinite persistence.
-  Retain the sweep while `sweep_needed` is true. If it disappears again,
-  preserve the new evidence and return to incident recovery, not a loop of
-  blind replacements.
-
+The cause of the earlier live-sweep disappearance remains unknown; receipts
+establish no helper deletion defect. If a required verified sweep vanishes,
+preserve evidence and request Justiciar recovery. Reconcile exact identity
+and active-run need, make one supported restoration and verify scheduled
+delivery. Return any temporary test cadence to hourly minute seven. Do not
+blindly recreate jobs or hand-edit scheduler databases.
 
 ## Slow-check runtime (2026-10-29)
 
 - Keep all scenarios in the normal fast+slow checks. Independent integration
   scenarios take work from a queue in up to eight lanes, bounded by CPU count.
-  Start the measured longest scenarios first to avoid a serial tail. Each lane
+  Twelve lanes measured slower than eight because of contention. Start the
+  longest scenarios first to avoid a serial tail. Each lane
   creates its own bare origin, clones and absolute-path snapshot, then uses
   unittest's usual fixture lifecycle. Database prefixes are unique per lane and
   temporary Dolt configurations disable telemetry. A lane never edits another
@@ -695,39 +620,16 @@ The desktop tool host is `local`, distinct from the OS hostname.
   the Beads synchronization path. Tests explicitly configure temporary Dolt
   identities rather than relying on the developer's home directory; a real
   synchronization regression also covers the identity-free fallback.
-- Measurements use macOS/Python 3.14 on jarvis. Earlier 55-test receipt:
-  2215.320 seconds. The original blocked-history scenario took 251.014 seconds;
-  the worker-recovery scenario took 235.406 seconds including setup (212.809
-  seconds in its body). Instrumenting the helper's existing subprocess boundary
-  attributed 27 syncs to 56.581 seconds in Beads push, 43.705 in pull, 22.420 in
-  remote probes and 20.765 in commit; git fetch totaled 0.502 seconds. Direct
-  synchronization reduced the blocked-history body to 101.619 seconds before
-  adding isolated lanes.
-- Reproduce isolated scenario timings by passing either recovery method's fully
-  qualified name to `python3 -m unittest -v`. Python 3.12+ can add `--durations
-  0` to the normal fast+slow command for per-scenario timings, including time
-  spent contending with other lanes.
-- Final normal checks pass all 64 tests in 334.951 seconds (5m35s), versus the
-  original 55 tests in 2215.320 seconds (36m55s). Fast checks pass 33 tests in
-  1.953 seconds. No scenario is outside configured CI. These are observed wall
-  times on the host above, including concurrent subprocesses. A twelve-lane
-  trial took 417.638 seconds for 63 tests versus 379.435 seconds with eight
-  lanes; keep the lower cap rather than adding contention. Moving the four
-  serial policy stories to the fast suite brought the complete 64-test run near
-  the documented five-minute budget.
-- Warden review reproduced first-publication failure for a mixed-case Dolt
-  branch (`Review`): the pull diagnostic was lowercased but its expected branch
-  name was not. Normalize both sides only for error recognition, preserving the
-  actual branch name in pull/push commands. A real two-clone scenario verifies
-  that a new mixed-case branch publishes its bead and the peer can read it.
-  The final Warden run passed all 65 tests in 415.190 seconds; a prior broader
-  64-test run took 477.039 seconds while overlapping reviewer probes. Many
-  unrelated shader compiler processes were consuming CPU during this review.
-  These contended observations do not replace the executor's 334.951-second
-  receipt or imply that every host/load combination meets five minutes.
-- Final Sage measurement at `e4e1359`: all 68 normal checks passed in
-  273.385 seconds in a fresh worktree on macOS/Python 3.14; separate fast
-  checks passed 36 tests in 4.580 seconds. The slowest concurrent scenario
-  was local abandoned-work recovery at 205.496 seconds, followed by final
-  CI/Steward completion at 192.167 seconds. Scenario times overlap across
-  isolated lanes and must not be summed as suite wall time.
+- Recognize missing-remote-branch diagnostics case-insensitively while
+  preserving the actual branch name in Dolt commands. A real two-clone
+  scenario covers first publication of a mixed-case branch.
+- For isolated timings, pass a fully qualified scenario name to
+  `python3 -m unittest -v`. Python 3.12+ accepts `--durations 0` on the
+  normal fast+slow command. Concurrent scenario durations overlap and must
+  not be summed as suite wall time.
+- Verified at `e4e1359` on jarvis, macOS/Python 3.14: Sage normal checks
+  passed all 68 tests in 273.385 seconds; separate fast checks passed 36
+  tests in 4.580 seconds. Independent Warden normal checks passed in
+  264.752 seconds. These support the near-five-minute budget on this host,
+  not a runtime guarantee for every host or load. Linux and Windows
+  execution are unverified; any machine's passing CI can promote master.

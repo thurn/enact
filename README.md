@@ -111,7 +111,8 @@ Dolt mode, and the `dolt` CLI (used to resolve Beads merge conflicts).
 
 The Claude Desktop flow was exercised end to end. Bounded Codex Desktop
 smokes verified local chat creation, identity, access, continuation and
-archiving, plus paused automation creation, update and deletion. See
+archiving, paused automation creation/update/deletion, and actual scheduled
+Marshal delivery after recovery. See
 [design notes](docs/design.md#codex-desktop-smoke-receipts) for receipts and
-limits; future scheduled execution and other operating systems were not
-validated by these smokes.
+limits. Other operating systems and indefinite scheduling persistence are
+unverified; final run cleanup follows green delivery.
