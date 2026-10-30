@@ -22,7 +22,9 @@ Always `enact lock release marshal` when finished, including after errors.
 - Route by `host/provider/app/project`, never targeting metadata. In Claude
   use `get_session`, `list_sessions`, `send_message`, `archive_session`.
   In Codex use `read_thread`, `list_threads`, `send_message_to_thread` and
-  `set_thread_archived`, with the owning host. Load the available tools.
+  `set_thread_archived`, with the owning tool host ID (`local` may map to
+  this OS hostname). `wait_threads` gives compact status with cursors;
+  `notLoaded` or absence from a bounded list is not proof of inactivity.
   Missing routing, unsupported tools, timeouts and lookup errors mean
   unknown, never proof a chat is inactive. Never guess from its title.
 - Paused or blocked runs must never be nudged, resumed or replaced. Allow
@@ -91,7 +93,10 @@ original authorization is required before automatic recovery.
   holder archived or absent. A stale request needs vizier recovery above.
 - Keep this project's Marshal while `sweep_needed` is true, including other
   runs between workers. If false, remove only the automation identified by
-  `marshal_name`, using its recorded ID and the host's supported tool.
+  `marshal_name` or verified legacy aliases, using recorded IDs. In Codex,
+  inspect `$CODEX_HOME/automations/*/automation.toml` (default `~/.codex`),
+  then use `automation_update(mode: "delete", id: <ID>)`. Verify deletion;
+  never remove another project's sweep or create a duplicate on lookup error.
 
 ## 5. Report
 

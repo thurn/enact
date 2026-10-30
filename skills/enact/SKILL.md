@@ -42,19 +42,65 @@ instructions, which override this file.
 ## Host tools
 
 Enact needs a host that can start top-level sessions, title, archive and
-message them, and schedule a recurring task.
+message them, and schedule a recurring task. Invoking Enact authorizes
+these operations on run-owned chats and its Marshal; carry that authority
+into every worker and recovery prompt.
 
 | Need | Claude Desktop | Codex Desktop |
 | --- | --- | --- |
 | Start session | `start_session` | `create_thread` |
 | Title self | `set_session_title` (`self`) | `set_thread_title` |
-| Archive | `archive_session` | archive thread |
-| Message | `send_message` | send to thread |
-| Inspect | `get_session`, `list_sessions` | thread list |
-| Schedule | `create_scheduled_task` | automation |
+| Archive | `archive_session` | `set_thread_archived` |
+| Message | `send_message` | `send_message_to_thread` |
+| Inspect | `get_session`, `list_sessions` | `read_thread`, `list_threads` |
+| Wait | supported session wait | `wait_threads` |
+| Schedule | `create_scheduled_task` | `automation_update` |
 
 In Claude Desktop, load deferred tools with ToolSearch before first use.
-Subagents are never Enact sessions.
+Subagents are never Enact sessions. In Codex, use the returned tool host ID
+(for example `local`), not the OS hostname in Beads, when routing tools.
+`read_thread` supplies turn status; `wait_threads` supplies a compact status
+and cursor. An idle chat is not necessarily abandoned; use Marshal rules.
+Archive with `archived: true` and an exact `threadId`/`hostId`, then record
+success. A missing list entry or `notLoaded` alone proves no inactivity.
+
+### Codex project and spawn adapter
+
+Before reserving work, discover the tools above and `list_projects`,
+`create_thread`, `set_thread_title`, plus local command execution. Scheduling
+is required only for runs that need a Marshal. Select
+one local project by its resolved absolute checkout path and owning host;
+retain its returned `projectId`. Never match only a basename. Verify local
+read/write access with a disposable file, and run read-only git, `bd` and
+helper checks in that checkout. A non-prompting policy alone is insufficient.
+If the path is unregistered, inaccessible, or required tools are missing,
+resolve it during pre-flight before claiming work.
+
+Use `create_thread` with `title`, the exact `prompt`, and this target:
+`{type: "project", projectId: <selected ID>, environment: {type: "local"}}`.
+Enact creates its own worktrees. Do not select cloud or app worktree mode.
+Omit `model` and `thinking` to use the user's defaults unless the invocation
+explicitly requests role model settings. Map an authorized `settings.model`
+to `model`, and `settings.effort` to `thinking`, using the current tool's
+supported combinations. If a preferred setting is unavailable, omit both
+and record the requested setting, default substitution and reason on the
+bead, then sync. An explicitly required model is a pre-flight blocker;
+never silently substitute. A definitive rejection can be retried once with
+defaults; uncertain creation must be reconciled before any second spawn.
+
+Only a ready `threadId` is a worker identity. Retain returned `hostId` too.
+A `clientThreadId` means pending setup: never write it as `enact_session` or
+pass it to thread tools. Follow returned setup instructions. If needed,
+use `list_threads` to find candidate real IDs and `read_thread` to verify
+both the exact project and reservation token in the spawn prompt. A title
+match alone is insufficient. Keep the reservation while uncertain; request
+Justiciar recovery if no unique child can be established. Never create a
+replacement to resolve an ambiguous result. Each created chat must appear
+in the final response as a separate `::created-thread{threadId="..."}` line
+(or `clientThreadId` for still-pending setup). Retain these receipts across
+compaction. Normal scheduling waits through `enact next`; use bounded
+`wait_threads` with real IDs and returned cursors only for launch checks
+or recovery. Do not poll healthy worker chats in the vizier loop.
 
 **Claude Desktop only lets a session start other sessions during a turn the
 user started.** A turn begun by a background task, a scheduled task or another
@@ -75,7 +121,8 @@ The user is present now and will not be later. Do all interactive work here.
    permission prompt stalls an unattended run. In Claude Desktop, call
    `get_session` on `self`; `permissionMode` must be `bypassPermissions` or
    `auto`. Otherwise ask the user to switch modes, and do not start until they
-   have. In Codex, require an approval policy that never prompts.
+   have. In Codex, require an approval policy that never prompts and complete
+   the project/tool/local-access checks above before reserving any bead.
 4. **Classify the input.** If `bd show <input> --json` finds a bead, it is a
    bead. Otherwise, if it names a file, it is a plan document. Otherwise it
    is a task prompt. Then follow the matching section below.
@@ -220,14 +267,23 @@ task-prompt run gets none.
    the returned `marshal_name`, derived from the absolute project path,
    host, provider and app, to discover and reuse this project's sweep.
    In Codex discover `automation_update`, inspect existing automation
-   records by that exact name, and retain its ID. Use a standalone project
-   automation (select its project with `list_projects`), hourly at minute
+   records under `$CODEX_HOME/automations/*/automation.toml` (default
+   `~/.codex`) by that exact name, then `automation_update(mode: "view", id)`
+   and retain its ID. Use a standalone project automation (select its
+   project with `list_projects`), hourly at minute
    seven. In Claude use the supported scheduled-task tools for that name.
    Match legacy names by the absolute project path and owning app in their
    saved prompt; rename a matching task instead of creating a duplicate.
-   Preserve existing settings when updating.
-   Use the available schema and supported model defaults. Schedule this
-   prompt with the actual paths and owning host/app:
+   Preserve existing settings when updating. Use `mode: "update"` with the
+   resolved ID and all saved fields for migration. For creation use
+   `mode: "create"`, `kind: "cron"`, `executionEnvironment: "local"`, the
+   selected `projectId`, `status: "ACTIVE"`, and an hourly schedule at minute
+   seven. The invocation requests a standalone sweep, so do not make a
+   thread heartbeat. Use the currently supported schema; if it requires a
+   model/effort, choose an available default and record the choice. Save the
+   actual ID and any legacy aliases in the run's bead comments, then sync.
+   An uncertain result requires inspecting saved state before retrying.
+   Schedule this prompt with the actual paths and owning host/app:
 
    > Read `<ENACT>/skills/enact/roles/marshal.md` and follow it for the Enact
    > project at `<absolute project path>` on `<host/provider/app>`. The
@@ -252,9 +308,19 @@ Repeat until done, inside the same turn:
 enact next --epic <epic> --parallel <N> --wait 540
 ```
 
-Run it in the foreground with a 600000 ms tool timeout (Codex: one long-yield
-exec). It reserves work for you (assignee `vizier:<host>`) and returns as soon
-as there is something to do, or after nine minutes. Handle the JSON:
+Run one foreground process. In Codex, `exec_command` may return a
+`session_id` before the helper finishes; resume that same process with
+`write_stdin` in waits of at most 60 seconds. If the orchestration wrapper
+itself yields a cell ID, resume it with its `wait` tool first. Never launch a
+second `next` while the first still runs. Read the final JSON once the
+process exits. Check user steering between waits: a stop records the shared
+pause immediately, then drain the pending process without acting on a stale
+spawn result. Retain any unbound reservation and its token under the shared
+hold. After explicit resume, reconcile whether a child was created; if
+confirmed unbound, release with that token before scheduling again. Never
+release a bound or uncertain child just to restart the loop.
+The helper reserves as a unique vizier actor and returns when there is an
+action or after nine minutes. Handle the JSON:
 
 1. **`archive`** (any action may carry it): for each entry, archive the
    session ID with the host's archive tool, then
@@ -267,7 +333,8 @@ as there is something to do, or after nine minutes. Handle the JSON:
      <bead> in epic <epic>; work unattended and follow the role files named in
      the prompt.", plus `model`/`effort` from `settings` when present. Do not
      pass `permission_mode`, so the session inherits yours.
-   - Codex: `create_thread` with the same prompt, then title it.
+   - Codex: use the project and spawn adapter above, including the ready ID,
+     model policy and created-chat receipt.
 
    Then record the session: `enact meta <bead> enact_session=<session id>
    --reservation <token>`, using that spawn action's token for all routing
@@ -295,9 +362,11 @@ as there is something to do, or after nine minutes. Handle the JSON:
    A closed epic with `action: wait` is still running; keep the loop alive.
    Archive anything still listed. A small run that skipped the Marshal
    leaves any existing one alone. Otherwise inspect `enact status` and
-   remove only the automation with its exact `marshal_name` and recorded ID
-   when `sweep_needed` is false. This includes other active runs between
-   assignments and during final validation, not just working beads.
+   remove only matching sweeps with the exact `marshal_name` or verified
+   legacy aliases and recorded IDs when `sweep_needed` is false. In Codex
+   call `automation_update(mode: "delete", id: <resolved ID>)`; verify the
+   deletion receipt or saved-state removal before claiming cleanup. Retention
+   includes other active runs between assignments and during final validation.
    Finally write a short final report (outcome, bead count, whether the
    Marshal was deleted,
    anything for the user to look at) and end the turn. Stay unarchived.

@@ -71,7 +71,11 @@ Every follow-up bead costs a whole session, so file only **essential** ones:
 a real bug, a missing test for risky behavior, a design problem that will
 bite soon, tooling that is broken or badly slow. Do not file nice-to-haves,
 style cleanups or speculative ideas; mention them in your closing summary at
-most. Do not quietly expand your scope either.
+most. Every filed fix must be worth completing in this run; no separate
+backlog. Follow-ups inherit the run's role restrictions and review policy.
+Use an allowed role, with `review:inline` or a dependent Warden for
+substantial fixes as the run requires; do not introduce a forbidden role or
+quietly expand your scope.
 
 If a Warden bead that has not started yet depends on yours (check
 `bd dep list <bead> --direction=up --json`) and the issue is in the code it

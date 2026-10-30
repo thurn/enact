@@ -20,10 +20,14 @@ below.
    install instructions and stop.
 2. `git -C "$ENACT" pull --ff-only`.
 3. `enact install` links the `enact` and `enact-setup` skills into the
-   user-level skill directories that exist (`~/.claude/skills`,
-   `~/.codex/skills`, `~/.agents/skills`), using symlinks or, on Windows,
-   directory junctions. It refuses to overwrite unrelated entries: if it
-   reports a conflict, show it to the user and ask before removing anything.
+   canonical Codex directory `~/.agents/skills` (created even on a fresh
+   machine) and Claude's skills directory when its config directory exists.
+   It uses symlinks or Windows directory junctions, removes this checkout's
+   standalone legacy Codex links, and preserves shared Claude directories
+   and unrelated entries. `CODEX_HOME` and `CLAUDE_CONFIG_DIR` are honored.
+   It refuses to overwrite unrelated entries: if it reports a conflict,
+   show it to the user and ask before removing anything. Verify each skill
+   appears once in the intended app's selector after discovery refresh.
 
 ## 2. Project
 

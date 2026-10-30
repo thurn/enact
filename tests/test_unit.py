@@ -1,6 +1,7 @@
 """Fast tests: helper behavior that needs no git or Beads."""
 
 import importlib.util
+import json
 import multiprocessing
 import os
 import subprocess
@@ -307,6 +308,65 @@ class GraphTest(unittest.TestCase):
             self.assertEqual(action["role"], role)
             self.assertTrue(action["title"].startswith(enact.EMOJI[role]), role)
             self.assertIn(str(enact.ROLES_DIR / f"{role}.md"), action["prompt"])
+
+
+class InstallCliTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.home = Path(temporary.name)
+        self.env = {**os.environ, "HOME": str(self.home),
+                    "USERPROFILE": str(self.home),
+                    "CODEX_HOME": str(self.home / ".codex"),
+                    "CLAUDE_CONFIG_DIR": str(self.home / ".claude")}
+
+    def install(self, success=True):
+        result = subprocess.run([sys.executable, str(SCRIPT), "install"],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode == 0, success, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_fresh_codex_gets_single_canonical_skill_and_repeat_is_safe(self):
+        (self.home / ".codex").mkdir()
+        self.install()
+        for skill in ("enact", "enact-setup"):
+            target = enact.ENACT_ROOT / "skills" / skill
+            self.assertEqual((self.home / ".agents/skills" / skill).resolve(), target)
+        self.assertFalse((self.home / ".codex/skills").exists())
+        self.assertFalse((self.home / ".claude").exists())
+        self.assertEqual(set(self.install()["skills"].values()), {"present"})
+
+    def test_owned_legacy_links_migrate_but_unrelated_entries_survive(self):
+        legacy = self.home / ".codex/skills"
+        for skill in ("enact", "enact-setup"):
+            enact.link_dir(enact.ENACT_ROOT / "skills" / skill, legacy / skill)
+        unrelated = legacy / "personal"
+        unrelated.mkdir()
+        (unrelated / "SKILL.md").write_text("personal skill")
+        self.install()
+        self.assertFalse((legacy / "enact").exists())
+        self.assertFalse((legacy / "enact-setup").exists())
+        self.assertEqual((unrelated / "SKILL.md").read_text(), "personal skill")
+
+    def test_conflicting_canonical_content_is_preserved(self):
+        conflict = self.home / ".agents/skills/enact"
+        conflict.mkdir(parents=True)
+        (conflict / "SKILL.md").write_text("user content")
+        self.install(success=False)
+        self.assertEqual((conflict / "SKILL.md").read_text(), "user content")
+
+    def test_shared_claude_legacy_directory_keeps_claude_access(self):
+        shared = self.home / "shared"
+        shared.mkdir()
+        (self.home / ".claude").mkdir()
+        (self.home / ".codex").mkdir()
+        enact.link_dir(shared, self.home / ".claude/skills")
+        enact.link_dir(shared, self.home / ".codex/skills")
+        self.install()
+        for skill in ("enact", "enact-setup"):
+            target = enact.ENACT_ROOT / "skills" / skill
+            self.assertEqual((shared / skill).resolve(), target)
+            self.assertEqual((self.home / ".agents/skills" / skill).resolve(), target)
 
 
 @unittest.skipIf(enact.WINDOWS, "symlinks need privileges on Windows")

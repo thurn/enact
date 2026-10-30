@@ -5,9 +5,9 @@ of truth for role definitions; this file records the decisions made on top.
 
 ## Audit decisions (2026-10-29)
 
-These decisions supersede conflicting behavior below. They describe the
-agreed target; the runtime skills and helper still need the changes listed
-in [the desktop support audit](audit-2026-10-29.md).
+These decisions supersede historical behavior. The implementation and live
+validation evidence below track the findings from the
+[desktop support audit](audit-2026-10-29.md).
 
 - Audit against local project chats in the current desktop app, preserving
   Claude Desktop support. Identify supported tools and execution location
@@ -81,8 +81,8 @@ in [the desktop support audit](audit-2026-10-29.md).
 - `enact sync`: dolt commit, pull, push, retry. On a true conflict the remote
   wins and the helper prints the dropped local values.
 - `enact claim`: pull, verify open+unassigned, claim, push; the loser of a
-  cross-machine race backs off. `enact close` records `enact_commits`, closes,
-  syncs.
+  cross-machine race backs off. `enact push` appends `enact_commits` and
+  repairs delivery receipts; `enact close` closes the bead and syncs.
 - Role is a label `role:<name>`; unlabeled beads are executor beads.
 - Targeting metadata: `enact_host=<hostname>` / `enact_provider=claude|codex`
   restricts which vizier may pick a bead (this is the "mailbox").
@@ -131,21 +131,23 @@ in [the desktop support audit](audit-2026-10-29.md).
 - Milestones are child epics. Mason/Sage audits are "gate" epics blocking the
   next milestone epic (beads only lets epics block epics; a blocked epic hides
   its children from `bd ready`). Important findings become children of the
-  gate; `enact wait` runs `bd epic close-eligible`.
+  gate; `enact next` closes eligible epics.
 - Loop runs inside the user's original turn (Claude Desktop refuses
   `start_session` on turns started by automated events or other sessions):
-  `enact next` (claims as `vizier:<host>`, returns a bead or "wait"), spawn
-  `start_session`/`create_thread`, record `enact_session`, then foreground
-  `enact wait` (≤ ~9 min) and repeat. Wait output restates the loop so it
+  `enact next --wait 540` (unique vizier reservation, returns an action),
+  spawn `start_session`/`create_thread`, record the ready `enact_session`,
+  and repeat. Resume one yielded process through bounded tool waits; never
+  create competing scheduler processes. Output restates the loop so it
   survives compaction.
 - Selection scope: ready descendants of the epic plus unparented Steward beads.
   Capacity = open beads with `enact_vizier=<me>`; default parallelism 1.
-- The vizier archives sessions of closed beads reported by `enact wait`.
+- The vizier archives sessions of closed beads reported by `enact next`.
 - All spawns go through the vizier, including the Justiciar
   (`enact justiciar request`); the requesting host's vizier spawns it.
-- Termination: epic closed and nothing in flight = final report. Open but
-  nothing ready and peers hold claims = keep waiting. Open, nothing ready,
-  nobody holds claims (or no change for 6h) = request a Justiciar.
+- Termination: `enact next` reports done only after epic closure, required
+  Stewards and promotion of every run delivery to green master. Peer claims
+  and pending validation keep the run alive. A genuine deadlock requests a
+  Justiciar; paused and blocked states retain unmet acceptance.
 - Spawn prompt names `roles/common.md` and `roles/<role>.md` by absolute path,
   plus the bead and epic. Optional per-role model/effort from `.enact.toml`.
 
@@ -154,25 +156,27 @@ in [the desktop support audit](audit-2026-10-29.md).
 - Fleet-wide, per-project lock: `refs/enact/justiciar` on origin, created with
   a create-only push; the commit records host, session, time, reason. Holder
   is printed to anyone who tries to acquire. Deleted on exit; the Marshal
-  breaks it if the holder is archived or silent for more than 2h.
+  breaks it only after a routed lookup confirms the holder archived or
+  absent. Age, silence and lookup failures do not prove abandonment.
 
 ## Marshal
 
 - One per project per machine per host app: an hourly Claude Desktop scheduled
   task or Codex automation, with a lockfile against overlapping sweeps.
-- Nudges stalled sessions, releases beads whose sessions are gone, archives
-  leftovers, restarts a dead CI runner, breaks stale Justiciar locks, pulls
-  ~/enact, and push-notifies the user if the vizier's turn has died (it cannot
-  respawn one on Claude Desktop).
+- Uses durable, bounded recovery permissions to nudge confirmed stalled
+  workers and resume stopped viziers on capable hosts. Preserves paused and
+  blocked state and unfinished work. Archives completed chats, restarts dead
+  CI and pulls ~/enact. Unsupported recovery retains a one-time notice;
+  Claude scheduled turns cannot start sessions.
 - Small task-prompt runs neither create nor delete it.
-- The vizier deletes the Marshal task when its run finishes, unless
-  `enact status` still shows working beads on this machine (another epic in
-  flight), in which case that run's vizier deletes it later.
+- The vizier deletes only its identified Marshal when `enact status`
+  reports `sweep_needed: false`. Other relevant active runs between
+  assignments and pending final deliveries keep it alive.
 - Reservations record `enact_spawn_provider`, and `enact status` lists only
   beads spawned by the caller's host app: a Claude Marshal cannot see Codex
-  threads (it would release their beads as "session gone"), and a Codex run
-  must not keep the Claude Marshal alive. Beads reserved before the field
-  existed count for every app.
+  threads, and a Codex run must not keep the Claude Marshal alive. Legacy
+  routing remains visible for inspection; uncertainty never authorizes
+  releasing ownership.
 
 ## Sage
 
@@ -224,7 +228,8 @@ in [the desktop support audit](audit-2026-10-29.md).
 ## Packaging
 
 - One stdlib-only `scripts/enact.py` (Python 3.11+), subcommands `push ci
-  claim close sync next wait worktree justiciar install setup`.
+  claim close sync next worktree justiciar install setup`, plus ownership,
+  run-control, status and recovery commands shown by `--help`.
 - Skills linked per machine into user-level skill dirs (symlinks; junctions on
   Windows). `enact-setup` per project: beads init, dolt remote, staging
   branch, `.enact.toml`, AGENTS.md bullets.
@@ -236,8 +241,8 @@ in [the desktop support audit](audit-2026-10-29.md).
 Findings and adjustments made while implementing (2026-10-28):
 
 - Spawned sessions take their bead with `enact start`, which moves the
-  assignee from the vizier's `vizier:<host>` reservation to their own session
-  ID.
+  assignee from a unique vizier reservation to their own session ID, fenced
+  by the reservation token.
 - Dolt conflicts are row-level in practice (`updated_at` changes on every
   write), so any concurrent edit of one bead conflicts. `bd sql` is not
   available in embedded mode, so `enact sync` resolves conflicts with the
@@ -268,17 +273,18 @@ Findings and adjustments made while implementing (2026-10-28):
   every test runs in fast or slow checks or does not exist. The remaining
   cost is real: each `bd` call starts embedded Dolt (~0.7s) and `enact next`
   performs three syncs (~5s each).
-- Codex: `agents/openai.yaml` sets `allow_implicit_invocation: false`. The
-  Codex flow is written from documentation and is unverified.
+- Codex: `agents/openai.yaml` sets `allow_implicit_invocation: false`.
+  Desktop validation is recorded below; it does not establish other hosts'
+  capabilities.
 
 ## Housekeeping and validation
 
-- Delete the old `enact` and `enact-audit` skills; uninstall Hive's skill
-  links from ~/.llms/skills.
-- Validate with pytest black-box tests (real git/bd/Dolt, file:// origin), a
-  live demo run with real sessions in Claude Desktop, then push to
-  github.com/thurn/enact master. Codex behavior is written from documentation
-  and is unverified.
+- Installation removes only obsolete links owned by this checkout and
+  preserves unrelated skills.
+- Validate with stdlib unittest black-box tests (real git/bd/Dolt,
+  file:// origin) and bounded desktop smoke checks. Deliver through
+  `enact worktree create`, commit and `enact push --bead`; slow CI alone
+  advances master. Record tested hosts and remaining limits explicitly.
 
 ## Durable delivery and final promotion (2026-10-29)
 
@@ -494,3 +500,80 @@ Findings and adjustments made while implementing (2026-10-28):
   names of one session, taking whichever the bead records. The default actor
   stays the CLI id, so live viziers keep their claims. `ENACT_SESSION`, when
   set, is still the only name.
+
+
+## Desktop adapter and installation (2026-10-29)
+
+- The adapter is prompt text using the tools supplied by the owning app;
+  no Python wrapper for desktop APIs is needed. Codex selects a registered
+  project by full path and host, creates local top-level chats, maps an
+  authorized effort preference to `thinking`, and records ready chat IDs.
+  Pending client IDs never become ownership identities. Defaults remain
+  implicit unless the user requested model settings; unavailable preferred
+  settings fall back with a bead comment, while required models block.
+- Pre-flight verifies tools and local access before reservation. Long helper
+  waits stay in one process with bounded continuation calls and mid-run
+  steering. The loop retains created-chat receipts for its final UI output.
+- Marshal discovery uses exact identity plus verified legacy aliases. Its
+  saved ID belongs in the run's bead comments; creation, migration and
+  deletion use the current app schema. A lookup error never authorizes a
+  duplicate sweep. Retention follows all relevant active runs and delivery
+  state, and bounded recovery still uses the helper's durable permissions.
+- Installation always creates `~/.agents/skills`, including when only
+  `.codex` exists. Claude is installed when its configuration directory
+  exists. This checkout's standalone legacy Codex links are removed only
+  after canonical installation succeeds; unrelated content and shared
+  Claude roots remain intact. Roots resolving to one directory are handled
+  once. No new links are installed in the legacy Codex directory.
+- Official [skill discovery documentation][skill-discovery] confirms the
+  canonical user path, symlink support, and that duplicate names are not
+  merged. Tests exercise fresh installation, repeat installation, migration,
+  conflicts and shared Claude roots through the CLI. They verify filesystem
+  discovery candidates; app selector refresh remains an app-level check.
+- Follow-ups inherit the run's restrictions and review policy and must be
+  worth completing in the current run. There is no separate backlog.
+
+[skill-discovery]: https://learn.chatgpt.com/docs/build-skills
+
+### Codex desktop smoke receipts
+
+On 2026-10-29, executor en-b2c.1.7 used the registered local project
+`facd00e9-d913-430e-ad31-b727ae9a8c18` at `/Users/dthurn/enact` on jarvis.
+The desktop tool host is `local`, distinct from the OS hostname.
+
+- `create_thread` with local target and omitted model settings returned ready
+  chat `01a18aa6-457d-7fa2-b882-3375bd485d98`, host `local`. The chat's
+  environment reported the identical `CODEX_THREAD_ID`, correct checkout,
+  unrestricted filesystem access and approval policy `never`. It read
+  AGENTS.md, checked the Git root, and wrote/read/deleted a temporary receipt.
+- `wait_threads`, `read_thread` and `list_threads` confirmed its completed
+  turn and idle status. The first turn deliberately ended at a phase marker.
+  `send_message_to_thread` resumed the same chat; the second turn confirmed
+  its ID and local access and returned `SMOKE_RECOVERY_COMPLETE`.
+- `set_thread_archived` returned `archived: true`; `list_archived_threads`
+  independently listed that same ID. No repository changes or Beads claims
+  were made by the smoke chat.
+- This proves bounded local creation, access, inspection, messaging,
+  continuation and archive cleanup. It simulates a stopped workflow, not an
+  operating-system crash or forced app shutdown. Pending creation, rejected
+  model settings, scheduled-turn spawning, Windows and Linux desktop tools
+  were not exercised. Integration tests cover persistent recovery fencing
+  and pause/budget behavior separately; normal run deliveries provide the
+  real staging/slow-CI/promotion evidence.
+
+- Automation lifecycle smoke created a paused standalone job with ID
+  `enact-marshal-acd7df3c75f96b3dfda9-smoke`, inspected its saved TOML, updated
+  its name while retaining the ID and paused state, then deleted it. The
+  tool returned `deleteStatus: deleted`; saved-record absence confirmed it.
+  The job never ran. The tool requires an explicit automation model/effort;
+  this test used available `gpt-6.1-sol` / `low`.
+- The previously reported active legacy sweep `enact-marshal-enact` was
+  absent from saved automation records on inspection, despite an archived
+  02:04 UTC sweep receipt. No legacy sweep was deleted by this executor.
+  After a second complete saved-record scan found no Enact sweep, restored
+  one active standalone job under the helper's stable identity
+  `enact-marshal-acd7df3c75f96b3dfda9`, hourly at minute seven, using the same
+  project and model/effort above. Creation and saved active state were
+  verified. Its exact ID was recorded on the run for final cleanup; it must
+  remain while `sweep_needed` is true. This tests scheduling configuration,
+  not execution of a future hourly sweep.

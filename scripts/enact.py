@@ -22,6 +22,7 @@ import random
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -2060,17 +2061,16 @@ def cmd_lock(args: argparse.Namespace) -> dict[str, Any]:
 
 def skill_dirs() -> list[Path]:
     home = Path.home()
-    candidates = [
-        Path(os.environ.get("CLAUDE_CONFIG_DIR", home / ".claude")) / "skills",
-        Path(os.environ.get("CODEX_HOME", home / ".codex")) / "skills",
-        home / ".agents" / "skills",
-    ]
+    # Explicit installation creates the canonical Codex location even on a
+    # fresh machine. Claude remains opt-in through its existing config dir.
+    candidates = [home / ".agents" / "skills"]
+    claude = Path(os.environ.get("CLAUDE_CONFIG_DIR", home / ".claude"))
+    if claude.exists():
+        candidates.append(claude / "skills")
     seen: set[Path] = set()
     result = []
     for path in candidates:
-        if not path.parent.exists():
-            continue
-        real = path.resolve() if path.exists() else path
+        real = path.resolve()
         if real not in seen:
             seen.add(real)
             result.append(path)
@@ -2108,13 +2108,33 @@ def unlink_retired(target: Path, link: Path) -> bool:
 
 def cmd_install(args: argparse.Namespace) -> dict[str, Any]:
     linked = {}
-    for directory in skill_dirs():
+    directories = skill_dirs()
+    for directory in directories:
         for skill in ("enact", "enact-setup"):
             link = directory / skill
             linked[str(link)] = link_dir(ENACT_ROOT / "skills" / skill, link)
         for skill in RETIRED_SKILLS:
             link = directory / skill
             if unlink_retired(ENACT_ROOT / "skills" / skill, link):
+                linked[str(link)] = "removed"
+    legacy = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "skills"
+    # Migrate only links owned by this checkout. A shared Claude directory
+    # must keep its links; never delete someone else's skill or directory.
+    if legacy.resolve() not in {path.resolve() for path in directories}:
+        for skill in ("enact", "enact-setup", *RETIRED_SKILLS):
+            link = legacy / skill
+            target = ENACT_ROOT / "skills" / skill
+            try:
+                info = link.lstat()
+            except FileNotFoundError:
+                continue
+            junction = (WINDOWS and
+                        info.st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT)
+            if (link.is_symlink() or junction) and link.resolve() == target.resolve():
+                if link.is_symlink():
+                    link.unlink()
+                else:
+                    link.rmdir()
                 linked[str(link)] = "removed"
     return {"skills": linked}
 

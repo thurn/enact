@@ -66,6 +66,11 @@ git clone git@github.com:thurn/enact.git ~/enact
 python3 ~/enact/scripts/enact.py install
 ```
 
+Installation creates the canonical Codex directory `~/.agents/skills` and
+links Claude skills when its configuration directory exists. It safely
+migrates this checkout's standalone legacy Codex links and preserves shared
+Claude roots and unrelated content.
+
 Then run `/enact-setup` in each project. It writes `.enact.toml`:
 
 ```toml
@@ -104,5 +109,9 @@ Dolt mode, and the `dolt` CLI (used to resolve Beads merge conflicts).
 
 ## Status
 
-The Claude Desktop flow was exercised end to end. The Codex Desktop
-instructions follow its documented tools but have not been run.
+The Claude Desktop flow was exercised end to end. Bounded Codex Desktop
+smokes verified local chat creation, identity, access, continuation and
+archiving, plus paused automation creation, update and deletion. See
+[design notes](docs/design.md#codex-desktop-smoke-receipts) for receipts and
+limits; future scheduled execution and other operating systems were not
+validated by these smokes.
