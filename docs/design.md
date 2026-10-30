@@ -599,3 +599,21 @@ The desktop tool host is `local`, distinct from the OS hostname.
   Scheduling persistence and final cleanup remain open run requirements
   until recovery supplies evidence. The initial lifecycle smoke remains
   valid, but it does not establish continuing hourly execution.
+
+### Marshal incident recovery (2026-10-29)
+
+- Justiciar incident `en-bcw` confirmed the replacement absent from both
+  saved automation files and the local scheduler database. The prior tool
+  calls deleted only the separate paused smoke job. Logs did not establish
+  what removed either live sweep; this is not evidence of a helper defect.
+- Recovery uses the supported automation tool after reconciling exact
+  identity and active-run need. Make one observed restoration, preserve
+  receipts, and verify actual scheduled delivery before declaring recovery.
+  A temporary test cadence returns to hourly minute seven afterward. Do not
+  hand-edit scheduler databases or bypass unavailable desktop UI access.
+- Saved configuration, scheduled delivery and final cleanup are separate
+  evidence. An active file alone proves configuration; an observed scheduled
+  chat proves delivery at that time. Neither proves indefinite persistence.
+  Retain the sweep while `sweep_needed` is true. If it disappears again,
+  preserve the new evidence and return to incident recovery, not a loop of
+  blind replacements.
