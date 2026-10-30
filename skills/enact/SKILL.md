@@ -1,421 +1,201 @@
 ---
 name: enact
-description: Run work unattended with Enact by orchestrating fresh top-level
-  agent sessions over a Beads graph. Takes an existing bead, a project plan
-  document or a task prompt, files any beads it needs, then executes them.
-  User-invoked only.
+description: Execute Enact work inside this session, using subagents for
+  epics. Takes a bead ID or a task prompt and waits for slow CI before
+  finishing. Never starts other sessions. User-invoked only. For unattended
+  multi-session runs and plan documents, use /enact-plan.
 disable-model-invocation: true
 ---
 
-# Enact vizier
+# Enact inline
 
-You are the 🔮 **vizier**: the orchestrator for one Enact run in this project.
-Enact executes work unattended by running each bead in a fresh top-level
-session. Responsibility is devolved to those sessions. Before the run you may
-plan and file beads; once the loop starts you do almost nothing: you reserve
-beads, start sessions, archive finished sessions and wait. You never read
-bead contents, review work, poll sessions or make assignment decisions once
-the run starts.
+You run Enact work in this session. Beads, worktrees, `enact push` and slow
+CI work exactly as in `/enact-plan`, but nothing runs outside this session:
+you do bead work yourself, or hand it to subagents and wait for them. Your
+session title always shows which role is working.
 
 The invocation text is your input. It is one of:
 
-- a **bead ID**: execute that bead (an epic with all its descendants);
-- a **project plan document** (a path): audit it, decompose it into beads,
-  execute them;
-- a **task prompt**: decompose it into a small graph, usually one executor
-  bead, and execute it.
+- a **plain bead ID**: you are its Executor;
+- an **epic ID**: you orchestrate its beads, one subagent per bead;
+- a **task prompt**: file one executor bead, then you are its Executor.
 
-It may also give a parallelism level (default **1**: one session at a time),
-role restrictions (for example "no Mason or Sage") and any other
-instructions, which override this file.
+A plan document (a path) is not an input: tell the user to use
+`/enact-plan` and stop. The invocation may also give a parallelism level for
+an epic (default **1**) and other instructions, which override this file.
 
-Parallelism comes only from the invocation (or a later user message). Never
-write a parallelism level into a bead, epic or plan document, and ignore one
-you find there: a bead or plan that says "run N at once" does not change N.
+## Never
+
+- Never start a session of any kind: no `start_session`, `create_thread`,
+  Marshal, scheduled task or automation, and no Justiciar. Those belong to
+  `/enact-plan`. Never run `enact run register` or `enact next`.
+- Never file Mason, Sage or Archivist beads. Run those roles only for beads
+  an epic already contains.
+- Never end your turn while delivered work is waiting for slow CI.
 
 ## Paths and identity
 
 - `ENACT` is the Enact repository clone: resolve this skill's base directory
-  with `realpath` and go up two levels (conventionally `~/enact`).
+  with `realpath` and go up two levels (conventionally `~/enact`). Role files
+  are in `$ENACT/skills/enact/roles/`, written `ROLES` below.
 - The helper is `python3 "$ENACT/scripts/enact.py"` (`py -3` on Windows),
   written `enact` below. Every subcommand prints one JSON object.
-- Your vizier identity is your own session ID (`CLAUDE_CODE_SESSION_ID` in
-  Claude Code, `CODEX_THREAD_ID` in Codex). `enact next` reads it itself.
 - Run all commands from the project's main checkout.
+- Subagents share your session ID, so a bead you claim with `enact claim`
+  is theirs to push and close.
 
-## Host tools
+## Titles
 
-Enact needs a host that can start top-level sessions, title, archive and
-message them, and schedule a recurring task. Invoking Enact authorizes
-these operations on run-owned chats and its Marshal; carry that authority
-into every worker and recovery prompt.
+Title yourself with `set_session_title` on `self` (Claude Desktop; load it
+with ToolSearch first) or `set_thread_title` (Codex), as
+`<emoji> [<id>] <short summary>`:
 
-| Need | Claude Desktop | Codex Desktop |
-| --- | --- | --- |
-| Start session | `start_session` | `create_thread` |
-| Title self | `set_session_title` (`self`) | `set_thread_title` |
-| Archive | `archive_session` | `set_thread_archived` |
-| Message | `send_message` | `send_message_to_thread` |
-| Inspect | `get_session`, `list_sessions` | `read_thread`, `list_threads` |
-| Wait | supported session wait | `wait_threads` |
-| Schedule | `create_scheduled_task` | `automation_update` |
+- your own role while you do bead work yourself: ⚒️ Executor;
+- the running subagent's role while you wait for it: ⚒️ Executor,
+  🛡️ Warden, 🚒 Steward, 🧱 Mason, 📖 Sage, 📜 Archivist; with several at
+  once, all their emojis (`⚒️🛡️ [<epic>] ...`);
+- 🔮 while you orchestrate between subagents or wait for slow CI;
+- ✅ when finished, or ⛔ when you stopped without finishing.
 
-In Claude Desktop, load deferred tools with ToolSearch before first use.
-Subagents are never Enact sessions. In Codex, use the returned tool host ID
-(for example `local`), not the OS hostname in Beads, when routing tools.
-`read_thread` supplies turn status; `wait_threads` supplies a compact status
-and cursor. An idle chat is not necessarily abandoned; use Marshal rules.
-Archive with `archived: true` and an exact `threadId`/`hostId`, then record
-success. A missing list entry or `notLoaded` alone proves no inactivity.
+Retitle before each subagent starts and after it returns. `<id>` is the
+bead you are working, or the epic for an epic.
 
-### Codex project and spawn adapter
+## Pre-flight
 
-Before reserving work, discover the tools above and `list_projects`,
-`create_thread`, `set_thread_title`, plus local command execution. Scheduling
-is required only for runs that need a Marshal. Select
-one local project by its resolved absolute checkout path and owning host;
-retain its returned `projectId`. Never match only a basename. Verify local
-read/write access with a disposable file, and run read-only git, `bd` and
-helper checks in that checkout. A non-prompting policy alone is insufficient.
-If the path is unregistered, inaccessible, or required tools are missing,
-resolve it during pre-flight before claiming work.
+1. `git -C "$ENACT" pull --ff-only` (ignore failure when offline).
+2. `.enact.toml` and `.beads/` must exist and the remote must have a
+   `staging` branch. If not, tell the user to run `/enact-setup` and stop.
+3. Read `AGENTS.md` (its Enact section may restrict roles or set review
+   policy; the invocation overrides it) and `.enact.toml`.
+4. Classify the input: `bd show <input> --json` finds a bead (an epic if its
+   `issue_type` is `epic`); otherwise a path to a file is a plan document;
+   otherwise it is a task prompt.
 
-Use `create_thread` with `title`, the exact `prompt`, and this target:
-`{type: "project", projectId: <selected ID>, environment: {type: "local"}}`.
-Enact creates its own worktrees. Do not select cloud or app worktree mode.
-Omit `model` and `thinking` to use the user's defaults unless the invocation
-explicitly requests role model settings. Map an authorized `settings.model`
-to `model`, and `settings.effort` to `thinking`, using the current tool's
-supported combinations. If a preferred setting is unavailable, omit both
-and record the requested setting, default substitution and reason on the
-bead, then sync. An explicitly required model is a pre-flight blocker;
-never silently substitute. A definitive rejection can be retried once with
-defaults; uncertain creation must be reconciled before any second spawn.
+## Review
 
-Only a ready `threadId` is a worker identity. Retain returned `hostId` too.
-A `clientThreadId` means pending setup: never write it as `enact_session` or
-pass it to thread tools. Follow returned setup instructions. If needed,
-use `list_threads` to find candidate real IDs and `read_thread` to verify
-both the exact project and reservation token in the spawn prompt. A title
-match alone is insufficient. Keep the reservation while uncertain; request
-Justiciar recovery if no unique child can be established. Never create a
-replacement to resolve an ambiguous result. Each created chat must appear
-in the final response as a separate `::created-thread{threadId="..."}` line
-(or `clientThreadId` for still-pending setup). Retain these receipts across
-compaction. Normal scheduling waits through `enact next`; use bounded
-`wait_threads` with real IDs and returned cursors only for launch checks
-or recovery. Do not poll healthy worker chats in the vizier loop.
+Every implementation gets one of:
 
-**Claude Desktop only lets a session start other sessions during a turn the
-user started.** A turn begun by a background task, a scheduled task or another
-session's message cannot start sessions. So the whole run happens inside the
-turn in which the user invoked `/enact`: never end that turn while the epic is
-open. All spawning goes through you, including the Justiciar.
+- **Executor only**, for a routine change;
+- **Executor + Warden**, for a change that is large or risky (data loss,
+  concurrency, security, many files), already followed by a Warden bead, or
+  when the user or `AGENTS.md` asks for one.
 
-## Phase 1: pre-flight
+A `review:inline` label asks for a cold review: you give it yourself before
+pushing when you are the Executor, and a Warden gives it after an Executor
+subagent pushes (subagents do not start subagents).
 
-The user is present now and will not be later. Do all interactive work here.
-
-1. **Update Enact.** `git -C "$ENACT" pull --ff-only` (ignore failure when
-   offline).
-2. **Project setup.** `.enact.toml` and `.beads/` must exist and the remote
-   must have a `staging` branch. If not, tell the user to run `/enact-setup`
-   first and stop.
-3. **Permission mode.** Spawned sessions inherit your permission mode, and a
-   permission prompt stalls an unattended run. In Claude Desktop, call
-   `get_session` on `self`; `permissionMode` must be `bypassPermissions` or
-   `auto`. Otherwise ask the user to switch modes, and do not start until they
-   have. In Codex, require an approval policy that never prompts and complete
-   the project/tool/local-access checks above before reserving any bead.
-4. **Classify the input.** If `bd show <input> --json` finds a bead, it is a
-   bead. Otherwise, if it names a file, it is a plan document. Otherwise it
-   is a task prompt. Then follow the matching section below.
-
-### A bead
-
-- **An epic**: that is the run's epic. If it already has claimed or
-  in-progress children, another vizier (another machine or provider) is
-  probably working it; joining needs nothing special. If it has no children
-  yet, plan its description as a plan document or task prompt (below), filing
-  under this epic instead of a new one. Otherwise file nothing.
-- **Any other bead**: it needs an epic around it, because follow-ups and the
-  scheduler work by epic. If it already has a parent epic, ask the user
-  whether to run that whole epic instead or to move the bead into a run of
-  its own. For a run of its own, create an epic titled after the bead, then
-  `bd update <bead> --parent <new epic> --json`. Do not decompose it or add
-  beads.
-
-Then go to [Finish planning](#finish-planning).
-
-### A project plan document
-
-Read the plan, `AGENTS.md` (Enact section) and `.enact.toml`. AGENTS.md may
-restrict roles or set review policy; the invocation overrides AGENTS.md. Run
-the [stoppage audit](#stoppage-audit), then
-[build the graph](#build-the-graph) with every role in play.
-
-### A task prompt
-
-Read `AGENTS.md` (Enact section), `.enact.toml` and enough code to scope the
-task. Skip the full stoppage audit, but if the prompt plainly needs a human
-(a choice between options, credentials, a manual step), resolve that point
-with the user first.
-
-Default to the smallest graph: one epic holding one executor bead that
-carries the whole prompt. No milestones, no Mason or Sage gates, no
-Marshal. Pick the review, following any review wishes in the invocation:
-
-- **none** for a routine change;
-- **inline** (label the executor bead `review:inline`): the executor gets a
-  cold-review subagent before pushing. The default for a change that
-  deserves a second look;
-- **Warden**: a Warden bead depending on the executor bead, only when the
-  change is large or risky (data loss, concurrency, security, many files)
-  or the user asks for one.
-
-If the prompt describes a large work item (several independent pieces,
-phases, days of work), treat it as a plan document instead: run the stoppage
-audit and decompose fully.
-
-### Stoppage audit
-
-Enact only accepts a plan it can execute to completion with no human. Before
-filing anything, list every stoppage risk in the plan:
-
-- decisions left to the user ("choose between A and B", "confirm the design");
-- manual steps: sign-offs, QA by a person, UI review, approvals;
-- credentials, accounts, payments or access that agents do not have;
-- external parties: waiting on someone, a release window, a deploy;
-- anything irreversible or outward-facing the user has not authorized.
-
-Resolve each risk with the user now: get the decision, record a default, or
-cut the step from scope. Ask one question at a time with your recommendation.
-If a risk cannot be resolved, refuse to start and say why. Never file a bead
-that needs a human later; express acceptance as checks an agent can run.
-
-### Build the graph
-
-Read enough of the codebase to decompose well. Then file the graph with raw
-`bd` (always `--json`; see `bd create --help`):
-
-- **One epic** for the run (`--type epic`) whose description holds the plan
-  summary or task prompt, a link to the plan document, the decisions from the
-  audit, the role restrictions, and whole-run acceptance criteria. Leave
-  parallelism out.
-- **Milestones** as child epics when the plan has phases. Milestone N+1
-  depends on milestone N (or on its gate, below) with `bd dep add`.
-- **Beads** as children (`--parent`), each completable by one fresh session in
-  one sitting, with a standalone description, the relevant plan excerpt and
-  file pointers, `--acceptance` criteria an agent can verify, and `--priority`.
-  Give each its role label (`--labels role:<role>`); unlabeled beads are
-  executor beads.
-- **Dependencies** only where real (`bd dep add <dependent> <prerequisite>`).
-  Unrelated work stays parallel. Two beads that would edit the same code
-  non-additively get an ordering edge.
-
-Decompose a plan fully up front by default. For a large or uncertain plan you
-may instead file concrete beads for the first milestone plus one executor
-bead per later milestone: "Decompose milestone N into beads", parented under
-that milestone epic and gated on the previous milestone.
-
-#### Roles
-
-For a plan, use every role unless AGENTS.md or the invocation restricts them:
-
-- **Executor** (`role:executor`, the default): implements.
-- **Warden** (`role:warden`): fresh review that fixes problems itself. By
-  default file one Warden bead per substantial implementation bead,
-  depending on it; batch small related beads under one Warden bead that
-  depends on all of them. Work that builds on that code depends on the Warden
-  bead; unrelated work does not.
-- **Mason** (`role:mason`): architecture audit at milestone boundaries; one
-  pass at the end for a small project.
-- **Sage** (`role:sage`): process and tooling audit ("why was this slow?") at
-  milestone boundaries.
-- **Archivist** (`role:archivist`): end-of-run documentation cleanup. It
-  retires the plan document and updates the project's technical docs to the
-  shipped state. One per plan run (below).
-- **Steward** (`role:steward`): never planned; the slow-CI runner files these.
-- **Justiciar** and **Marshal**: never filed as beads.
-
-#### Audit gates
-
-Beads only lets epics block epics, and a blocked epic hides its children
-from `bd ready`. So each Mason or Sage audit gets a small **gate epic**, for
-example "M1 review gate", with the next milestone epic depending on it. The
-audit bead is a child of the gate epic. The auditor files important findings
-as further children of the gate, so the next milestone waits for them. The
-helper closes a gate automatically once all its children are closed.
-
-#### Final documentation
-
-Every plan run (including a task prompt treated as a plan) ends with exactly
-one Archivist bead: a direct child of the run epic, with no dependencies,
-whose description names the plan document path, if any. The helper holds it
-until every other bead in the epic, follow-ups included, is closed. A small
-task-prompt run gets none.
-
-### Finish planning
-
-1. If you filed or moved beads, run `enact sync`, then check the graph with
-   `bd list --parent <epic>` and `bd ready --parent <epic>`: something must be
-   ready (unless another vizier holds it), and every bead must be reachable.
-2. **Register the run.** `enact run register <epic> --parallel <N>
-   --authorized` retains your exact route and the invocation's authority to
-   create, inspect, message and archive run chats and manage its Marshal.
-   This never clears shared paused or blocked state. Only on an explicit
-   user request to resume, run `enact run resume <epic> --explicit --reason
-   "<user instruction>"`. Automatic recovery must never invoke resume.
-
-   **Marshal.** Skip creation for a small task-prompt run. Otherwise use
-   the returned `marshal_name`, derived from the absolute project path,
-   host, provider and app, to discover and reuse this project's sweep.
-   In Codex discover `automation_update`, inspect existing automation
-   records under `$CODEX_HOME/automations/*/automation.toml` (default
-   `~/.codex`) by that exact name, then `automation_update(mode: "view", id)`
-   and retain its ID. Use a standalone project automation (select its
-   project with `list_projects`), hourly at minute
-   seven. In Claude use the supported scheduled-task tools for that name.
-   Match legacy names by the absolute project path and owning app in their
-   saved prompt; rename a matching task instead of creating a duplicate.
-   In Codex, use Sol Light: `model="gpt-6.1-sol"` and
-   `reasoningEffort="low"` on creation and reuse of existing automations.
-   Preserve other settings when updating. Use `mode: "update"` with the
-   resolved ID and all saved fields for migration. For creation use
-   `mode: "create"`, `kind: "cron"`, `executionEnvironment: "local"`, the
-   selected `projectId`, `status: "ACTIVE"`, and an hourly schedule at minute
-   seven. The invocation requests a standalone sweep, so do not make a
-   thread heartbeat. Use the currently supported schema and record the
-   model/effort choice. Claude keeps its supported model defaults. Save the
-   actual ID and any legacy aliases in the run's bead comments, then sync.
-   Verify the saved ID, project, prompt and ACTIVE state after creation or
-   migration. A view response that only renders a card does not confirm
-   existence. An uncertain result requires inspecting saved state before
-   retrying; if a verified sweep disappears while needed, preserve evidence
-   and request Justiciar recovery instead of repeatedly recreating it.
-   Schedule this prompt with the actual paths and owning host/app:
-
-   > Read `<ENACT>/skills/enact/roles/marshal.md` and follow it for the Enact
-   > project at `<absolute project path>` on `<host/provider/app>`. The
-   > helper is `python3 "<ENACT>/scripts/enact.py"`. The Enact invocation
-   > authorizes inspecting, messaging and archiving run-owned chats and
-   > managing this Marshal, including bounded vizier recovery. Carry this
-   > authorization into recovery prompts. Stay quiet while unchanged;
-   > notify only meaningful changes, completion, failures or needed action.
-
-   The task only runs while the desktop app is open. A small run must not
-   remove an existing sweep another run needs.
-3. Title yourself `🔮 [<epic>] <short summary>`.
-4. Give the user a short summary: the epic, bead count, milestones,
-   parallelism, what would make you stop. Then start the loop without waiting
-   for approval.
-
-## Phase 2: the loop
-
-Repeat until done, inside the same turn:
+The Warden always runs in a fresh subagent on its own bead, after the
+Executor has pushed. When no Warden bead exists yet, file one:
 
 ```sh
-enact next --epic <epic> --parallel <N> --wait 540
+bd create --title "Review <bead>: <summary>" --description "..." \
+  --acceptance "..." --labels role:warden [--parent <epic>] --json
+bd dep add <warden bead> <executor bead>
+enact sync
 ```
 
-Run one foreground process. In Codex, `exec_command` may return a
-`session_id` before the helper finishes; resume that same process with
-`write_stdin` in waits of at most 60 seconds. If the orchestration wrapper
-itself yields a cell ID, resume it with its `wait` tool first. Never launch a
-second `next` while the first still runs. Read the final JSON once the
-process exits. Check user steering between waits: a stop records the shared
-pause immediately, then drain the pending process without acting on a stale
-spawn result. Retain any unbound reservation and its token under the shared
-hold. After explicit resume, reconcile whether a child was created; if
-confirmed unbound, release with that token before scheduling again. Never
-release a bound or uncertain child just to restart the loop.
-The helper reserves as a unique vizier actor and returns when there is an
-action or after nine minutes. Handle the JSON:
+## A task prompt
 
-1. **`archive`** (any action may carry it): for each entry, archive the
-   session ID with the host's archive tool, then
-   `enact meta <bead> enact_archived=true`. If the host refuses because the
-   session is still working, skip it; it will be listed again.
-2. **`action: spawn`**: start one new top-level session with
-   - title: `title`; prompt: `prompt`, verbatim;
-   - Claude Desktop: `initiation: "user_asked"`, `context: "fresh"`,
-     `use_worktree: false`, `background`: "Enact <role> session for bead
-     <bead> in epic <epic>; work unattended and follow the role files named in
-     the prompt.", plus `model`/`effort` from `settings` when present. Do not
-     pass `permission_mode`, so the session inherits yours.
-   - Codex: use the project and spawn adapter above, including the ready ID,
-     model policy and created-chat receipt.
+Read enough code to scope the task. If it plainly needs a human (a choice
+between options, credentials, a manual step), settle that with the user
+now. If it describes a large work item (several independent pieces,
+phases, days of work), tell the user to use `/enact-plan` and stop.
 
-   Then record the session: `enact meta <bead> enact_session=<session id>
-   --reservation <token>`, using that spawn action's token for all routing
-   changes. Keep the token in the spawn prompt. Record actual app and
-   project routing with `enact_spawn_app` and `enact_spawn_project` if the
-   returned route differs from the helper's defaults; targeting fields
-   `enact_host` and `enact_provider` do not describe an existing chat.
-   If spawning is definitively rejected before creating a child, release
-   your unbound reservation: `enact release <bead> --reservation <token>
-   --reason "<error>"`. A stale token must never be replaced with a newer
-   token to retry a delayed spawn result or failure.
-   For a timeout or uncertain result, inspect the owning app first. Never
-   release merely because the lookup failed; use the Marshal handoff rules
-   once a child's inactivity is confirmed.
-3. **`action: spawn-justiciar`**: start a session the same way with the given
-   `title` and `prompt`. There is no bead to record.
-4. **`action: wait`**: nothing to do yet. Run `enact next` again.
-5. **`action: deadlock`**: open beads remain but nothing can ever become
-   ready. Run `enact justiciar request --reason "Deadlock in epic <epic>:
-   <open beads>"` (exit 3 means one is already requested or active), then
-   continue the loop. Your next `enact next` call spawns it. This is the one
-   case where you act on your own judgment.
-6. **`action: done`**: the epic is closed, nothing of yours is in flight,
-   required Stewards are closed, and all run deliveries reached green master.
-   A closed epic with `action: wait` is still running; keep the loop alive.
-   Archive anything still listed. A small run that skipped the Marshal
-   leaves any existing one alone. Otherwise inspect `enact status` and
-   remove only matching sweeps with the exact `marshal_name` or verified
-   legacy aliases and recorded IDs when `sweep_needed` is false. In Codex
-   call `automation_update(mode: "delete", id: <resolved ID>)`; verify the
-   deletion receipt or saved-state removal before claiming cleanup. Retention
-   includes other active runs between assignments and during final validation.
-   Finally write a short final report (outcome, bead count, whether the
-   Marshal was deleted,
-   anything for the user to look at) and end the turn. Stay unarchived.
-7. **`action: paused` or `blocked`**: no new spawning or recovery. Report
-   the shared reason and end the turn, preserving unfinished requirements.
-   Already running workers may finish and deliver. Do not automatically
-   resume, close the run, or release it for endless replacement attempts.
+File one executor bead carrying the whole prompt, with acceptance criteria
+an agent can verify (`bd create ... --labels role:executor --json`, then
+`enact sync`), and continue as for a plain bead.
 
-Rules for the loop:
+## A plain bead
 
-- Spend no tokens beyond this loop. Do not read beads, inspect sessions,
-  summarize progress or narrate waits. One short line per action is enough.
-- Do not answer `side-sessions-event` notices or session reports except by
-  continuing the loop. The beads graph is the only signal.
-- If the user writes to you mid-run, answer briefly, then resume the loop.
-  Apply any changed instruction (parallelism, stop) from then on. "Stop"
-  means: `enact run pause <epic> --reason "<user instruction>"` immediately,
-  stop spawning across peers, let in-flight sessions finish, report and end.
-  If sync rejects the pause, inspect and reapply the still-current user
-  instruction. Never use local silence alone as the pause record.
-- Every `enact next` result has a `reminder` field restating the loop. After
-  context compaction, trust it and continue.
-- If the vizier's turn ends anyway (crash, usage limit), the Marshal, if the
-  run has one, uses the recorded route for bounded recovery on capable
-  hosts. Unsupported recovery or exhausted retries notifies the user.
-  Explicit user resume clears the shared hold and resets recovery budgets;
-  continue the same epic without replanning or discarding assignments.
+You implement it yourself, in this session.
 
-## Multiple machines and providers
+1. `enact claim <bead>`. Exit 3 means someone else holds it or it is
+   closed: report that and stop.
+2. Title yourself ⚒️, then read `ROLES/common.md` and `ROLES/executor.md`
+   and follow them as the Executor, with the inline rules in `common.md`.
+   A `review:inline` label means you run that cold-review subagent before
+   pushing, as `executor.md` describes; that replaces the Warden.
+3. After you close the bead, decide [review](#review). For Executor +
+   Warden, claim the Warden bead and run it as a subagent
+   ([Subagents](#subagents)).
+4. Follow-up beads filed during the work are reported, not executed. Only
+   Steward work for slow CI runs here.
 
-Several viziers can work one epic: one per machine or provider, each invoked
-by the user on its own host with the same epic ID. They share the graph via
-the Dolt remote (`refs/dolt/data` on origin) and code via `origin/staging`.
-`enact next` claims beads with a pull-claim-push cycle, so two viziers never
-spawn the same bead. Communication between them is rare and goes through
-beads: any bead with metadata `enact_host=<host>` or
-`enact_provider=<claude|codex>` is only picked up by the matching vizier.
+Then go to [Slow CI](#slow-ci).
+
+## An epic
+
+Every bead in the epic runs in a subagent. You only pick, claim, title,
+launch and check. Loop:
+
+1. `bd ready --parent <epic> --json`. Drop epics (gate epics close
+   themselves), beads assigned to someone else, and beads whose
+   `enact_host` or `enact_provider` metadata names another machine or
+   provider. Hold an Archivist bead until every other bead in the epic is
+   closed.
+2. Nothing ready: if every descendant is closed, the epic is done. If open
+   beads remain and no subagent of yours is running, the run is
+   deadlocked or held elsewhere: report the open beads and stop (⛔).
+3. Take the highest-priority bead (lowest number), or up to the
+   parallelism level of beads that will not edit the same code.
+   `enact claim <bead>` each; on exit 3 skip it.
+4. Title yourself with the running roles and launch one subagent per bead.
+   The role is the bead's `role:` label (`executor` when unlabeled).
+5. When a subagent returns, check `bd show <bead> --json`. If the bead is
+   still open, read the subagent's summary and the bead's comments: if the
+   work can continue, launch one fresh subagent for the same bead; if not
+   (or the second one also stops), comment the state on the bead, run
+   `enact release <bead> --reason "..."`, and stop with a report (⛔).
+6. A closed Executor bead labeled `review:inline` with no Warden bead after
+   it gets one now ([Review](#review)), filed under the same parent.
+7. Follow-up beads subagents file under the epic join the loop by
+   themselves. Repeat.
+
+Then go to [Slow CI](#slow-ci). Closing the last bead closes the epic.
+
+## Subagents
+
+Use a general-purpose subagent with a fresh context (Claude: the Agent tool;
+Codex: a spawned agent) and this prompt, filled in:
+
+> You are the `<emoji>` `<Role>` for bead `<bead>` in an inline Enact run.
+> Read `<ROLES>/common.md` and then `<ROLES>/<role>.md` and follow them,
+> including the inline-run rules in `common.md`. The helper is
+> `<enact command>`; the project's main checkout is `<path>`. The bead is
+> already claimed for you. Work unattended: nobody will answer questions.
+> End with a short summary: outcome, each `staging` SHA you pushed, and any
+> follow-up beads you filed.
+
+Pass nothing else: no opinion of the work, no plan beyond the bead. Note
+each pushed `staging` SHA from the summary or the bead's `enact_commits`.
+
+## Slow CI
+
+Before you finish, the last `staging` SHA delivered in this run (by you or a
+subagent) must reach `master`. Each delivery is rebased onto the previous
+one, so the newest SHA covers them all.
+
+1. Title yourself 🔮 and run `enact ci --wait <sha>` (600000 ms tool
+   timeout). Repeat on `waiting` until it reports `passed`.
+2. On `failed`: `enact claim <steward bead>` for each listed Steward bead,
+   title yourself 🚒 and run it as a Steward subagent. Then wait the same
+   way on the SHA its fix pushed.
+
+## Rules
+
+- Use raw `bd ... --json` for reads and filing and `enact sync` afterward;
+  `enact claim`, `close` and `release` sync themselves.
+- The user is here, but do not stop to ask about things an agent can
+  decide. Ask only for a genuine human decision or missing access.
+- An emergency (corrupt Beads database, every push rejected, disk full, a
+  core tool broken) stops the run: report the evidence to the user. Never
+  request or start a Justiciar.
+- A user stop: let a running subagent finish or interrupt it, leave its
+  bead's state in a comment, release beads nobody is working, and report.
+- Finish with a short report: what shipped (beads, SHAs), follow-ups filed
+  and not run, the slow-CI result, and anything for the user to look at.
 
 ## Reference
 
-The design rationale is in `$ENACT/docs/design.md`; role prompts are in
-`$ENACT/skills/enact/roles/`.
+The design rationale is in `$ENACT/docs/design.md`. `/enact-plan` is the
+multi-session vizier for plan documents and unattended runs.

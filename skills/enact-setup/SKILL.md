@@ -7,11 +7,11 @@ disable-model-invocation: true
 
 # Enact setup
 
-Prepare this machine and the current project for `/enact` runs. `ENACT` is
-the Enact repository clone: resolve this skill's base directory with
-`realpath` and go up two levels (conventionally `~/enact`). The helper is
-`python3 "$ENACT/scripts/enact.py"` (`py -3` on Windows), written `enact`
-below.
+Prepare this machine and the current project for `/enact` and `/enact-plan`
+runs. `ENACT` is the Enact repository clone: resolve this skill's base
+directory with `realpath` and go up two levels (conventionally `~/enact`).
+The helper is `python3 "$ENACT/scripts/enact.py"` (`py -3` on Windows),
+written `enact` below.
 
 ## 1. Machine
 
@@ -19,9 +19,9 @@ below.
    Enact uses to resolve Beads merge conflicts. Report anything missing with
    install instructions and stop.
 2. `git -C "$ENACT" pull --ff-only`.
-3. `enact install` links the `enact` and `enact-setup` skills into the
-   canonical Codex directory `~/.agents/skills` (created even on a fresh
-   machine) and Claude's skills directory when its config directory exists.
+3. `enact install` links the `enact`, `enact-plan` and `enact-setup` skills
+   into the canonical Codex directory `~/.agents/skills` (created even on a
+   fresh machine) and Claude's skills directory when its config directory exists.
    It uses symlinks or Windows directory junctions, removes this checkout's
    standalone legacy Codex links, and preserves shared Claude directories
    and unrelated entries. `CODEX_HOME` and `CLAUDE_CONFIG_DIR` are honored.
@@ -78,6 +78,8 @@ Run from the project's main checkout.
 - `bd list --json` works.
 - `git ls-remote origin staging refs/dolt/data` shows both refs.
 
-Report what you set up, and remind the user that `/enact` with a bead, a
-plan document or a task prompt starts a run. Claude Desktop runs need bypass
-or auto permission mode so unattended sessions never stop at a prompt.
+Report what you set up, and remind the user that `/enact` runs a bead, an
+epic or a task prompt inline in one session, and `/enact-plan` with a bead,
+a plan document or a task prompt starts an unattended multi-session run.
+Claude Desktop `/enact-plan` runs need bypass or auto permission mode so
+unattended sessions never stop at a prompt.

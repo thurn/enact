@@ -10,6 +10,24 @@ after a role.
 one JSON object. Exit code 2 means you must act (resolve conflicts, fix
 checks); 3 means you lost a race.
 
+## Inline runs
+
+An inline run (`/enact`) works beads inside one session, the orchestrator,
+instead of spawning sessions. Your prompt says when you are in one, either
+as the orchestrator or as its subagent. Then:
+
+- The orchestrator claimed your bead and owns the session title: skip
+  `enact start` and every title step below.
+- No vizier, Marshal or Justiciar exists. Never start sessions, scheduled
+  tasks or a Justiciar; where this file says to request one or message a
+  session, stop instead and put the evidence in your summary.
+- A subagent never starts subagents; a `review:inline` review then comes
+  from a Warden after you push.
+- Ignore `watch_ci` in push output: the orchestrator waits for slow CI.
+  Report each `staging` SHA you pushed.
+- If you cannot finish, comment the exact state on the bead, leave it in
+  progress and say so in your summary; the orchestrator decides.
+
 ## Start
 
 1. Run the `enact start <bead> --reservation <token>` command in your spawn

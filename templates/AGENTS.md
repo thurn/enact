@@ -22,7 +22,8 @@
   the main checkout clean.
 - Fast and slow check commands are in `.enact.toml`.
 - Beads live in this repo (`bd`); publish bead changes with `enact sync`.
-- Work can run unattended with Enact (`/enact <bead|plan|task>`); most work
-  does not go through it.
+- `/enact <bead|epic|task>` runs Enact work inline in one session;
+  `/enact-plan <bead|plan|task>` runs it unattended across sessions. Most
+  work goes through neither.
 - Enact roles in use: all (Executor, Warden, Steward, Mason, Sage, Archivist).
 - Review policy: one Warden bead per substantial implementation bead.

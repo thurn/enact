@@ -29,9 +29,10 @@ and Beads writes and unmodified older helpers remain outside that protocol.
 - Audit against local project chats in the current desktop app, preserving
   Claude Desktop support. Identify supported tools and execution location
   explicitly rather than treating product names as capability guarantees.
-- Invoking `/enact` (`$enact` in Codex) authorizes creating, messaging and
-  archiving its role chats, and creating and removing its recurring Marshal
-  task. Carry that authorization into the Marshal and worker prompts.
+- Invoking `/enact-plan` (`$enact-plan` in Codex) authorizes creating,
+  messaging and archiving its role chats, and creating and removing its
+  recurring Marshal task. Carry that authorization into the Marshal and worker
+  prompts.
 - A run finishes only when its delivered commits have passed slow CI and
   reached `master`, including any required Steward fixes. Workers may still
   close their beads after pushing. Bead closure alone is not run completion.
@@ -108,7 +109,7 @@ and Beads writes and unmodified older helpers remain outside that protocol.
 
 ## Vizier
 
-- One user-invoked skill that scales with its input, `/enact <input>
+- One user-invoked skill that scales with its input, `/enact-plan <input>
   [parallelism]`. One entry point keeps small tasks lightweight.
   - Bead: execute it. An epic is the run (joining another vizier's run needs
     nothing special); a plain bead is wrapped in a new epic, since follow-ups
@@ -255,6 +256,9 @@ and Beads writes and unmodified older helpers remain outside that protocol.
 - Skills linked per machine into user-level skill dirs (symlinks; junctions on
   Windows). `enact-setup` per project: beads init, dolt remote, staging
   branch, `.enact.toml`, AGENTS.md bullets.
+- Three skills: `enact-plan` (the vizier), `enact` (inline) and
+  `enact-setup`. Role files stay in `skills/enact/roles/` so spawn prompts
+  and Marshal tasks written before the split keep working.
 - Titles: 🔮 Vizier, ⚒️ Executor, 🛡️ Warden, 🔥 Justiciar, 🚒 Steward,
   🎖️ Marshal, 🧱 Mason, 📖 Sage, 📜 Archivist; ✅ on completion.
 
@@ -675,3 +679,24 @@ blindly recreate jobs or hand-edit scheduler databases.
 - On `failed` the session claims the Steward bead and follows the Steward
   role, then watches its repair the same way. Instructions live in the push
   output, so existing project AGENTS.md files need no change.
+
+## Inline skill (2026-10-30)
+
+- `/enact` became inline execution; the vizier moved to `/enact-plan`.
+  Many tasks need no unattended fleet, and spawning sessions, a Marshal
+  and per-session titles costs more than the work.
+- `/enact` never starts sessions, scheduled tasks or a Justiciar. A plain
+  bead or task prompt is implemented by the session itself; an epic runs
+  each bead in a fresh subagent, sequential by default so the title names
+  the working role. Plan documents and large prompts go to `/enact-plan`.
+- Review follows the vizier's policy: Executor only for routine changes,
+  Executor plus a Warden subagent on its own bead for large or risky ones.
+  Subagents cannot start subagents, so an Executor subagent's
+  `review:inline` becomes a Warden after its push.
+- Mason, Sage and Archivist run only for beads an epic already contains;
+  the inline skill never files them.
+- Subagents share the orchestrator's session ID: it claims with
+  `enact claim`, they push and close. No helper changes were needed.
+- The session waits on `enact ci --wait` for its newest delivery before
+  finishing and runs Steward subagents on failure; emergencies and
+  deadlocks are reported to the user instead of a Justiciar.

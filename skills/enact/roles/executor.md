@@ -65,7 +65,7 @@ One review round is enough; do not loop.
 If your bead is "Decompose milestone N into beads", you are planning, not
 implementing. Read the plan section for that milestone and the current code,
 then file the milestone's beads under its milestone epic, following the
-vizier's planning rules in `../SKILL.md` (relative to this file):
+vizier's planning rules in `../../enact-plan/SKILL.md` (relative to this file):
 standalone descriptions, verifiable acceptance criteria, role labels, real
 dependencies only, Warden beads for substantial work, and a Mason/Sage gate
 epic if the plan calls for one. Never file a bead that needs a human. Sync,

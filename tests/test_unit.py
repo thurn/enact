@@ -467,7 +467,7 @@ class InstallCliTest(unittest.TestCase):
     def test_fresh_codex_gets_single_canonical_skill_and_repeat_is_safe(self):
         (self.home / ".codex").mkdir()
         self.install()
-        for skill in ("enact", "enact-setup"):
+        for skill in enact.SKILLS:
             target = enact.ENACT_ROOT / "skills" / skill
             self.assertEqual((self.home / ".agents/skills" / skill).resolve(), target)
         self.assertFalse((self.home / ".codex/skills").exists())
@@ -477,7 +477,7 @@ class InstallCliTest(unittest.TestCase):
     def test_owned_legacy_links_migrate_but_unrelated_entries_survive(self):
         self.env["CODEX_HOME"] = str(self.home / "custom-codex")
         legacy = self.home / "custom-codex/skills"
-        for skill in ("enact", "enact-setup"):
+        for skill in enact.SKILLS:
             enact.link_dir(enact.ENACT_ROOT / "skills" / skill, legacy / skill)
         unrelated = legacy / "personal"
         unrelated.mkdir()
@@ -515,7 +515,7 @@ class InstallCliTest(unittest.TestCase):
         enact.link_dir(shared, self.home / ".claude/skills")
         enact.link_dir(shared, self.home / ".codex/skills")
         self.install()
-        for skill in ("enact", "enact-setup"):
+        for skill in enact.SKILLS:
             target = enact.ENACT_ROOT / "skills" / skill
             self.assertEqual((shared / skill).resolve(), target)
             self.assertEqual((self.home / ".agents/skills" / skill).resolve(), target)

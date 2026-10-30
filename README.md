@@ -2,20 +2,26 @@
 
 Enact is a minimal agent orchestration framework for **large, unattended
 project execution** from a desktop agent app (Claude Desktop, Codex
-Desktop). You hand `/enact` a bead, a plan document or a task prompt; it
-files what it needs as a [Beads](https://github.com/gastownhall/beads) graph
-and runs every bead in a fresh top-level session for days, across machines
-and model providers, synchronized through one GitHub remote.
+Desktop). You hand `/enact-plan` a bead, a plan document or a task prompt;
+it files what it needs as a [Beads](https://github.com/gastownhall/beads)
+graph and runs every bead in a fresh top-level session for days, across
+machines and model providers, synchronized through one GitHub remote.
+
+For smaller work, `/enact` runs a bead, an epic or a task prompt inside the
+current session with the same roles, using subagents for an epic's beads,
+and waits for slow CI before it finishes.
 
 Enact has no state of its own beyond the bead graph, no server and no CI
-dependency: two skills, nine short role prompts and a stdlib Python helper.
+dependency: three skills, nine short role prompts and a stdlib Python
+helper.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `skills/enact/SKILL.md` | The vizier (orchestrator) skill: `/enact <bead\|plan\|task>` |
-| `skills/enact/roles/*.md` | Role prompts for spawned sessions |
+| `skills/enact-plan/SKILL.md` | The vizier (orchestrator) skill: `/enact-plan <bead\|plan\|task>` |
+| `skills/enact/SKILL.md` | Inline execution in one session: `/enact <bead\|epic\|task>` |
+| `skills/enact/roles/*.md` | Role prompts for spawned sessions and subagents |
 | `skills/enact-setup/SKILL.md` | Machine and project setup: `/enact-setup` |
 | `scripts/enact.py` | Helper: claims, sync, push, slow CI, locks |
 | `templates/AGENTS.md` | Sample AGENTS.md section |
@@ -25,7 +31,7 @@ dependency: two skills, nine short role prompts and a stdlib Python helper.
 
 | Role | Emoji | Started by | Job |
 | --- | --- | --- | --- |
-| Vizier | 🔮 | the user (`/enact`) | Plans, then only spawns, archives and waits |
+| Vizier | 🔮 | the user (`/enact-plan`) | Plans, then only spawns, archives and waits |
 | Executor | ⚒️ | bead | Implements a bead and pushes it to staging |
 | Warden | 🛡️ | bead | Fresh review and fixes of pushed work |
 | Steward | 🚒 | slow-CI failure bead | Makes slow CI green again |
@@ -37,7 +43,7 @@ dependency: two skills, nine short role prompts and a stdlib Python helper.
 
 ## How a run works
 
-1. `/enact <input> [parallelism]` makes the session the vizier. It checks
+1. `/enact-plan <input> [parallelism]` makes the session the vizier. It checks
    the permission mode, plans according to the input and, unless the run is
    a small task prompt, creates the hourly Marshal task:
    - a **bead** runs as is (a plain bead is wrapped in an epic of its own);
@@ -61,6 +67,17 @@ dependency: two skills, nine short role prompts and a stdlib Python helper.
    A push outside any run, with no active vizier to pick up a Steward bead,
    prints `watch_ci`: that session waits with `enact ci --wait` and repairs
    a failure itself.
+
+## Inline runs
+
+`/enact <input> [parallelism]` never starts another session, Marshal or
+Justiciar. A plain bead or task prompt (filed as one executor bead) is
+implemented by the session itself; a large or risky change then gets a
+Warden subagent. An epic runs each ready bead in a role subagent, one at a
+time by default. Mason, Sage and Archivist run only when the epic already
+contains their beads. The session retitles itself with the working role's
+emoji and waits for its last delivery to reach `master`, running a Steward
+subagent on failure. Plan documents go to `/enact-plan`.
 
 ## Setup
 

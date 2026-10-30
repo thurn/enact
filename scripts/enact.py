@@ -2286,6 +2286,7 @@ def link_dir(target: Path, link: Path) -> str:
     return "linked"
 
 
+SKILLS = ("enact", "enact-plan", "enact-setup")
 # Skills Enact used to ship; install removes their now-dangling links.
 RETIRED_SKILLS = ("enact-intake",)
 
@@ -2304,7 +2305,7 @@ def cmd_install(args: argparse.Namespace) -> dict[str, Any]:
     linked = {}
     directories = skill_dirs()
     for directory in directories:
-        for skill in ("enact", "enact-setup"):
+        for skill in SKILLS:
             link = directory / skill
             linked[str(link)] = link_dir(ENACT_ROOT / "skills" / skill, link)
         for skill in RETIRED_SKILLS:
@@ -2315,7 +2316,7 @@ def cmd_install(args: argparse.Namespace) -> dict[str, Any]:
     # Migrate only links owned by this checkout. A shared Claude directory
     # must keep its links; never delete someone else's skill or directory.
     if legacy.resolve() not in {path.resolve() for path in directories}:
-        for skill in ("enact", "enact-setup", *RETIRED_SKILLS):
+        for skill in (*SKILLS, *RETIRED_SKILLS):
             link = legacy / skill
             target = ENACT_ROOT / "skills" / skill
             try:
