@@ -28,6 +28,8 @@ slow = "python3 check.py slow"
 CHECK_PY = """\
 import pathlib, sys
 if pathlib.Path(sys.argv[1].upper()).exists():
+    for i in range(80):
+        print("stderr noise", i, file=sys.stderr, flush=True)
     print(sys.argv[1] + " check failed")
     sys.exit(1)
 """
@@ -581,6 +583,9 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         stewards = self.a.bd("list", "--label", "role:steward")
         self.assertEqual(len(stewards), 1)
         self.assertEqual(stewards[0]["priority"], 0)
+        # The tail interleaves stdout and stderr, so it ends at the failure.
+        self.assertIn("slow check failed", stewards[0]["description"])
+        self.assertTrue(stewards[0]["metadata"]["enact_ci_host"])
         self.assertGreaterEqual(len(self.a.bd("comments", stewards[0]["id"]) or []), 1)
         self.assertNotEqual(self.remote_sha("master"), self.remote_sha("staging"))
 

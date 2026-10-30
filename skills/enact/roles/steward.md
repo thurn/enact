@@ -10,6 +10,10 @@ The slow-CI runner filed your bead. It records:
 - `enact_ci_os`: the OS that failed. Prefer fixing it on that OS. If you are
   on a different OS and cannot reproduce, comment and keep going with
   analysis: the cause is often visible in the log.
+- `enact_ci_host`: the machine that failed. A pass on another machine, or
+  master advancing from another machine's runner, does not prove the
+  failure was transient: look for that host's own state (caches, vendor
+  files, tools) in the log before closing it as already green.
 - `enact_ci_range`: `<last passing commit>..<failing tip>`. The baseline can
   be a passing commit awaiting promotion after a push failure. Several
   pushes may be folded into one run.

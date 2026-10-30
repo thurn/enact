@@ -1662,7 +1662,8 @@ def report_ci_failure(repo: Repo, tip: str, green: str, log_tail: str) -> str:
             "--acceptance", f"`{repo.config.slow}` passes on {os_name} at the staging tip.",
             "--priority", "0",
             "--labels", "role:steward",
-            "--metadata", json.dumps({"enact_ci_os": os_name, "enact_ci_range": f"{green}..{tip}",
+            "--metadata", json.dumps({"enact_ci_os": os_name, "enact_ci_host": host_name(),
+                                     "enact_ci_range": f"{green}..{tip}",
                                      "enact_runs": " ".join(runs)}),
         )
         bead_id = created["id"]
@@ -1818,11 +1819,12 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
     try:
         proc = subprocess.run(
             cfg.slow, shell=True, cwd=path, text=True, encoding="utf-8", errors="replace",
-            capture_output=True, stdin=subprocess.DEVNULL,
+            # One stream, in order: the log tail must end where the check failed.
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
         )
     finally:
         remove_worktree(repo, path, None)
-    output = (proc.stdout or "") + (proc.stderr or "")
+    output = proc.stdout or ""
     sys.stderr.write(output[-20000:])
     if proc.returncode == 0:
         write_json(promotion, {"tip": tip})
