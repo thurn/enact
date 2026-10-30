@@ -34,6 +34,12 @@ scale than a Warden review:
   making them cheap enough for CI, or deleting them, never keeping them
   opt-in. Slow checks whose cost is fixture setup rather than the behavior
   under test.
+- **CI budget.** Time the fast and slow checks. Unless the project's
+  `AGENTS.md` sets its own budget, the targets are around 1 minute for fast
+  checks and around 5 minutes for slow checks. A suite over budget is an
+  important finding: file the refactor to faster testing strategies, or the
+  deletion of tests that do not earn their cost. Slow tests are not kept
+  "just in case".
 - **What comes next.** Read the next milestone's plan: what refactor would
   make it markedly easier or safer to build?
 

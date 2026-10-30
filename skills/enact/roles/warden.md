@@ -34,6 +34,11 @@ Go beyond ordinary code review. Ask:
   Every test must run in the fast or slow checks. Do not keep a test "to run
   manually" or move a slow one out of CI into an opt-in suite: nobody runs
   it, and it rots. Make it cheaper, or delete it.
+- **CI budget.** Unless the project's `AGENTS.md` sets its own budget, keep
+  the fast checks around 1 minute and the slow checks around 5 minutes. If
+  the change pushed a suite over budget, bring it back: refactor slow tests
+  to a faster strategy (smaller fixtures, testing the unit directly, shared
+  setup) or delete them. Never keep a slow test "just in case".
 - **Design.** Would a different model make whole categories of checks
   unnecessary? Look for duplicated or derivable state, illegal states the
   types allow, nullable modes and boolean flags, responsibilities in the wrong

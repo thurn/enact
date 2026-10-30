@@ -43,6 +43,10 @@ in [the desktop support audit](audit-2026-10-29.md).
 - If a configured model or reasoning level is unavailable, use the app's
   default and record the substitution. An explicitly required model remains
   a blocker rather than an implicit permission to substitute.
+- Default CI budget: fast checks around 1 minute, slow checks around 5
+  minutes, overridable in a project's `AGENTS.md`. Wardens and Masons
+  enforce it by refactoring slow tests to faster strategies or deleting
+  them; slow tests are never kept "just in case".
 
 ## Git flow
 
