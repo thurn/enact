@@ -15,7 +15,8 @@
   `master`: `python3 scripts/enact.py worktree create <name>` from the main
   checkout, commit in the printed worktree, then
   `python3 scripts/enact.py push` there. Slow CI advances `master`, which is
-  what every machine pulls, so only green changes reach live sessions.
+  what every machine pulls, so only green changes reach live sessions. If
+  push prints `watch_ci`, follow it before finishing.
 - Slow-CI failures file Steward beads in this repository's own Beads graph
   (prefix `en`).
 - Projects and live sessions on every machine use this repository directly,

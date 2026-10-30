@@ -58,6 +58,9 @@ dependency: two skills, nine short role prompts and a stdlib Python helper.
 4. `enact push` starts a coalescing slow-CI runner on the machine. A pass
    fast-forwards `master`; a failure files one P0 Steward bead per OS.
    Local `staging` and `master` are fast-forwarded to track the remote.
+   A push outside any run, with no active vizier to pick up a Steward bead,
+   prints `watch_ci`: that session waits with `enact ci --wait` and repairs
+   a failure itself.
 
 ## Setup
 
@@ -102,7 +105,7 @@ Dolt mode, and the `dolt` CLI (used to resolve Beads merge conflicts).
 | `close BEAD --reason R` | Close, auto-close finished epics, sync |
 | `claim BEAD`, `meta BEAD k=v`, `release BEAD` | Bead bookkeeping (always synced) |
 | `sync` | Commit, merge (remote wins on conflict) and push Beads |
-| `ci [--detach\|--status]` | Coalescing slow-CI runner |
+| `ci [--detach\|--status\|--wait SHA]` | Coalescing slow-CI runner; watch one delivery |
 | `justiciar status\|request\|acquire\|release\|break` | Fleet-wide emergency lock |
 | `status`, `lock acquire\|release NAME` | Marshal support |
 | `install`, `setup` | Machine and project setup |

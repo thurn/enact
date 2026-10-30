@@ -499,6 +499,10 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         result = self.a.enact("push", cwd=wt)
         tip = result["staging"]
         self.assertEqual(self.a.git("rev-parse", "staging"), tip)
+        # No run exists, so this ad hoc push owns its slow CI.
+        self.assertIn(f"enact ci --wait {tip}", result["watch_ci"])
+        waited = self.a.enact("ci", "--wait", tip, "--timeout", "300", "--interval", "1")
+        self.assertEqual(waited["state"], "passed")
         self.wait_for_ci(self.a)
         self.assertEqual(self.remote_sha("master"), tip)
         # The checked-out local master follows, files included.

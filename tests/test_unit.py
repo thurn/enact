@@ -625,6 +625,68 @@ class ParallelSuiteTest(unittest.TestCase):
         self.assertTrue(all("fixture failure" in error for _, error in result.errors))
 
 
+class CiWatchTest(unittest.TestCase):
+    ROUTE = {"enact_vizier_route_abc": {"session": "v"}}
+
+    def test_only_an_unfinished_unheld_registered_run_counts_as_a_vizier(self):
+        complete = {"complete": True}
+        with mock.patch.object(enact, "run_delivery", return_value=complete):
+            self.assertFalse(enact.vizier_active(None, [{"id": "e", "issue_type": "epic"}]))
+            self.assertTrue(enact.vizier_active(None, [
+                {"id": "e", "issue_type": "epic", "metadata": self.ROUTE}]))
+            self.assertFalse(enact.vizier_active(None, [
+                {"id": "e", "issue_type": "epic", "status": "closed", "metadata": self.ROUTE}]))
+            held = {**self.ROUTE, "enact_control": {"state": "paused", "epoch": "1"}}
+            self.assertFalse(enact.vizier_active(None, [
+                {"id": "e", "issue_type": "epic", "metadata": held}]))
+        with mock.patch.object(enact, "run_delivery", return_value={"complete": False}):
+            self.assertTrue(enact.vizier_active(None, [
+                {"id": "e", "issue_type": "epic", "status": "closed", "metadata": self.ROUTE}]))
+
+    def wait(self, graph, ancestors, status=None):
+        """ancestors: (sha, ref) pairs that are ancestors."""
+        repo = types.SimpleNamespace(
+            config=enact.Config(), remote_ref=lambda branch: f"origin/{branch}",
+            git=lambda *args: "tip",
+            git_ok=lambda *args: args[0] == "merge-base" and (args[2], args[3]) in ancestors)
+        beads = mock.Mock()
+        beads.all.return_value = graph
+        status = status or {"running": True, "last_tested": "old"}
+        with mock.patch.object(enact, "sync"), mock.patch.object(enact, "fetch"), \
+                mock.patch.object(enact, "Beads", return_value=beads), \
+                mock.patch.object(enact, "vizier_active", return_value=False), \
+                mock.patch.object(enact, "ci_status", return_value=status), \
+                mock.patch.object(enact, "start_ci", return_value={"started": True}) as start, \
+                mock.patch.dict(os.environ, {"ENACT_SESSION": "me"}):
+            return enact.ci_wait(repo, "sha", 0, 1), start
+
+    def steward(self, assignee=None):
+        return {"id": "s", "labels": ["role:steward"], "assignee": assignee,
+                "metadata": {"enact_ci_range": "green..tip"}}
+
+    def test_wait_reports_promotion(self):
+        result, _ = self.wait([], {("sha", "origin/master")})
+        self.assertEqual(result["state"], "passed")
+
+    def test_wait_reports_a_covering_steward_unless_another_session_holds_it(self):
+        covered = {("sha", "tip")}
+        result, _ = self.wait([self.steward()], covered)
+        self.assertEqual((result["state"], result["stewards"]), ("failed", ["s"]))
+        result, _ = self.wait([self.steward("me")], covered)
+        self.assertEqual(result["state"], "failed")
+        result, _ = self.wait([self.steward("other")], covered)
+        self.assertEqual(result["state"], "waiting")
+        # Already-green work is not blamed for a later failure.
+        result, _ = self.wait([self.steward()], covered | {("sha", "green")})
+        self.assertEqual(result["state"], "waiting")
+
+    def test_wait_restarts_a_dead_runner_only_for_untested_staging(self):
+        _, start = self.wait([], set(), {"running": False, "last_tested": "old"})
+        start.assert_called_once()
+        _, start = self.wait([], set(), {"running": False, "last_tested": "tip"})
+        start.assert_not_called()
+
+
 class BeadsReadTest(unittest.TestCase):
     def test_writes_sync_and_unlock_refresh_cached_reads(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -12,6 +12,9 @@
      pushes to `staging`, starts slow CI in the background and removes the
      worktree. On exit code 2, fix the reported conflict or failing check in
      the same worktree and run it again.
+  4. If its output has `watch_ci`, no Enact run is around to repair a
+     slow-CI failure: follow it (`enact ci --wait <sha>` until it passes;
+     on failure, claim and fix the Steward bead) before finishing.
 - Never commit to, or push directly to, `master` or `staging`. `master`
   advances only when slow CI passes on `staging`; a slow-CI failure files a
   P0 Steward bead. `enact ci --status` shows the runner and its log. Enact

@@ -639,3 +639,21 @@ blindly recreate jobs or hand-edit scheduler databases.
   264.752 seconds. These support the near-five-minute budget on this host,
   not a runtime guarantee for every host or load. Linux and Windows
   execution are unverified; any machine's passing CI can promote master.
+
+## Slow-CI ownership outside runs (2026-10-30)
+
+- The runner is a detached process and cannot start chats, so a Steward
+  bead filed while no vizier loops would sit unworked. A plain prompt in an
+  Enact project therefore owns its own slow CI.
+- `enact push` prints `watch_ci` when slow CI started, the pushed bead (if
+  any) was not reserved by a vizier, and no registered run on any machine is
+  unfinished and unheld. A vizier's worker never waits: its run owns repair,
+  including after a pause.
+- `enact ci --wait <sha>` blocks up to `--timeout` (540 s) and returns
+  `passed` once the SHA reaches master, `failed` with the Steward beads whose
+  failing range covers it (unassigned or held by this session), or
+  `waiting`. Stewards held by another session count as in repair. While
+  waiting it restarts a dead runner when staging is untested.
+- On `failed` the session claims the Steward bead and follows the Steward
+  role, then watches its repair the same way. Instructions live in the push
+  output, so existing project AGENTS.md files need no change.

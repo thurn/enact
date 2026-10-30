@@ -1556,6 +1556,10 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
         recovered += recover_deliveries(repo)
     else:
         raise Fail(f"could not push to {cfg.staging} after repeated attempts")
+    # A vizier's worker leaves repair to its run, even while that run is held.
+    if ("ci" in result and not meta(bead, "enact_vizier")
+            and not vizier_active(repo, Beads(repo).all())):
+        result["watch_ci"] = watch_ci_notice(result["staging"])
     result["local_branches"] = track_local_branches(repo)
     branch = repo.git("rev-parse", "--abbrev-ref", "HEAD")
     in_enact_tree = (
@@ -1689,6 +1693,62 @@ def ci_status(repo: Repo) -> dict[str, Any]:
     }
 
 
+def vizier_active(repo: Repo, graph: list[dict[str, Any]]) -> bool:
+    """A vizier loop on any machine will pick up an unparented Steward bead:
+    some registered run is unfinished and not paused or blocked."""
+    for bead in graph:
+        if (bead.get("issue_type") != "epic" or stopped_runs(bead, graph) or not any(
+                key.startswith("enact_vizier_route_") for key in bead.get("metadata") or {})):
+            continue
+        if bead.get("status") != "closed" or not run_delivery(repo, graph, bead["id"])["complete"]:
+            return True
+    return False
+
+
+def watch_ci_notice(sha: str) -> str:
+    return (
+        "No Enact vizier is running to repair a slow-CI failure, so this session "
+        f"owns it. Run `enact ci --wait {sha}` (600000 ms tool timeout) until it "
+        "reports `passed`. On `failed`, claim the Steward bead with "
+        f"`enact claim <bead>`, follow {ROLES_DIR / 'steward.md'}, and watch "
+        "your fix the same way."
+    )
+
+
+def steward_covers(repo: Repo, bead: dict[str, Any], sha: str) -> bool:
+    green, sep, tip = (meta(bead, "enact_ci_range") or "").partition("..")
+    return bool(sep) and repo.git_ok("merge-base", "--is-ancestor", sha, tip) and not (
+        repo.git_ok("merge-base", "--is-ancestor", sha, green))
+
+
+def ci_wait(repo: Repo, sha: str, seconds: int, interval: int) -> dict[str, Any]:
+    """Watch one delivery for a session that no vizier backs. Restarts a
+    runner that died (for example across sleep) while staging is untested."""
+    deadline = time.monotonic() + max(seconds, 0)
+    master = repo.remote_ref(repo.config.master)
+    while True:
+        sync(repo)
+        fetch(repo)
+        if repo.git_ok("merge-base", "--is-ancestor", sha, master):
+            return {"sha": sha, "state": "passed"}
+        graph = Beads(repo).all()
+        # A Steward someone else holds is already being repaired: keep waiting.
+        stewards = [b["id"] for b in graph if role_of(b) == "steward"
+                    and b.get("status") != "closed"
+                    and (b.get("assignee") or "") in session_aliases() | {""}
+                    and steward_covers(repo, b, sha)]
+        if stewards:
+            return {"sha": sha, "state": "failed", "stewards": stewards,
+                    "vizier_active": vizier_active(repo, graph)}
+        status = ci_status(repo)
+        if not status["running"] and status["last_tested"] != repo.git(
+                "rev-parse", repo.remote_ref(repo.config.staging)):
+            status = start_ci(repo)
+        if time.monotonic() >= deadline:
+            return {"sha": sha, "state": "waiting", "ci": status}
+        time.sleep(min(interval, max(deadline - time.monotonic(), 1)))
+
+
 def start_ci(repo: Repo) -> dict[str, Any]:
     status = ci_status(repo)
     if status["running"]:
@@ -1808,6 +1868,8 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
         return start_ci(repo)
     if args.status:
         return ci_status(repo)
+    if args.wait:
+        return ci_wait(repo, repo.git("rev-parse", args.wait), args.timeout, args.interval)
     if args.check_worker:
         return ci_check_worker(repo, args.check_worker, args.coordinator)
     if not cfg.slow:
@@ -2400,6 +2462,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("ci", cmd_ci, "Run the coalescing slow-CI loop for this machine.")
     p.add_argument("--detach", action="store_true", help="start the runner in the background")
     p.add_argument("--status", action="store_true", help="report runner state")
+    p.add_argument("--wait", metavar="SHA",
+                   help="block until SHA reaches master or a Steward bead covers it")
+    p.add_argument("--timeout", type=int, default=540, help="seconds --wait blocks for")
+    p.add_argument("--interval", type=int, default=30, help=argparse.SUPPRESS)
     p.add_argument("--check-worker", help=argparse.SUPPRESS)
     p.add_argument("--coordinator", type=int, default=0, help=argparse.SUPPRESS)
 

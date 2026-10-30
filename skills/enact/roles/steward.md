@@ -3,6 +3,11 @@
 The slow CI suite failed on staging, and you make it green again. This is
 the highest-priority work in the project. Read `common.md` first.
 
+A session outside any run may take this role after `enact push` printed
+`watch_ci`: it claims the bead with `enact claim <bead>` instead of
+`enact start`, keeps its own title, and after pushing its repair keeps
+watching with `enact ci --wait <sha>` until slow CI passes.
+
 ## The failure
 
 The slow-CI runner filed your bead. It records:
