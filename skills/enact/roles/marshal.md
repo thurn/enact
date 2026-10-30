@@ -10,6 +10,10 @@ from the project's main checkout, unattended. Never implement or review.
 
 `enact lock acquire marshal`. Exit 3 means another sweep is running: end.
 Always `enact lock release marshal` when finished, including after errors.
+The lease requires a session identity and expires after 120 minutes by
+default (`--stale-minutes` overrides this). Expiry permits another sweep to
+take over even if the old chat is alive. A superseded chat cannot release
+its successor's lease; a release rejected with exit 3 means end the sweep.
 
 ## 2. Gather state
 

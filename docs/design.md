@@ -1,5 +1,26 @@
 # Enact design decisions
 
+## Marshal sweep leases (2026-10-29)
+
+Named sweep locks are session-owned leases. A short-lived mutation lock
+using the existing OS-lock primitive serializes acquisition, stale
+replacement and release within a clone. The lease JSON is published by
+atomic replacement; the mutation guard inode stays permanent. CI's PID
+lock protocol is unchanged. Sweep commands require a session identity,
+and release checks the recorded owner against the current session aliases.
+A missing lease can be released idempotently, but an unknown or different
+owner cannot be released.
+
+Staleness retains the existing file-mtime policy: acquisition may replace
+a lease at 120 minutes by default, or the caller's `--stale-minutes` value.
+Zero permits immediate takeover. This is expiry, not proof that the old
+chat died, and it does not cancel work already running in that chat. After
+takeover its release cannot delete the successor's lease. Old or malformed
+lease files can still be recovered through expiry. Active commands must
+use the updated helper; an already-running old helper cannot enforce this
+protocol. Public CLI regressions cover concurrent fresh acquisition at the
+publication boundary, stale takeover, owner-fenced release and recovery.
+
 Outcome of the design interview (2026-10-28). The original brief is the source
 of truth for role definitions; this file records the decisions made on top.
 

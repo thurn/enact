@@ -2102,19 +2102,37 @@ def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def cmd_lock(args: argparse.Namespace) -> dict[str, Any]:
-    """Machine-local named lock for agent sweeps (the Marshal)."""
+    """Session-owned, expiring lease for agent sweeps (the Marshal)."""
     repo = find_repo()
+    actor = session_actor()
+    if not actor:
+        raise Fail("a session identity is required for sweep leases")
     path = repo.state / f"{args.name}.lock"
-    if args.action == "release":
-        path.unlink(missing_ok=True)
-        return {"released": args.name}
-    if path.exists():
-        age = time.time() - path.stat().st_mtime
-        if age < args.stale_minutes * 60:
-            raise Fail(f"{args.name} lock held for {age / 60:.0f} minutes", code=3)
-        log(f"breaking stale {args.name} lock ({age / 60:.0f} minutes old)")
-    path.write_text(json.dumps({"session": session_actor(), "since": now()}))
-    return {"acquired": args.name}
+    mutation = repo.state / f"{args.name}.lease-mutation"
+    guard = try_lock(mutation)
+    if guard is None:
+        raise Fail(f"{args.name} lease mutation busy; retry", code=3)
+    try:
+        if args.action == "release":
+            try:
+                owner = json.loads(path.read_text(encoding="utf-8"))["session"]
+            except FileNotFoundError:
+                return {"released": args.name}
+            except (ValueError, KeyError, TypeError):
+                raise Fail(f"{args.name} lease owner unreadable; wait for expiry", code=3)
+            if not isinstance(owner, str) or owner not in session_aliases():
+                raise Fail(f"{args.name} lease belongs to another session", code=3)
+            path.unlink()
+            return {"released": args.name}
+        if path.exists():
+            age = time.time() - path.stat().st_mtime
+            if age < args.stale_minutes * 60:
+                raise Fail(f"{args.name} lock held for {age / 60:.0f} minutes", code=3)
+            log(f"breaking stale {args.name} lock ({age / 60:.0f} minutes old)")
+        write_json(path, {"session": actor, "since": now()})
+        return {"acquired": args.name}
+    finally:
+        release_lock(mutation, guard)
 
 
 # ---------------------------------------------------------------------------

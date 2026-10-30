@@ -1,6 +1,8 @@
 """Fast tests: helper behavior that needs no git or Beads."""
 
 import importlib.util
+import contextlib
+import io
 import json
 import multiprocessing
 import os
@@ -169,6 +171,101 @@ class LockTest(unittest.TestCase):
         self.assertEqual(self.receive(one), "busy")
         first.join(10)
         self.assertEqual(self.path.read_text(), str(os.getpid()))
+
+
+def sweep_runner(state, actor, connection, pause=False):
+    """Run the public CLI with only project discovery replaced."""
+    def publishing():
+        connection.send("publishing")
+        connection.recv()
+        return "2026-10-30T00:00:00Z"
+
+    with mock.patch.object(enact, "find_repo", return_value=types.SimpleNamespace(
+        state=Path(state)
+    )), mock.patch.dict(os.environ, {"ENACT_SESSION": actor}), \
+            contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(io.StringIO()):
+        if pause:
+            enact.now = publishing
+        connection.send(enact.main(["lock", "acquire", "marshal"]))
+    connection.close()
+
+
+class SweepLeaseTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.state = Path(temporary.name)
+        self.path = self.state / "marshal.lock"
+        self.repo = types.SimpleNamespace(state=self.state)
+
+    def cli(self, actor, *args):
+        with mock.patch.object(enact, "find_repo", return_value=self.repo), \
+                mock.patch.dict(os.environ, {"ENACT_SESSION": actor}), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            return enact.main(["lock", *args])
+
+    def test_concurrent_acquires_have_one_winner(self):
+        context = multiprocessing.get_context("spawn")
+
+        def runner(actor, pause=False):
+            parent, child = context.Pipe()
+            process = context.Process(target=sweep_runner, args=(
+                str(self.state), actor, child, pause
+            ))
+            process.start()
+            child.close()
+
+            def cleanup():
+                if process.is_alive():
+                    process.terminate()
+                process.join(10)
+                parent.close()
+                process.close()
+
+            self.addCleanup(cleanup)
+            return process, parent
+
+        first, one = runner("first", pause=True)
+        self.assertTrue(one.poll(10))
+        self.assertEqual(one.recv(), "publishing")
+        second, two = runner("second")
+        self.assertTrue(two.poll(10))
+        self.assertEqual(two.recv(), 3)
+        second.join(10)
+        self.assertEqual(second.exitcode, 0)
+        one.send("publish")
+        self.assertTrue(one.poll(10))
+        self.assertEqual(one.recv(), 0)
+        first.join(10)
+        self.assertEqual(first.exitcode, 0)
+        self.assertEqual(json.loads(self.path.read_text())["session"], "first")
+        self.assertEqual(self.cli("first", "release", "marshal"), 0)
+
+    def test_stale_takeover_fences_old_and_foreign_sessions(self):
+        self.assertEqual(self.cli("old", "acquire", "marshal"), 0)
+        self.assertEqual(self.cli("new", "acquire", "marshal"), 3)
+        self.assertEqual(self.cli("new", "acquire", "marshal",
+                                  "--stale-minutes", "0"), 0)
+        successor = self.path.read_bytes()
+        self.assertEqual(self.cli("old", "release", "marshal"), 3)
+        self.assertEqual(self.cli("third", "release", "marshal"), 3)
+        self.assertEqual(self.cli("third", "acquire", "marshal"), 3)
+        self.assertEqual(self.path.read_bytes(), successor)
+        self.assertEqual(self.cli("new", "release", "marshal"), 0)
+        self.assertEqual(self.cli("new", "release", "marshal"), 0)
+        self.assertEqual(self.cli("third", "acquire", "marshal"), 0)
+
+    def test_unknown_owner_requires_expiry_and_identity_is_required(self):
+        self.path.write_text('{"session": null}')
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(self.cli("", "release", "marshal"), 1)
+        self.assertEqual(self.cli("sweep", "release", "marshal"), 3)
+        self.assertEqual(self.cli("sweep", "acquire", "marshal"), 3)
+        os.utime(self.path, (0, 0))
+        self.assertEqual(self.cli("sweep", "acquire", "marshal"), 0)
+        self.assertEqual(self.cli("sweep", "release", "marshal"), 0)
 
 
 class ConfigTest(unittest.TestCase):
