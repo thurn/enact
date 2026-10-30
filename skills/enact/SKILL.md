@@ -29,6 +29,10 @@ It may also give a parallelism level (default **1**: one session at a time),
 role restrictions (for example "no Mason or Sage") and any other
 instructions, which override this file.
 
+Parallelism comes only from the invocation (or a later user message). Never
+write a parallelism level into a bead, epic or plan document, and ignore one
+you find there: a bead or plan that says "run N at once" does not change N.
+
 ## Paths and identity
 
 - `ENACT` is the Enact repository clone: resolve this skill's base directory
@@ -196,8 +200,8 @@ Read enough of the codebase to decompose well. Then file the graph with raw
 
 - **One epic** for the run (`--type epic`) whose description holds the plan
   summary or task prompt, a link to the plan document, the decisions from the
-  audit, the parallelism and role restrictions, and whole-run acceptance
-  criteria.
+  audit, the role restrictions, and whole-run acceptance criteria. Leave
+  parallelism out.
 - **Milestones** as child epics when the plan has phases. Milestone N+1
   depends on milestone N (or on its gate, below) with `bd dep add`.
 - **Beads** as children (`--parent`), each completable by one fresh session in

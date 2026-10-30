@@ -149,6 +149,11 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   survives compaction.
 - Selection scope: ready descendants of the epic plus unparented Steward beads.
   Capacity = open beads with `enact_vizier=<me>`; default parallelism 1.
+  Parallelism comes only from the invocation or a later user message, never
+  from bead, epic or plan text: the same graph can run at different widths,
+  and a stored level would silently override the user. Viziers do not write
+  it into beads and ignore it when present; `run register` metadata records
+  the invocation's value for recovery only.
 - The vizier archives sessions of closed beads reported by `enact next`.
 - All spawns go through the vizier, including the Justiciar
   (`enact justiciar request`); the requesting host's vizier spawns it.
