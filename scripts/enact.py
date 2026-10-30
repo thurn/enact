@@ -120,22 +120,24 @@ def git_bash() -> str:
     raise Fail("project commands need Git for Windows' bash; install Git for Windows or set ENACT_BASH")
 
 
-def shell_args(command: str) -> dict[str, Any]:
-    """subprocess arguments for a project-configured command (.enact.toml).
+def shell_args(command: str) -> tuple[str | list[str], bool]:
+    """subprocess `(args, shell)` for a project-configured command (.enact.toml).
 
     The commands are POSIX shell, so on Windows they run in Git for Windows' bash rather than
     cmd.exe, which `shell=True` would use.
     """
     if WINDOWS:
-        return {"args": [git_bash(), "-c", command]}
-    return {"args": command, "shell": True}
+        return [git_bash(), "-c", command], False
+    return command, True
 
 
 def run_shell(command: str, cwd: Path, env: dict[str, str] | None = None) -> int:
     """Run a project-configured shell command, streaming output to stderr."""
     log(f"$ {command}")
+    args, shell = shell_args(command)
     proc = subprocess.run(
-        **shell_args(command),
+        args,
+        shell=shell,
         cwd=cwd,
         env={**os.environ, **(env or {})},
         stdout=sys.stderr,
@@ -1988,8 +1990,9 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
     path = create_worktree(repo, name, None, tip)
     log(f"slow CI on {tip[:12]} in {path}")
     try:
+        args, shell = shell_args(cfg.slow)
         proc = subprocess.run(
-            **shell_args(cfg.slow), cwd=path, text=True, encoding="utf-8", errors="replace",
+            args, shell=shell, cwd=path, text=True, encoding="utf-8", errors="replace",
             # One stream, in order: the log tail must end where the check failed.
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
         )

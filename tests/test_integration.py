@@ -11,6 +11,7 @@ import queue
 import shlex
 import shutil
 import subprocess
+import stat
 import sys
 import tempfile
 import time
@@ -46,6 +47,17 @@ def sh(cmd, cwd, check=True, env=None):
     return proc.stdout.strip()
 
 
+def rmtree(path):
+    """shutil.rmtree that also deletes read-only files (git's objects on Windows)."""
+    def writable(func, target, _):
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=writable)
+    else:
+        shutil.rmtree(path, onerror=writable)
+
+
 @unittest.skipUnless(shutil.which("git"), "needs git")
 class CiLifetimeTest(unittest.TestCase):
     """Real CLI/check processes; barriers make coordinator crashes repeatable."""
@@ -68,9 +80,8 @@ class CiLifetimeTest(unittest.TestCase):
                 sh(["git", "init", "-q", "-b", "master", str(repo)], root)
                 sh(["git", "config", "user.email", "test@example.com"], repo)
                 sh(["git", "config", "user.name", "Test"], repo)
-                command = [sys.executable, "check.py"]
-                slow = (subprocess.list2cmdline(command) if os.name == "nt"
-                        else shlex.join(command))
+                # POSIX shell on every OS (Git for Windows' bash on Windows).
+                slow = shlex.join([Path(sys.executable).as_posix(), "check.py"])
                 (repo / ".enact.toml").write_text(f"[checks]\nslow = {json.dumps(slow)}\n")
                 (repo / "check.py").write_text(
                     "import json, os, time\nfrom pathlib import Path\n"
@@ -272,10 +283,11 @@ class EnactTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        shutil.rmtree(cls.base, ignore_errors=True)
+        rmtree(cls.base)
 
     def setUp(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
+        if self.tmp.exists():
+            rmtree(self.tmp)
         shutil.copytree(self.snapshot, self.tmp, symlinks=True)
         self.origin = self.tmp / "origin.git"
         self.a = Machine(self.tmp / "a", "host-a", "sess-a")
@@ -298,7 +310,7 @@ class EnactTest(unittest.TestCase):
             (path / "check.py").write_text(CHECK_PY)
             machine.git("add", ".")
             machine.git("commit", "-q", "-m", "init")
-            machine.git("remote", "add", "origin", str(self.origin))
+            machine.git("remote", "add", "origin", self.origin.as_uri())
             machine.git("push", "-q", "origin", "master")
             machine.enact("setup", "--prefix", self.prefix)  # bd init commits .beads/
             self.configure_dolt(machine)
@@ -307,7 +319,7 @@ class EnactTest(unittest.TestCase):
                 machine.git("commit", "-q", "-m", "ignore worktrees")
             machine.git("push", "-q", "origin", "HEAD:master", "HEAD:staging")
             return machine
-        sh(["git", "clone", "-q", str(self.origin), str(path)], self.tmp)
+        sh(["git", "clone", "-q", self.origin.as_uri(), str(path)], self.tmp)
         self.configure_git(path)
         machine = Machine(path, host, session)
         assert machine.enact("setup")["beads"] == "bootstrapped from remote"

@@ -297,8 +297,9 @@ class ShellTest(unittest.TestCase):
     COMMAND = """f=$(mktemp) && printf '%s|%s' "$ENACT_X" 'a "b" c' > "$f" && cat "$f"; rm -f "$f\""""
 
     def test_project_commands_run_in_a_posix_shell(self):
+        args, shell = enact.shell_args(self.COMMAND)
         proc = subprocess.run(
-            **enact.shell_args(self.COMMAND), env={**os.environ, "ENACT_X": "x y"},
+            args, shell=shell, env={**os.environ, "ENACT_X": "x y"},
             capture_output=True, text=True, stdin=subprocess.DEVNULL,
         )
         self.assertEqual((proc.returncode, proc.stdout), (0, 'x y|a "b" c'), proc.stderr)
@@ -315,10 +316,10 @@ class ShellTest(unittest.TestCase):
                     mock.patch.object(enact, "WINDOWS", True), \
                     mock.patch.object(enact.shutil, "which", return_value=str(root / "cmd" / "git.exe")):
                 args = enact.shell_args("true")
-            self.assertEqual(args, {"args": [str((root / "bin" / "bash.exe").resolve()), "-c", "true"]})
+            self.assertEqual(args, ([str((root / "bin" / "bash.exe").resolve()), "-c", "true"], False))
             with mock.patch.dict(os.environ, {"ENACT_BASH": "custom-bash"}), \
                     mock.patch.object(enact, "WINDOWS", True):
-                self.assertEqual(enact.shell_args("true")["args"][0], "custom-bash")
+                self.assertEqual(enact.shell_args("true")[0][0], "custom-bash")
 
 
 class GraphTest(unittest.TestCase):
