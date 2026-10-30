@@ -340,14 +340,18 @@ class EnactTest(unittest.TestCase):
     def remote_sha(self, branch):
         return sh(["git", "rev-parse", branch], self.origin)
 
-    def wait_for_ci(self, machine, timeout=60):
+    def wait_for_ci(self, machine, timeout=180):
+        # Scenarios run in parallel, often beside other suites on the host:
+        # the nested runner's git, bd and Dolt work can take over a minute.
         deadline = time.time() + timeout
         while time.time() < deadline:
             status = machine.enact("ci", "--status")
             if not status["running"] and status["last_tested"] == self.remote_sha("staging"):
                 return
             time.sleep(0.5)
-        self.fail("slow CI runner did not finish")
+        log = Path(status["log"])
+        tail = log.read_text(errors="replace")[-3000:] if log.exists() else ""
+        self.fail(f"slow CI runner did not finish: {status}\n{tail}")
 
     # -- git flow ---------------------------------------------------------
 
