@@ -22,7 +22,8 @@ The invocation text is your input. It is one of:
 
 A plan document (a path) is not an input: tell the user to use
 `/enact-plan` and stop. The invocation may also give a parallelism level for
-an epic (default **1**) and other instructions, which override this file.
+an epic (default **1**), the keyword **light** for a
+[light run](#light-runs), and other instructions, which override this file.
 
 ## Never
 
@@ -30,7 +31,7 @@ an epic (default **1**) and other instructions, which override this file.
   Marshal, scheduled task or automation, and no Justiciar. Those belong to
   `/enact-plan`. Never run `enact run register` or `enact next`.
 - Never file Mason, Sage or Archivist beads. Run those roles only for beads
-  an epic already contains.
+  an epic already contains, and never in a light run.
 - Never end your turn while delivered work is waiting for slow CI.
 
 ## Paths and identity
@@ -80,6 +81,8 @@ Every implementation gets one of:
   concurrency, security, many files), already followed by a Warden bead, or
   when the user or `AGENTS.md` asks for one.
 
+A [light run](#light-runs) narrows this to at most one final Warden.
+
 A `review:inline` label asks for a cold review: you give it yourself before
 pushing when you are the Executor, and a Warden gives it after an Executor
 subagent pushes (subagents do not start subagents).
@@ -93,6 +96,24 @@ bd create --title "Review <bead>: <summary>" --description "..." \
 bd dep add <warden bead> <executor bead>
 enact sync
 ```
+
+## Light runs
+
+**light** trades robustness for velocity, overriding `AGENTS.md`'s role
+and review policy:
+
+- No Mason, Sage or Archivist work.
+- At most one review, at the end. Ignore `review:inline` labels and run no
+  per-bead Wardens. Unless the whole run is one routine change, file a
+  single final Warden bead depending on every executor bead in the run.
+- Label the run `run:light`: `bd label add <input> run:light` on an input
+  bead or epic, and `--labels` on beads you file (beads filed under a
+  labeled epic inherit it). Subagents read it to keep follow-ups and the
+  final review light.
+- An epic: first close each unclaimed Mason, Sage, Archivist and Warden
+  bead in it (`enact claim <id>`, then `enact close <id> --reason "skipped:
+  light run"`; on exit 3 leave it). The final Warden depends on the beads
+  those Wardens would have reviewed and every open executor bead.
 
 ## A task prompt
 
@@ -113,8 +134,9 @@ You implement it yourself, in this session.
    closed: report that and stop.
 2. Title yourself ⚒️, then read `ROLES/common.md` and `ROLES/executor.md`
    and follow them as the Executor, with the inline rules in `common.md`.
-   A `review:inline` label means you run that cold-review subagent before
-   pushing, as `executor.md` describes; that replaces the Warden.
+   Outside a light run, a `review:inline` label means you run that
+   cold-review subagent before pushing, as `executor.md` describes; that
+   replaces the Warden.
 3. After you close the bead, decide [review](#review). For Executor +
    Warden, claim the Warden bead and run it as a subagent
    ([Subagents](#subagents)).
@@ -146,8 +168,9 @@ launch and check. Loop:
    work can continue, launch one fresh subagent for the same bead; if not
    (or the second one also stops), comment the state on the bead, run
    `enact release <bead> --reason "..."`, and stop with a report (⛔).
-6. A closed Executor bead labeled `review:inline` with no Warden bead after
-   it gets one now ([Review](#review)), filed under the same parent.
+6. Outside a light run, a closed Executor bead labeled `review:inline` with
+   no Warden bead after it gets one now ([Review](#review)), filed under
+   the same parent.
 7. Follow-up beads subagents file under the epic join the loop by
    themselves. Repeat.
 

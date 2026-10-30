@@ -61,6 +61,14 @@ An essential problem too large for this session, or outside the reviewed
 change, becomes a follow-up bead (`role:executor`, or `role:mason` for
 structural redesign).
 
+## Light runs
+
+In a light run (`common.md`) you are the run's only review, at the end.
+Review every bead you depend on, aiming for velocity: confirmed bugs,
+missing tests for the riskiest behavior and the CI budget. Skip redesign
+beyond the change and test pruning that fixes no real problem. File only
+real bugs, as `role:executor`.
+
 ## Calibration
 
 - Do not churn: style nits and personal taste are not findings.

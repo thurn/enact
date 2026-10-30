@@ -700,3 +700,23 @@ blindly recreate jobs or hand-edit scheduler databases.
 - The session waits on `enact ci --wait` for its newest delivery before
   finishing and runs Steward subagents on failure; emergencies and
   deadlocks are reported to the user instead of a Justiciar.
+
+## Light runs (2026-10-30)
+
+- The invocation keyword **light**, for `/enact` and `/enact-plan`, trades
+  robustness for velocity. It drops Mason, Sage and Archivist work and caps
+  review at one final Warden bead depending on every implementation bead,
+  skipped when the whole run is one routine change. `review:inline` labels
+  are ignored. Plans still get the stoppage audit, which unattended
+  execution needs at any pace.
+- The run records the mode as a `run:light` label on the run epic (or on an
+  inline task prompt's beads). `bd create --parent` inherits parent labels,
+  so follow-ups carry it for free, and workers learn the mode from the
+  graph rather than from their spawn prompt.
+- In an existing epic, unclaimed Mason, Sage, Archivist and Warden beads are
+  closed as skipped rather than left open: an open gate child would block
+  the next milestone and any open bead keeps the epic from closing. The
+  final Warden covers what the skipped Wardens would have reviewed.
+- Follow-ups in a light run are real bugs only, with no review of their
+  own; the filer makes the final Warden depend on them so it stays last.
+- No helper changes: the mode is policy applied by skills and role files.

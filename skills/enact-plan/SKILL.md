@@ -26,8 +26,9 @@ The invocation text is your input. It is one of:
   bead, and execute it.
 
 It may also give a parallelism level (default **1**: one session at a time),
-role restrictions (for example "no Mason or Sage") and any other
-instructions, which override this file.
+role restrictions (for example "no Mason or Sage"), the keyword **light**
+for a [light run](#light-runs) and any other instructions, which override
+this file.
 
 Parallelism comes only from the invocation (or a later user message). Never
 write a parallelism level into a bead, epic or plan document, and ignore one
@@ -146,14 +147,16 @@ The user is present now and will not be later. Do all interactive work here.
   `bd update <bead> --parent <new epic> --json`. Do not decompose it or add
   beads.
 
-Then go to [Finish planning](#finish-planning).
+A [light run](#light-runs) adjusts the graph as described there. Then go to
+[Finish planning](#finish-planning).
 
 ### A project plan document
 
 Read the plan, `AGENTS.md` (Enact section) and `.enact.toml`. AGENTS.md may
 restrict roles or set review policy; the invocation overrides AGENTS.md. Run
 the [stoppage audit](#stoppage-audit), then
-[build the graph](#build-the-graph) with every role in play.
+[build the graph](#build-the-graph) with every role in play (fewer in a
+[light run](#light-runs)).
 
 ### A task prompt
 
@@ -164,7 +167,8 @@ with the user first.
 
 Default to the smallest graph: one epic holding one executor bead that
 carries the whole prompt. No milestones, no Mason or Sage gates, no
-Marshal. Pick the review, following any review wishes in the invocation:
+Marshal. Pick the review, following any review wishes in the invocation
+or a [light run](#light-runs):
 
 - **none** for a routine change;
 - **inline** (label the executor bead `review:inline`): the executor gets a
@@ -254,7 +258,28 @@ Every plan run (including a task prompt treated as a plan) ends with exactly
 one Archivist bead: a direct child of the run epic, with no dependencies,
 whose description names the plan document path, if any. The helper holds it
 until every other bead in the epic, follow-ups included, is closed. A small
-task-prompt run gets none.
+task-prompt run or a light run gets none.
+
+### Light runs
+
+**light** trades robustness for velocity, for any input, overriding
+`AGENTS.md`'s role and review policy:
+
+- No Mason, Sage or Archivist beads, and so no audit gates.
+- At most one review, at the end: no per-bead Wardens and no
+  `review:inline`. Unless the whole run is one routine change, file a
+  single final Warden bead that depends on every implementation bead, with
+  nothing depending on it.
+- Prefer fewer, larger beads. A plan document still gets its stoppage
+  audit: an unattended run needs it at any pace.
+- Label the run epic `run:light` (`--labels` when you create it,
+  `bd label add <epic> run:light` for an existing one). Beads filed under
+  it later inherit the label, and workers read it to keep follow-ups and
+  the final review light.
+- An existing epic: close each unclaimed Mason, Sage, Archivist and Warden
+  bead in it (`enact claim <id>`, then `enact close <id> --reason "skipped:
+  light run"`; on exit 3 leave it). The final Warden depends on the beads
+  those Wardens would have reviewed and every open executor bead.
 
 ### Finish planning
 

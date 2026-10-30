@@ -20,8 +20,8 @@ staging. Read `common.md` first; this file adds what is specific to you.
      page, run the script. Do not trust a green suite alone;
    - re-read your full diff against `origin/staging` as a skeptical reviewer
      before pushing.
-5. If your bead has the label `review:inline`, get an
-   [inline review](#inline-review) before pushing.
+5. If your bead has the label `review:inline` and the run is not light
+   (`common.md`), get an [inline review](#inline-review) before pushing.
 6. Deliver with `enact push --bead <bead>`, then follow up and close as
    described in `common.md`.
 

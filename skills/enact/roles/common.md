@@ -28,6 +28,16 @@ as the orchestrator or as its subagent. Then:
 - If you cannot finish, comment the exact state on the bead, leave it in
   progress and say so in your summary; the orchestrator decides.
 
+## Light runs
+
+A run is light when your bead or its run epic carries the `run:light`
+label. It trades robustness for velocity: no Mason, Sage or Archivist work,
+no `review:inline` reviews even where a bead has the label, and at most one
+final Warden for the whole run. File follow-ups only for real bugs, as
+`role:executor` beads with no review of their own. If the final Warden has
+not started, make it depend on each follow-up you file
+(`bd dep add <warden> <follow-up>`) so it still runs last.
+
 ## Start
 
 1. Run the `enact start <bead> --reservation <token>` command in your spawn
