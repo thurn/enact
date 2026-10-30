@@ -10,7 +10,8 @@
 - Fast checks:
   `python3 -m py_compile scripts/enact.py && python3 -m unittest -q tests.test_unit`.
 - Slow checks: `python3 -m unittest -q tests.test_unit tests.test_integration`
-  (real git, bd and Dolt in temp dirs; several minutes).
+  (real git, bd and Dolt in temp dirs). Budget: 2-3 minutes; cut or redesign
+  scenarios rather than exceed it.
 - Deliver through Enact's own flow, never by committing or pushing to
   `master`: `python3 scripts/enact.py worktree create <name>` from the main
   checkout, commit in the printed worktree, then

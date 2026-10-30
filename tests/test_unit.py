@@ -911,6 +911,87 @@ class CommandPolicyTest(unittest.TestCase):
         self.assertEqual(self.a.show(epic)["status"], "closed")
         self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "done")
 
+    def test_run_holds_recovery_budgets_and_explicit_resume(self):
+        epic = self.a.create("acceptance needs new access", type="epic",
+                             acceptance_criteria="Required access is available")
+        task = self.a.create("implementation", parent=epic, priority=1)
+        other = self.a.create("later", parent=epic)
+        route = self.a.enact("run", "register", epic, "--authorized", "--parallel", "2")
+        command = ("run", "recover", epic, "--kind", "vizier", "--session", "sess-a",
+                   "--evidence", "successful lookup: stopped")
+        result = self.a.enact(*command)
+        self.assertTrue(result["allowed"])
+        self.assertEqual((result["remaining"], result["route"]["parallel"]), (2, 2))
+        self.assertEqual(self.a.enact(*command)["reason"], "cooldown")
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual(step["bead"], task)
+        self.start_worker(self.a, task, "worker")
+        # Worker recovery needs this host's route; notices never restart holds.
+        worker = ("run", "recover", epic, "--kind", "worker", "--bead", task,
+                  "--session", "worker", "--evidence", "successful lookup: idle")
+        self.a.enact(*worker, env={"ENACT_HOST": "host-b"}, code=3)
+        self.a.enact("run", "pause", epic, "--reason", "user stop", env={"ENACT_HOST": "host-b"})
+        self.a.enact(*worker, code=3)
+        self.a.enact(*command, code=3)
+        self.a.enact("release", task, "--expected-owner", "worker",
+                     "--expected-session", "worker", "--inactive", "stopped",
+                     "--evidence", "successful lookup: stopped", "--reason", "recovery",
+                     session="marshal", code=3)
+        self.a.enact("claim", other, code=3)
+        self.a.enact("start", task, "--reservation", step["reservation"],
+                     session="worker", code=3)
+        notice = ("run", "recover", epic, "--kind", "notice", "--session", "sess-a",
+                  "--evidence", "user action needed")
+        self.assertTrue(self.a.enact(*notice)["allowed"])
+        self.assertEqual(self.a.enact(*notice)["reason"], "exhausted")
+        status = self.a.enact("status")
+        self.assertEqual(status["marshal_name"], route["marshal_name"])
+        self.assertFalse(status["active_runs"][0]["recoverable"])
+        self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "paused")
+        self.a.enact("meta", epic, 'enact_control={"state":"active"}', code=3)
+        self.a.enact("run", "resume", epic, "--reason", "automatic retry", code=3)
+        self.a.enact("run", "resume", epic, "--explicit", "--reason", "user says resume")
+        self.a.enact("close", task, "--reason", "finished", session="worker")
+        # Exhausted vizier recovery blocks the whole run until explicit resume.
+        self.a.enact("run", "block", epic, "--exhausted", "--reason", "Justiciar: access unavailable")
+        self.a.enact(*command, code=3)
+        self.a.enact("claim", other, code=3)
+        self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "blocked")
+        self.a.bd("close", other, "--reason", "finished elsewhere")
+        self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "blocked")
+        self.assertNotEqual(self.a.show(epic)["status"], "closed")
+        self.a.enact("run", "resume", epic, "--explicit", "--reason", "user supplied access")
+        self.assertTrue(self.a.enact(*command)["allowed"])
+        self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "done")
+
+    def test_marshal_release_needs_evidence_and_fences_stale_workers(self):
+        epic = self.a.create("local recovery", type="epic")
+        bead = self.a.create("unfinished", parent=epic)
+        self.a.enact("next", "--epic", epic)
+        old_token = self.a.show(bead)["metadata"]["enact_reservation"]
+        self.start_worker(self.a, bead, "old")
+        # Lookup failure, a stale observation, and a different provider cannot
+        # establish inactivity. None may discard this worker's assignment.
+        base = ["release", bead, "--reason", "recovery", "--expected-owner", "old",
+                "--expected-session", "old"]
+        self.a.enact(*base, session="marshal", code=3)
+        self.a.enact(*base, "--inactive", "stopped", session="marshal", code=3)
+        self.a.enact(*base, "--inactive", "stopped", "--evidence", "read confirmed idle",
+                     "--expected-owner", "stale", session="marshal", code=3)
+        self.a.enact(*base, "--inactive", "stopped", "--evidence", "wrong provider",
+                     session="marshal", env={"ENACT_PROVIDER": "codex"}, code=3)
+        self.a.enact(*base, "--inactive", "stopped", "--evidence", "read confirmed idle",
+                     session="marshal")
+        self.a.enact("start", bead, "--reservation", old_token, session="old", code=3)
+        self.a.enact("next", "--epic", epic, session="replacement-vizier")
+        self.a.enact("start", bead, "--reservation", old_token, session="old", code=3)
+        self.start_worker(self.a, bead, "new")
+        for args in (("close", bead, "--reason", "stale"),
+                     ("meta", bead, "enact_commits=stale"),
+                     ("release", bead, "--reason", "stale")):
+            self.a.enact(*args, session="old", code=3)
+        self.assertEqual(self.a.show(bead)["assignee"], "new")
+
 
 if __name__ == "__main__":
     unittest.main()

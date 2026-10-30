@@ -587,7 +587,7 @@ and active-run need, make one supported restoration and verify scheduled
 delivery. Return any temporary test cadence to hourly minute seven. Do not
 blindly recreate jobs or hand-edit scheduler databases.
 
-## Slow-check runtime (2026-10-29)
+## Slow-check runtime (2026-10-29, revised 2026-10-30)
 
 - Keep all scenarios in the normal fast+slow checks. Independent integration
   scenarios take work from a queue in up to eight lanes, bounded by CPU count.
@@ -600,16 +600,15 @@ blindly recreate jobs or hand-edit scheduler databases.
 - Lane results are replayed on the runner thread, including setup/teardown
   errors, subtest failures, skips and durations. Fast regressions exercise
   concurrent fixture isolation and failure reporting. Focused test names still
-  run directly and sequentially for debugging; no test is opt-in. Four serial
-  policy stories (desktop identity, reservation callbacks, legacy routing and
-  archive scheduling) run through the public CLI parser and commands against a
-  small in-memory Beads port in the fast suite. Their assertions are retained.
-  Real Beads dependency readiness has its own focused scenario, including a
-  higher-priority blocked dependent. All persistence, synchronization, racing
-  claims, filesystem recovery, shared holds and delivery checks continue to use
-  real git, Beads and Dolt. Recovery-budget counts are checked in fast policy
-  tests; the real graph scenario verifies a saved attempt, cooldown, seeded
-  prior hourly sweeps, exhaustion, shared blocking and an explicit resume.
+  run directly and sequentially for debugging; no test is opt-in. Policy
+  stories (desktop identity, reservation callbacks, legacy routing, archive
+  scheduling, run holds with recovery budgets and explicit resume, and the
+  Marshal release/stale-worker rejection matrix) run through the public CLI
+  parser and commands against a small in-memory Beads port in the fast suite.
+  Real Beads dependency readiness, including a higher-priority blocked
+  dependent, rides along with the shared-pause scenario. Persistence,
+  synchronization, racing claims, filesystem recovery, a cross-clone pause
+  fence and delivery checks continue to use real git, Beads and Dolt.
 - Embedded databases using the default remote can synchronize through the Dolt
   CLI without repeatedly opening Beads' schema engine. Preserve the existing
   commit/pull/push order for new tips, local ownership lock, remote-wins
@@ -634,11 +633,24 @@ blindly recreate jobs or hand-edit scheduler databases.
 - Recognize missing-remote-branch diagnostics case-insensitively while
   preserving the actual branch name in Dolt commands. A real two-clone
   scenario covers first publication of a mixed-case branch.
+- Scenarios named `test_sync_*` synchronize through the production git-backed
+  Dolt remote. All other scenarios share a local file Dolt remote, still real
+  Dolt pull/push, because each git-transport push costs seconds and every
+  command syncs two or three times. Both transports are snapshotted once per
+  lane. The CI-lifetime scenario also takes a lane instead of running first.
+- Dolt contends under parallel load on macOS: even read-only `dolt sql` calls
+  run about 2.4x slower with eight lanes, while process spawning scales.
+  Runtime therefore follows total scenario work, not lane count; six lanes
+  matched eight and fourteen were much slower. Budget new real-Dolt checks
+  by commands issued, and prefer the fast policy port for refusal matrices.
 - For isolated timings, pass a fully qualified scenario name to
   `python3 -m unittest -v`. Python 3.12+ accepts `--durations 0` on the
   normal fast+slow command. Concurrent scenario durations overlap and must
   not be summed as suite wall time.
-- Verified at `e4e1359` on jarvis, macOS/Python 3.14: Sage normal checks
+- Enact's own slow budget is 2-3 minutes (see `AGENTS.md`). On 2026-10-30,
+  jarvis, macOS/Python 3.14, bd 1.3.2, the normal fast+slow command passed
+  all 72 tests in about 157 seconds.
+- Earlier, at `e4e1359` on jarvis, macOS/Python 3.14: Sage normal checks
   passed all 68 tests in 273.385 seconds; separate fast checks passed 36
   tests in 4.580 seconds. Independent Warden normal checks passed in
   264.752 seconds. These support the near-five-minute budget on this host,
