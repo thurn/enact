@@ -740,3 +740,7 @@ blindly recreate jobs or hand-edit scheduler databases.
   agents sharing the machine. Warden reviews block tests whose verdict
   depends on machine speed, Masons file existing ones as important, and
   Stewards replace the timing dependence instead of loosening thresholds.
+- A test that fails while the product behaves correctly is a false
+  positive, which is strong evidence it is worthless. Stewards very
+  seriously consider deleting such a test rather than repairing it, and
+  repair it only when it guards behavior nothing else covers.

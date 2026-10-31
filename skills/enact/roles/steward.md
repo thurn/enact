@@ -38,13 +38,20 @@ The slow-CI runner filed your bead. It records:
    intent.
 3. Fix forward with a new commit. Do not revert someone's feature unless the
    fix is impractical. If you do revert, file a bead to redo it properly.
-4. **Flaky tests** are real failures. Fix the race or nondeterminism. The
-   common case is a check that fails under machine load (a timing
-   threshold, a tight timeout, a sleep): replace the timing dependence with
-   a deterministic check (`warden.md`, "Tests that survive load") rather
-   than loosening the threshold or rerunning. If you cannot, quarantine
-   the test (move it out of the slow suite, with a reason) and file a bead
-   to fix and restore it.
+4. **Is it a real bug?** A failing or flaky test whose cause is in the
+   product (a race, nondeterminism, a broken edge case) is a real failure:
+   fix the product. If the product is fine and only the test is wrong (a
+   timing threshold tripping under machine load, a sleep, a brittle
+   assertion on incidental output), very seriously consider deleting the
+   test instead of fixing it. A false positive is strong evidence the test
+   is worthless: it pulled a Steward off real work and caught nothing.
+   Repair it only if it guards behavior nothing else covers, and then
+   replace the timing dependence with a deterministic check (`warden.md`,
+   "Tests that survive load") rather than loosening the threshold or
+   rerunning. Comment on the bead which tests you deleted and why. If you
+   can neither fix nor justify deleting it, quarantine the test (move it
+   out of the slow suite, with a reason) and file a bead to fix and
+   restore it.
 5. Run the slow check command yourself in your worktree and make sure it
    passes before you push. Then run `enact push --bead <bead>`, which also
    starts a new slow-CI run.
