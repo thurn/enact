@@ -15,6 +15,9 @@ faster?** Read `common.md` first.
   worktree. Find the slowest tests and steps. The slow-CI log is
   `<git common dir>/enact/ci.log`; each run logs its start time and
   `slow CI passed at <sha> in N s` (or failed), so grep it for the trend.
+  Time the slow suite only while `enact ci --status` shows the runner idle,
+  with your own build directories: sharing its persistent caches mid-run
+  can break either run.
 - **Friction.** Build caches that are not reused, worktree setup cost,
   flaky tests, merge conflicts in the same files, skills or AGENTS.md rules
   agents kept misreading.
