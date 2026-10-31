@@ -2015,7 +2015,9 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
     if stale.exists():
         remove_worktree(repo, stale, None)
     path = create_worktree(repo, name, None, tip)
-    log(f"slow CI on {tip[:12]} in {path}")
+    # Timed, so a Sage can hold the slow suite to its budget from the log.
+    started = time.monotonic()
+    log(f"slow CI on {tip[:12]} in {path} at {now()}")
     try:
         args, shell = shell_args(cfg.slow)
         proc = subprocess.run(
@@ -2025,6 +2027,7 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
         )
     finally:
         remove_worktree(repo, path, None)
+    seconds = round(time.monotonic() - started)
     output = proc.stdout or ""
     sys.stderr.write(output[-20000:])
     if proc.returncode == 0:
@@ -2032,8 +2035,8 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
         advanced = ci_pass(repo, tip)
         if advanced:
             promotion.unlink(missing_ok=True)
-        log(f"slow CI passed at {tip[:12]}; master advanced: {advanced}")
-        return {"tip": tip, "passed": True, "master_advanced": advanced}
+        log(f"slow CI passed at {tip[:12]} in {seconds} s; master advanced: {advanced}")
+        return {"tip": tip, "passed": True, "master_advanced": advanced, "seconds": seconds}
     tail = "\n".join(output.strip().splitlines()[-60:])
     repaired = superseding_repair(repo, tip)
     if repaired:
@@ -2041,8 +2044,8 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
             "on staging; retesting the newer tip before filing")
         return {"tip": tip, "passed": False, "superseded_by": repaired}
     bead_id = report_ci_failure(repo, tip, green, tail)
-    log(f"slow CI failed at {tip[:12]}; steward bead {bead_id}")
-    return {"tip": tip, "passed": False, "steward": bead_id}
+    log(f"slow CI failed at {tip[:12]} in {seconds} s; steward bead {bead_id}")
+    return {"tip": tip, "passed": False, "steward": bead_id, "seconds": seconds}
 
 
 # ---------------------------------------------------------------------------

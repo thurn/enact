@@ -13,7 +13,8 @@ faster?** Read `common.md` first.
   failures, long waits, retries, tool confusion, misleading instructions.
 - **Checks.** Time the fast and slow suites (`.enact.toml`) in a fresh
   worktree. Find the slowest tests and steps. The slow-CI log is
-  `<git common dir>/enact/ci.log`.
+  `<git common dir>/enact/ci.log`; each run logs its start time and
+  `slow CI passed at <sha> in N s` (or failed), so grep it for the trend.
 - **Friction.** Build caches that are not reused, worktree setup cost,
   flaky tests, merge conflicts in the same files, skills or AGENTS.md rules
   agents kept misreading.
