@@ -117,14 +117,17 @@ and review policy:
 
 ## A task prompt
 
-Read enough code to scope the task. If it plainly needs a human (a choice
-between options, credentials, a manual step), settle that with the user
-now. If it describes a large work item (several independent pieces,
-phases, days of work), tell the user to use `/enact-plan` and stop.
+Start by asking the user a few clarifying questions, one at a time, as
+needed to understand the scope of the request. Then read enough code to
+scope the task. If it plainly needs a human (a choice between options,
+credentials, a manual step), settle that with the user now. If it
+describes a large work item (several independent pieces, phases, days of
+work), tell the user to use `/enact-plan` and stop.
 
-File one executor bead carrying the whole prompt, with acceptance criteria
-an agent can verify (`bd create ... --labels role:executor --json`, then
-`enact sync`), and continue as for a plain bead.
+File one executor bead carrying the whole prompt and the answers, with
+acceptance criteria an agent can verify (`bd create ... --labels
+role:executor --json`, then `enact sync`), and continue as for a plain
+bead.
 
 ## A plain bead
 

@@ -721,6 +721,13 @@ blindly recreate jobs or hand-edit scheduler databases.
   own; the filer makes the final Warden depend on them so it stays last.
 - No helper changes: the mode is policy applied by skills and role files.
 
+## Clarifying task prompts (2026-11-01)
+
+- `/enact` given a task prompt starts by asking the user a few clarifying
+  questions, one at a time, as needed to understand its scope. A bead was
+  already scoped when it was filed; a prompt is often a sentence, and the
+  user is present at the start of an inline run but may not be later.
+
 ## Stale failures and load-sensitive checks (2026-10-30)
 
 - A playlist_survivors postmortem found no failure spiral: the coalescing
