@@ -735,6 +735,17 @@ blindly recreate jobs or hand-edit scheduler databases.
   already scoped when it was filed; a prompt is often a sentence, and the
   user is present at the start of an inline run but may not be later.
 
+## Waiting on beads (2026-11-01)
+
+- `enact wait <bead>...` blocks up to `--timeout` (540 s) until every named
+  bead is closed and returns `closed`, or `waiting` with the open beads, so
+  `/enact` can honor "start this once ps-myz closes". It syncs Beads each
+  poll, like `ci --wait`, because another machine may close the bead.
+- A dependency edge is not enough: `enact claim` ignores blockers, an epic
+  loop stops as deadlocked when only outside work blocks it, and edges do
+  not cross Beads graphs. The waiter runs from the project that owns the
+  beads. An unknown ID fails at once instead of waiting forever.
+
 ## Stale failures and load-sensitive checks (2026-10-30)
 
 - A playlist_survivors postmortem found no failure spiral: the coalescing

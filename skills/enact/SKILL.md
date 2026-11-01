@@ -71,6 +71,10 @@ bead you are working, or the epic for an epic.
 4. Classify the input: `bd show <input> --json` finds a bead (an epic if its
    `issue_type` is `epic`); otherwise a path to a file is a plan document;
    otherwise it is a task prompt.
+5. If the invocation says to start only after other beads close ("once
+   ps-myz closes, ..."), title yourself 🔮 and run `enact wait <bead>...`
+   (600000 ms tool timeout) from the project that owns them. Repeat on
+   `waiting` until it reports `closed`, then continue.
 
 ## Review
 

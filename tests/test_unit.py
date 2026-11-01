@@ -713,6 +713,22 @@ class CiWatchTest(unittest.TestCase):
         start.assert_not_called()
 
 
+class WaitTest(unittest.TestCase):
+    def wait(self, statuses, *ids):
+        beads = mock.Mock()
+        beads.show.side_effect = lambda i: {"id": i, "status": statuses[i]}
+        args = types.SimpleNamespace(beads=list(ids), timeout=0, interval=1)
+        with mock.patch.object(enact, "find_repo"), mock.patch.object(enact, "sync"), \
+                mock.patch.object(enact, "Beads", return_value=beads):
+            return enact.cmd_wait(args)
+
+    def test_wait_reports_closed_only_when_every_bead_is_closed(self):
+        result = self.wait({"a": "closed", "b": "closed"}, "a", "b")
+        self.assertEqual(result, {"state": "closed", "beads": ["a", "b"]})
+        result = self.wait({"a": "closed", "b": "in_progress"}, "a", "b")
+        self.assertEqual(result["state"], "waiting")
+        self.assertEqual([b["id"] for b in result["open"]], ["b"])
+
 class FetchTest(unittest.TestCase):
     def test_fetch_retries_ref_lock_contention_only(self):
         repo = types.SimpleNamespace(config=enact.Config(), main=Path("."))

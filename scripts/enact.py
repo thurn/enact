@@ -1169,6 +1169,21 @@ def cmd_next(args: argparse.Namespace) -> dict[str, Any]:
         time.sleep(min(args.interval, max(deadline - time.monotonic(), 1)))
 
 
+def cmd_wait(args: argparse.Namespace) -> dict[str, Any]:
+    """Block until every named bead is closed, for work that must start after."""
+    repo = find_repo()
+    deadline = time.monotonic() + max(args.timeout, 0)
+    while True:
+        sync(repo)
+        beads = Beads(repo)
+        open_beads = [{"id": b["id"], "status": b.get("status"), "assignee": b.get("assignee")}
+                      for b in map(beads.show, args.beads) if b.get("status") != "closed"]
+        if not open_beads:
+            return {"state": "closed", "beads": args.beads}
+        if time.monotonic() >= deadline:
+            return {"state": "waiting", "open": open_beads}
+        time.sleep(min(args.interval, max(deadline - time.monotonic(), 1)))
+
 # ---------------------------------------------------------------------------
 # Justiciar lock (a ref on the remote, independent of Beads)
 
@@ -2527,6 +2542,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--vizier", help="vizier identity (default: this session)")
     p.add_argument("--wait", type=int, default=0, help="block up to N seconds for an action")
     p.add_argument("--interval", type=int, default=60)
+
+    p = add("wait", cmd_wait, "Block until every named bead is closed.")
+    p.add_argument("beads", nargs="+")
+    p.add_argument("--timeout", type=int, default=540, help="seconds to block for")
+    p.add_argument("--interval", type=int, default=30, help=argparse.SUPPRESS)
 
     p = add("push", cmd_push, "Integrate with staging, run fast checks, push, start slow CI.")
     p.add_argument("--bead", help="record the pushed commits on this bead")
