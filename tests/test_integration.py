@@ -14,6 +14,7 @@ import subprocess
 import stat
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -739,7 +740,17 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
 
     def test_claim_race_has_one_winner(self):
         bead = self.a.create("contested")
-        self.a.enact("sync")
+        # Another process holding the store (any bd command) makes the Dolt
+        # CLI open it read-only; sync waits for it rather than failing.
+        holder = subprocess.Popen(["dolt", "sql"], cwd=self.dolt_db(self.a),
+                                  stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL)
+        try:
+            time.sleep(1)
+            threading.Timer(1.5, holder.stdin.close).start()
+            self.a.enact("sync")
+        finally:
+            holder.wait(30)
         b = self.b
         b.enact("sync")
         self.a.enact("claim", bead)

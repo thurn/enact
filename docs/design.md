@@ -620,6 +620,13 @@ blindly recreate jobs or hand-edit scheduler databases.
   Commit failures other than an empty working set abort before pull/push.
   Initial databases may have no remote branch yet; publication uses an ordinary
   push, never a forced database push.
+- The Dolt CLI does not wait for the embedded store: while another process has
+  it open (any bd command, even a read) it opens read-only and every write
+  fails with "database is read only". bd waits instead, and bd's workspace
+  gate cannot be borrowed (an exclusive holder makes bd fail fast), so every
+  direct Dolt call retries that error with jittered backoff for up to 60 s.
+  Other failures are not retried. A real scenario syncs while a held store
+  is released.
 - Within an ownership lock, reuse identical Beads show/list reads across helper
   instances. Every write attempt and every synchronization clears those reads;
   leaving the lock discards them. Cache raw JSON so each caller receives

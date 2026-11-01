@@ -400,8 +400,30 @@ def dolt_db_dir(repo: Repo) -> Path:
     return repo.main / ".beads" / "embeddeddolt" / metadata["dolt_database"]
 
 
+DOLT_BUSY_SECONDS = 60
+
+
+def dolt(args: list[str], db: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
+    """Run the Dolt CLI on an embedded Beads database. While another process
+    has the store open (any bd command, even a read), Dolt opens it read-only
+    instead of waiting and every write fails; bd waits, so retry like it."""
+    deadline = time.monotonic() + DOLT_BUSY_SECONDS
+    delay = 0.1
+    while True:
+        proc = run(["dolt", *args], db, check=False)
+        if (proc.returncode == 0 or time.monotonic() >= deadline or
+                "database is read only" not in proc.stdout + proc.stderr):
+            break
+        time.sleep(random.uniform(delay, 2 * delay))
+        delay = min(delay * 2, 2.0)
+    if check and proc.returncode != 0:
+        raise Fail(f"dolt {' '.join(args)} failed ({proc.returncode}): "
+                   f"{(proc.stderr or proc.stdout).strip()[-2000:]}")
+    return proc
+
+
 def dolt_json(db: Path, query: str) -> list[dict[str, Any]]:
-    out = run(["dolt", "sql", "-r", "json", "-q", query], db).stdout.strip()
+    out = dolt(["sql", "-r", "json", "-q", query], db).stdout.strip()
     return json.loads(out).get("rows", []) if out else []
 
 
@@ -417,8 +439,8 @@ def resolve_remote_wins(repo: Repo) -> list[dict[str, Any]]:
         raise Fail("dolt CLI not found; it is needed to resolve Beads merge conflicts")
     db = dolt_db_dir(repo)
     branch = dolt_json(db, "select active_branch() as b")[0]["b"]
-    run(["dolt", "fetch", repo.config.remote], db)
-    run(["dolt", "merge", f"{repo.config.remote}/{branch}"], db, check=False)
+    dolt(["fetch", repo.config.remote], db)
+    dolt(["merge", f"{repo.config.remote}/{branch}"], db, check=False)
     dropped: list[dict[str, Any]] = []
     for row in dolt_json(db, "select `table` as t from dolt_conflicts"):
         table = row["t"]
@@ -433,9 +455,9 @@ def resolve_remote_wins(repo: Repo) -> list[dict[str, Any]]:
             dropped.append(
                 {"table": table, "id": ours.get("id") or theirs.get("id"), "dropped_local": changed}
             )
-        run(["dolt", "conflicts", "resolve", "--theirs", table], db)
-    run(["dolt", "add", "."], db)
-    run(["dolt", "commit", "--allow-empty", "-m", "enact sync: merge remote (remote wins)"], db, check=False)
+        dolt(["conflicts", "resolve", "--theirs", table], db)
+    dolt(["add", "."], db)
+    dolt(["commit", "--allow-empty", "-m", "enact sync: merge remote (remote wins)"], db, check=False)
     for item in dropped:
         log(f"conflict: remote won for {item['table']} {item['id']}; dropped {item['dropped_local']}")
     return dropped
@@ -493,7 +515,7 @@ def sync(repo: Repo) -> dict[str, Any]:
     def command(*args: str) -> subprocess.CompletedProcess[str]:
         if not embedded:
             return beads.raw("dolt", *args)
-        return run(["dolt", *args], dolt_db_dir(repo), check=False)
+        return dolt(list(args), dolt_db_dir(repo), check=False)
 
     if embedded:
         config = dict(line.split(" = ", 1) for line in

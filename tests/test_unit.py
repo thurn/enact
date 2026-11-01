@@ -833,6 +833,24 @@ class SyncTest(unittest.TestCase):
                 self.assertTrue(enact.sync(repo)["remote"])
             self.assertFalse(any(args[1] == "push" for args in calls))
 
+    def test_read_only_dolt_store_waits_for_other_processes(self):
+        busy = subprocess.CompletedProcess([], 1, "", "cannot update manifest: database is read only")
+        done = subprocess.CompletedProcess([], 0, "ok", "")
+        with mock.patch.object(enact.time, "sleep") as sleep, \
+                mock.patch.object(enact, "run", side_effect=[busy, busy, done]) as run:
+            self.assertEqual(enact.dolt(["pull"], Path(".")).stdout, "ok")
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+        # Other failures are not retried, and a store that stays busy fails.
+        with mock.patch.object(enact, "run", return_value=busy) as run, \
+                mock.patch.object(enact, "DOLT_BUSY_SECONDS", 0):
+            with self.assertRaisesRegex(enact.Fail, "dolt pull failed.*read only"):
+                enact.dolt(["pull"], Path("."))
+        failed = subprocess.CompletedProcess([], 1, "", "disk full")
+        with mock.patch.object(enact, "run", return_value=failed) as run:
+            self.assertEqual(enact.dolt(["push"], Path("."), check=False).returncode, 1)
+        self.assertEqual(run.call_count, 1)
+
     def test_server_mode_retains_beads_sync(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
