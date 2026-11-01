@@ -5,8 +5,9 @@ the highest-priority work in the project. Read `common.md` first.
 
 A session outside any run may take this role after `enact push` printed
 `watch_ci`: it claims the bead with `enact claim <bead>` instead of
-`enact start`, keeps its own title, and after pushing its repair keeps
-watching with `enact ci --wait <sha>` until slow CI passes.
+`enact start`, keeps its own summary but switches its emoji to 🚒 while
+repairing and 🔮 while waiting, and after pushing its repair keeps watching
+with `enact ci --wait <sha>` until slow CI passes, then retitles ✅.
 
 ## The failure
 

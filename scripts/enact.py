@@ -52,6 +52,13 @@ ROLE_NOTICE = (
     "Enact roles are prompt files, not skills: never invoke a skill named after a role "
     f"({', '.join(EMOJI)}). Work fully unattended: nobody will answer questions."
 )
+# Users read status from the title emoji, so every session ends on ✅ or ⛔.
+TITLE_NOTICE = (
+    "Keep this session's title showing its state: `⚒️ <short summary>` while you "
+    "work (`set_session_title` on `self` in Claude Desktop, `set_thread_title` in "
+    "Codex), then `✅ <same summary>` as your last step when finished, or "
+    "`⛔ <same summary>` if you stop without finishing."
+)
 WINDOWS = os.name == "nt"
 
 
@@ -999,7 +1006,8 @@ def spawn_prompt(role: str, bead: dict[str, Any], epic: str, vizier: str) -> str
         f"Start with `{start}`.\n"
         "The run authorizes creating, inspecting, messaging and archiving its "
         "role chats and managing its Marshal. Preserve this authorization "
-        f"during recovery.\n\n{ROLE_NOTICE}"
+        f"during recovery. Retitle ✅ (or ⛔) before your final turn ends, "
+        f"whatever the reason.\n\n{ROLE_NOTICE}"
     )
 
 
@@ -1475,7 +1483,9 @@ def cmd_worktree(args: argparse.Namespace) -> dict[str, Any]:
                 "enact_worktree_host": host_name()}, actor=actor)
             sync(repo)
             require_owner(Beads(repo).show(bead["id"]), actor)
-        return {"path": str(path), "branch": branch, "base": base, "recovered": reused}
+        result = {"path": str(path), "branch": branch, "base": base, "recovered": reused}
+        # Run sessions title from their role files; ad hoc ones learn it here.
+        return result if bead else {**result, "title": TITLE_NOTICE}
     # Explicit removal must not discard unfinished work, including untracked
     # files. Delivery's own cleanup follows a confirmed push instead.
     fetch(repo)
@@ -1622,6 +1632,8 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     if ("ci" in result and not meta(bead, "enact_vizier")
             and not vizier_active(repo, Beads(repo).all())):
         result["watch_ci"] = watch_ci_notice(result["staging"])
+    elif result.get("pushed") and not args.bead:
+        result["title"] = TITLE_NOTICE
     result["local_branches"] = track_local_branches(repo)
     branch = repo.git("rev-parse", "--abbrev-ref", "HEAD")
     in_enact_tree = (
@@ -1773,7 +1785,9 @@ def watch_ci_notice(sha: str) -> str:
         f"owns it. Run `enact ci --wait {sha}` (600000 ms tool timeout) until it "
         "reports `passed`. On `failed`, claim the Steward bead with "
         f"`enact claim <bead>`, follow {ROLES_DIR / 'steward.md'}, and watch "
-        "your fix the same way."
+        "your fix the same way. Title this session `🔮 <summary>` while waiting, "
+        "`🚒 <summary>` while repairing, and `✅ <summary>` once CI passes "
+        "(`⛔` if you stop without it)."
     )
 
 

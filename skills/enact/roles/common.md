@@ -47,7 +47,15 @@ not started, make it depend on each follow-up you file
    changed: stop, report it and end your turn; never overwrite the new owner.
 2. Title your session `<emoji> [<bead>] <short imperative summary>` with
    `set_session_title` on `self` (Claude Desktop) or `set_thread_title`
-   (Codex). The emoji is in your prompt.
+   (Codex). The emoji is in your prompt. If step 1 exits 3, still title
+   yourself `✅ [<bead>] ...` before ending your turn.
+
+**Every final turn ends on a status title.** Users read whether a session
+is still running from the emoji alone, so whenever you end your turn for
+good, retitle first: `✅ [<bead>] <same summary>` when your work is done or
+there is nothing left for you (closed, obsolete, lost ownership), or
+`⛔ [<bead>] <same summary>` when you stop with work unfinished (released,
+paused, blocked, waiting on recovery). Never end on your role emoji.
 3. Read the bead in full (`bd show <bead> --json`), its parent epic, and the
    beads it depends on. Read the project's `AGENTS.md`.
 4. **Re-validate the bead.** It may have been planned days ago. If the code
@@ -152,11 +160,13 @@ everything before you close your own bead, then run `enact sync`.
 - **Resumed after an interruption** (usage limit, crash, a Marshal nudge):
   check `bd show <bead>`, `enact status` and your worktree. Continue only if
   you still own the bead and its run is active; otherwise preserve all files
-  and end the turn. A shared pause lets already running workers finish, but
-  never authorizes a stopped worker to restart. Only explicit user resume
-  clears paused or blocked state; never clear it as automatic recovery.
+  and end the turn (⛔). A shared pause lets already running workers finish,
+  but never authorizes a stopped worker to restart. Only explicit user
+  resume clears paused or blocked state; never clear it as automatic
+  recovery.
 - Never wait for a human, never end your turn mid-task to ask a question, and
   never leave your bead in progress when you stop for good. If you truly
   cannot continue in an active run, comment the exact state and run
-  `enact release <bead> --reason "..."`. Paused or blocked runs retain their
-  assignments and unfinished acceptance until explicit resume.
+  `enact release <bead> --reason "..."`, then retitle ⛔. Paused or blocked
+  runs retain their assignments and unfinished acceptance until explicit
+  resume.

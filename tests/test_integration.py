@@ -510,7 +510,9 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         return json.loads(sh([sys.executable, str(harness), "ci"], self.a.path))
 
     def test_slow_ci_pass_advances_master(self):
-        wt = Path(self.a.enact("worktree", "create", "ci1")["path"])
+        created = self.a.enact("worktree", "create", "ci1")
+        self.assertIn("✅", created["title"])
+        wt = Path(created["path"])
         self.configure_git(wt)
         self.a.commit_file("ok.txt", "ok", cwd=wt)
         result = self.a.enact("push", cwd=wt)

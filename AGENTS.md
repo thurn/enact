@@ -18,6 +18,11 @@
   `python3 scripts/enact.py push` there. Slow CI advances `master`, which is
   what every machine pulls, so only green changes reach live sessions. If
   push prints `watch_ci`, follow it before finishing.
+- Title every session working here `⚒️ <short summary>` from the start
+  (🔮 while waiting on slow CI, 🚒 while fixing a Steward bead) and end it on
+  `✅ <same summary>`, or `⛔` if you stop without finishing. Enact users
+  read session state from these emojis; the host's activity indicator is
+  not accessible enough to rely on.
 - Slow-CI failures file Steward beads in this repository's own Beads graph
   (prefix `en`).
 - Projects and live sessions on every machine use this repository directly,

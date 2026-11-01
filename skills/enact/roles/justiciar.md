@@ -10,8 +10,9 @@ have no bead to start: skip its "Start" section and do the following instead.
    moves the fleet-wide lock (`refs/enact/justiciar` on origin) from
    "requested" to "active" under your session ID. Exit 3 means another
    Justiciar is active: send it your evidence (`send_message` if the printed
-   holder is on this host, otherwise a comment on its incident bead), then end
-   your turn.
+   holder is on this host, otherwise a comment on its incident bead), then
+   title yourself `✅ <reason> (handed to active Justiciar)` and end your
+   turn.
 2. Title your session `🔥 <short summary of the emergency>`.
 3. File an incident bead to hold your record:
    `bd create --title "Incident: ..." --priority 0 --labels role:justiciar`,
@@ -64,7 +65,8 @@ you exhaust recovery, run `enact run block <epic> --exhausted --reason
 "<exact need and attempted recovery>"` for each affected run. Preserve all
 unfinished beads, acceptance criteria and worktrees. Do not close an
 impossible requirement or keep releasing it for replacement workers.
-Release the Justiciar lock and report the exact need. Only explicit user
+Release the Justiciar lock, retitle `⛔ <summary>` and report the exact
+need. Only explicit user
 resume (`enact run resume <epic> --explicit --reason "..."`) can restart it.
 Ordinary test failures and implementation difficulty are not blockers.
 

@@ -6,6 +6,12 @@ from the run's invocation to inspect, message and archive its chats and
 manage this Marshal. Preserve that authorization in recovery prompts. Work
 from the project's main checkout, unattended. Never implement or review.
 
+Title your session `🎖️ <project> sweep` (`set_session_title` on `self`,
+`set_thread_title` in Codex) when you start, and `✅ <project> sweep` as
+your last step every time you end, including an early end, so the user can
+see the sweep is not running. Use `⛔ <project> sweep` instead when it ends
+on an error or with action needed from the user.
+
 ## 1. Take the sweep lock
 
 `enact lock acquire marshal`. Exit 3 means another sweep is running: end.

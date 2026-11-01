@@ -417,6 +417,21 @@ class GraphTest(unittest.TestCase):
         for role in enact.SPAWNED_ROLES:
             self.assertTrue((enact.ROLES_DIR / f"{role}.md").is_file(), role)
 
+    def test_every_session_is_told_to_end_on_a_status_title(self):
+        # Users read run state from title emojis, so each instruction source
+        # names the finished emoji.
+        prompt = enact.spawn_prompt("executor", {"id": "x-1", "title": "Work"}, "x-0", "viz")
+        for text in (prompt, enact.watch_ci_notice("abc"), enact.TITLE_NOTICE):
+            self.assertIn("✅", text)
+        self.assertIn(enact.EMOJI["executor"], enact.TITLE_NOTICE)
+        root = enact.ENACT_ROOT
+        for path in ("skills/enact/SKILL.md", "skills/enact-plan/SKILL.md",
+                     "skills/enact/roles/common.md", "skills/enact/roles/marshal.md",
+                     "skills/enact/roles/justiciar.md", "templates/AGENTS.md"):
+            text = (root / path).read_text(encoding="utf-8")
+            self.assertIn("✅", text, path)
+            self.assertIn("⛔", text, path)
+
     def test_archivist_waits_for_other_open_work_in_the_run(self):
         archivist = {"id": "d", "status": "open", "labels": ["role:archivist"]}
         docs_epic = {"id": "m", "status": "open", "issue_type": "epic"}

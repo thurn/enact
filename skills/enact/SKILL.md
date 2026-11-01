@@ -59,7 +59,10 @@ with ToolSearch first) or `set_thread_title` (Codex), as
 - ✅ when finished, or ⛔ when you stopped without finishing.
 
 Retitle before each subagent starts and after it returns. `<id>` is the
-bead you are working, or the epic for an epic.
+bead you are working, or the epic for an epic. Title yourself ⚒️ (🔮 for an
+epic) as soon as you start. Every way your turn ends for good ends on ✅
+or ⛔ first, including the early stops below (no setup, a plan document, a
+large task, a lost claim): the user reads run state from the emoji alone.
 
 ## Pre-flight
 

@@ -15,6 +15,12 @@
   4. If its output has `watch_ci`, no Enact run is around to repair a
      slow-CI failure: follow it (`enact ci --wait <sha>` until it passes;
      on failure, claim and fix the Steward bead) before finishing.
+- **Session titles show status.** Any agent session making a change here
+  titles itself `⚒️ <short summary>` when it starts (Claude Desktop:
+  `set_session_title` on `self`; Codex: `set_thread_title`), 🔮 while it
+  waits on slow CI, 🚒 while it fixes a Steward bead, and `✅ <same
+  summary>` as its last step when done, or `⛔` if it stops without
+  finishing. Never end a session on a working emoji.
 - Never commit to, or push directly to, `master` or `staging`. `master`
   advances only when slow CI passes on `staging`; a slow-CI failure files a
   P0 Steward bead. `enact ci --status` shows the runner and its log. Enact

@@ -118,8 +118,9 @@ epic is open. All spawning goes through you, including the Justiciar.
 
 The user is present now and will not be later. Do all interactive work here.
 
-1. **Update Enact.** `git -C "$ENACT" pull --ff-only` (ignore failure when
-   offline).
+1. **Title and update Enact.** Title yourself `🔮 <short summary>` (see
+   [Titles](#titles)), then `git -C "$ENACT" pull --ff-only` (ignore failure
+   when offline).
 2. **Project setup.** `.enact.toml` and `.beads/` must exist and the remote
    must have a `staging` branch. If not, tell the user to run `/enact-setup`
    first and stop.
@@ -403,11 +404,12 @@ action or after nine minutes. Handle the JSON:
    call `automation_update(mode: "delete", id: <resolved ID>)`; verify the
    deletion receipt or saved-state removal before claiming cleanup. Retention
    includes other active runs between assignments and during final validation.
-   Finally write a short final report (outcome, bead count, whether the
-   Marshal was deleted,
-   anything for the user to look at) and end the turn. Stay unarchived.
+   Finally retitle `✅ [<epic>] <same summary>`, write a short final report
+   (outcome, bead count, whether the Marshal was deleted, anything for the
+   user to look at) and end the turn. Stay unarchived.
 7. **`action: paused` or `blocked`**: no new spawning or recovery. Report
-   the shared reason and end the turn, preserving unfinished requirements.
+   the shared reason, retitle `⛔ [<epic>] <same summary>` and end the turn,
+   preserving unfinished requirements.
    Already running workers may finish and deliver. Do not automatically
    resume, close the run, or release it for endless replacement attempts.
 
@@ -420,7 +422,8 @@ Rules for the loop:
 - If the user writes to you mid-run, answer briefly, then resume the loop.
   Apply any changed instruction (parallelism, stop) from then on. "Stop"
   means: `enact run pause <epic> --reason "<user instruction>"` immediately,
-  stop spawning across peers, let in-flight sessions finish, report and end.
+  stop spawning across peers, let in-flight sessions finish, report, retitle
+  ⛔ and end.
   If sync rejects the pause, inspect and reapply the still-current user
   instruction. Never use local silence alone as the pause record.
 - Every `enact next` result has a `reminder` field restating the loop. After
@@ -430,6 +433,17 @@ Rules for the loop:
   hosts. Unsupported recovery or exhausted retries notifies the user.
   Explicit user resume clears the shared hold and resets recovery budgets;
   continue the same epic without replanning or discarding assignments.
+
+## Titles
+
+Your title is the user's only reliable signal of whether the run is alive,
+so keep it current with the host's title-self tool: 🔮 from the moment you
+start until the loop ends, then `✅` when the run is done (or there was
+nothing to run), or `⛔` whenever you end your turn with work unfinished:
+an early stop in pre-flight or planning, a question the user must answer
+first, a pause, a block, an error. Never end a turn still showing 🔮. Spawned
+sessions, the Marshal and the Justiciar follow the same rule from their role
+files.
 
 ## Multiple machines and providers
 

@@ -260,7 +260,16 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   `enact-setup`. Role files stay in `skills/enact/roles/` so spawn prompts
   and Marshal tasks written before the split keep working.
 - Titles: 🔮 Vizier, ⚒️ Executor, 🛡️ Warden, 🔥 Justiciar, 🚒 Steward,
-  🎖️ Marshal, 🧱 Mason, 📖 Sage, 📜 Archivist; ✅ on completion.
+  🎖️ Marshal, 🧱 Mason, 📖 Sage, 📜 Archivist; ✅ on completion, ⛔ when
+  stopped unfinished.
+- Status titles are an accessibility contract (2026-11-01): the host's
+  running indicator has poor contrast, so users read state from the emoji.
+  Every session Enact starts or instructs (vizier, workers, Marshal,
+  Justiciar, inline runs, and ad hoc sessions following the AGENTS.md
+  section) titles itself on start and ends every final turn on ✅ or ⛔,
+  including early stops. Existing projects keep old AGENTS.md text, so
+  `enact worktree create` and `enact push` without a bead also print a
+  `title` notice, and `watch_ci` names the CI-wait emojis.
 
 ## Implementation contracts
 
