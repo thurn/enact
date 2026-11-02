@@ -204,6 +204,88 @@ class CiLifetimeTest(unittest.TestCase):
                         self.wait_for(lambda: not cli("--status")["running"])
 
 
+@unittest.skipUnless(shutil.which("git"), "needs git")
+class WorktreeSweepTest(unittest.TestCase):
+    """Real git and CLI; a harness stands in for the Beads graph and sync."""
+
+    def test_sweep_deletes_only_trees_nothing_needs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            repo, origin = root / "repo", root / "origin.git"
+            sh(["git", "init", "-q", "--bare", "-b", "master", str(origin)], root)
+            sh(["git", "init", "-q", "-b", "master", str(repo)], root)
+            sh(["git", "config", "user.email", "test@example.com"], repo)
+            sh(["git", "config", "user.name", "Test"], repo)
+            slow = shlex.join([Path(sys.executable).as_posix(), "-c", "pass"])
+            (repo / ".enact.toml").write_text(f"[checks]\nslow = {json.dumps(slow)}\n")
+            (repo / ".gitignore").write_text("/.worktrees/\n")
+            sh(["git", "add", "."], repo)
+            sh(["git", "commit", "-qm", "initial"], repo)
+            sh(["git", "remote", "add", "origin", str(origin)], repo)
+            sh(["git", "push", "-q", "origin", "HEAD:master", "HEAD:staging"], repo)
+            sh(["git", "fetch", "-q", "origin"], repo)
+            (repo / ".beads").mkdir()
+            harness = root / "harness.py"
+            harness.write_text(
+                "import runpy, sys\n"
+                f"module = runpy.run_path({str(SCRIPT)!r}, run_name='sweep_test')\n"
+                "namespace = module['main'].__globals__\n"
+                "namespace['Beads'].all = lambda self: [\n"
+                "    {'id': 'done', 'status': 'closed'}, {'id': 'dirty', 'status': 'closed'},\n"
+                "    {'id': 'ahead', 'status': 'closed'}, {'id': 'open', 'status': 'open'}]\n"
+                "namespace['sync'] = lambda repo: {}\n"
+                "sys.exit(module['main']())\n"
+            )
+
+            def enact(*args, cwd=repo):
+                return json.loads(sh([sys.executable, str(harness), *args], cwd))
+
+            trees = repo / ".worktrees"
+
+            def tree(name, *branch):
+                path = trees / name
+                sh(["git", "worktree", "add", "-q", *branch, str(path), "origin/staging"], repo)
+                return path
+
+            for name in ("done", "dirty", "ahead", "open", "stray"):
+                tree(name, "-b", f"enact/{name}")
+            (trees / "dirty" / "notes.log").write_text("scratch")
+            sh(["git", "commit", "-q", "--allow-empty", "-m", "unpushed"], trees / "ahead")
+            tree("human", "-b", "feature")
+            sh(["git", "worktree", "lock", "--reason", "initializing",
+                str(tree("ci-0123456789ab", "--detach"))], repo)
+            tree("pool/spare", "--detach")  # a hook's pool of ready trees
+            old = time.time() - 2 * 3600
+            for name, marker in (("stale", "obj/out.dll"), ("lost", ".git"),
+                                 (".cache", "x"), ("pool", "x"), ("fresh", "x")):
+                (trees / name / marker).parent.mkdir(parents=True, exist_ok=True)
+                (trees / name / marker).write_text("gitdir: /missing\n")
+                if name != "fresh":
+                    os.utime(trees / name, (old, old))
+            (trees / "build.log").write_text("log")
+
+            # Delivery reports a tree it keeps rather than leaving it silently.
+            stray = trees / "stray"
+            sh(["git", "commit", "-q", "--allow-empty", "-m", "delivered"], stray)
+            (stray / "capture.log").write_text("scratch")
+            pushed = enact("push", "--no-ci", cwd=stray)
+            self.assertTrue(pushed["pushed"])
+            self.assertIn("untracked files", pushed["kept_worktree"])
+
+            swept = enact("worktree", "prune")
+            self.assertEqual(sorted(Path(p).name for p in swept["removed"]), ["done", "stale"])
+            self.assertEqual(sorted(Path(p).name for p in swept["kept"]), [
+                ".cache", "ahead", "ci-0123456789ab", "dirty", "fresh", "human", "lost",
+                "open", "pool", "stray"])
+            self.assertEqual(sh(["git", "branch", "--list", "enact/done"], repo), "")
+            self.assertTrue((trees / "build.log").exists())
+            # Only the runner, under its lock, removes its dead trees.
+            self.assertTrue((trees / "ci-0123456789ab").exists())
+            enact("ci")
+            self.assertFalse((trees / "ci-0123456789ab").exists())
+            self.assertTrue((trees / "dirty").exists())
+
+
 class Machine:
     """One clone of the project, with its own host and session identity."""
 
@@ -960,6 +1042,7 @@ class ParallelScenarios(unittest.TestSuite):
 def load_tests(loader, standard_tests, pattern):
     return ParallelScenarios([
         *loader.loadTestsFromTestCase(CiLifetimeTest),
+        *loader.loadTestsFromTestCase(WorktreeSweepTest),
         *loader.loadTestsFromTestCase(EnactTest),
     ])
 

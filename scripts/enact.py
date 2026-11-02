@@ -60,6 +60,9 @@ TITLE_NOTICE = (
     "`⛔ <same summary>` if you stop without finishing."
 )
 WINDOWS = os.name == "nt"
+# Seconds a directory git does not track must sit untouched before the
+# worktree sweep deletes it, so it never races a tree being created.
+SWEEP_AGE = 3600
 
 
 class Fail(Exception):
@@ -1315,16 +1318,23 @@ def fetch(repo: Repo, check: bool = True) -> dict[str, str]:
     return track_local_branches(repo)
 
 
+def worktree_entries(repo: Repo) -> list[dict[str, str]]:
+    """Parse `git worktree list --porcelain`: one dict per worktree, keyed
+    by attribute (`worktree`, `HEAD`, `branch`, `detached`, `locked`, ...)."""
+    entries: list[dict[str, str]] = []
+    for line in repo.git("worktree", "list", "--porcelain", cwd=repo.main).splitlines():
+        key, _, value = line.partition(" ")
+        if key == "worktree":
+            entries.append({})
+        if entries and key:
+            entries[-1][key] = value
+    return entries
+
+
 def checked_out_branches(repo: Repo) -> dict[str, Path]:
     """Map each branch ref checked out in a worktree to that worktree."""
-    found: dict[str, Path] = {}
-    path = None
-    for line in repo.git("worktree", "list", "--porcelain", cwd=repo.main).splitlines():
-        if line.startswith("worktree "):
-            path = Path(line[len("worktree "):])
-        elif line.startswith("branch ") and path:
-            found[line[len("branch "):]] = path
-    return found
+    return {entry["branch"]: Path(entry["worktree"])
+            for entry in worktree_entries(repo) if "branch" in entry}
 
 
 def track_branch(repo: Repo, branch: str, checkout: Path | None) -> str:
@@ -1410,9 +1420,114 @@ def remove_worktree(repo: Repo, path: Path, branch: str | None) -> None:
             raise Fail("worktree remove hook failed")
         return
     repo.git("worktree", "remove", "--force", str(path), cwd=repo.main, check=False)
+    # A build server still writing output can refill a tree as git deletes
+    # it. Git no longer tracks what is left, so finish the job if possible;
+    # the sweep retries anything still in use.
+    if path.exists() and not any(Path(entry["worktree"]).resolve() == path.resolve()
+                                 for entry in worktree_entries(repo)):
+        with contextlib.suppress(OSError):
+            rmtree(path)
     if branch:
         repo.git("branch", "-D", branch, cwd=repo.main, check=False)
     repo.git("worktree", "prune", cwd=repo.main, check=False)
+
+
+def rmtree(path: Path) -> None:
+    """shutil.rmtree that also deletes read-only files (git's objects on Windows)."""
+    def writable(func: Any, target: str, _: Any) -> None:
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=writable)
+    else:
+        shutil.rmtree(path, onerror=writable)
+
+
+def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
+    """Delete worktrees nothing can still need; report what stays and why.
+
+    Bead trees go once their bead is closed and they hold no uncommitted,
+    untracked or unpublished work. Slow-CI trees go only for the caller
+    holding the CI lock, under which none can be live. Directories git no
+    longer tracks go after an hour untouched. Other branches, locked bead
+    trees, separate repositories and loose files are never touched.
+    """
+    root = repo.worktree_root().resolve()
+    if not root.is_dir():
+        return {"removed": [], "kept": {}}
+    repo.git("worktree", "prune", cwd=repo.main, check=False)
+    graph: list[dict[str, Any]] | None = None  # only closed beads release trees
+    if (repo.main / ".beads").is_dir():
+        with contextlib.suppress(Fail, OSError, ValueError):
+            graph = Beads(repo).all()
+    staging = repo.remote_ref(repo.config.staging)
+    removed: list[str] = []
+    kept: dict[str, str] = {}
+    registered = set()
+
+    def remove(path: Path, branch: str | None) -> None:
+        try:
+            remove_worktree(repo, path, branch)
+        except (Fail, OSError) as error:
+            kept[str(path)] = f"removal failed: {error}"
+            return
+        log(f"swept worktree {path}")
+        removed.append(str(path))
+
+    for entry in worktree_entries(repo):
+        path = Path(entry["worktree"])
+        registered.add(path.resolve())
+        if path.resolve().parent != root or not path.is_dir():
+            continue
+        branch = entry.get("branch", "").removeprefix("refs/heads/")
+        if path.resolve() == repo.top.resolve():
+            kept[str(path)] = "current checkout"
+        elif path.name.startswith("ci-") and "detached" in entry:
+            if not ci_trees:
+                kept[str(path)] = "the slow-CI runner sweeps its own trees"
+                continue
+            # A runner killed inside `git worktree add` leaves git's lock.
+            repo.git("worktree", "unlock", str(path), cwd=repo.main, check=False)
+            remove(path, None)
+        elif not branch.startswith("enact/"):
+            kept[str(path)] = "not an Enact branch"
+        elif "locked" in entry:
+            kept[str(path)] = "locked"
+        elif not (bead := next((b for b in graph or [] if b["id"] == path.name or
+                                meta(b, "enact_worktree") == str(path)), None)):
+            kept[str(path)] = "no bead" if graph is not None else "Beads unavailable"
+        elif bead.get("status") != "closed":
+            kept[str(path)] = f"bead {bead['id']} is {bead.get('status')}"
+        elif repo.git("status", "--porcelain", cwd=path, check=False):
+            kept[str(path)] = "uncommitted or untracked files"
+        elif not repo.git_ok("merge-base", "--is-ancestor", "HEAD", staging, cwd=path):
+            kept[str(path)] = f"commits not on {staging}"
+        else:
+            remove(path, branch)
+    # Hooks must still leave registered git worktrees (push and recovery run
+    # git in them), so anything else here is a leftover, unless it holds
+    # trees (a hook's pool) or is hidden (a hook's cache, say).
+    for path in sorted(root.iterdir()):
+        if path.resolve() in registered or not path.is_dir() or path.is_symlink():
+            continue
+        if path.name.startswith(".") or any(
+                tree.is_relative_to(path.resolve()) for tree in registered):
+            kept[str(path)] = "hidden or holds worktrees"
+        elif (path / ".git").exists():
+            # Another repository, or a checkout that lost its registration
+            # and may still hold edits git can no longer report.
+            kept[str(path)] = "has a .git this repository does not track; inspect by hand"
+        elif time.time() - path.stat().st_mtime < SWEEP_AGE:
+            kept[str(path)] = "changed within the last hour"
+        else:
+            try:
+                rmtree(path)
+            except OSError as error:
+                kept[str(path)] = f"removal failed: {error}"
+                continue
+            log(f"swept stray directory {path}")
+            removed.append(str(path))
+    return {"removed": removed, "kept": kept}
 
 
 def worktree_bead(repo: Repo, path: Path) -> dict[str, Any] | None:
@@ -1434,8 +1549,19 @@ def verified_worktree(repo: Repo, path: Path, branch: str) -> None:
         raise Fail(f"recovery worktree does not match recorded repository/branch: {path}", code=2)
 
 
-@serialized
 def cmd_worktree(args: argparse.Namespace) -> dict[str, Any]:
+    if args.action == "prune":
+        repo = find_repo()
+        fetch(repo, check=False)
+        # Slow-CI trees belong to the runner, which sweeps them under its lock.
+        return sweep_worktrees(repo, ci_trees=False)
+    if not args.name:
+        raise Fail(f"enact worktree {args.action} needs a name")
+    return bead_worktree(args)
+
+
+@serialized
+def bead_worktree(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     path = repo.worktree_root() / args.name
     branch = f"enact/{args.name}"
@@ -1639,10 +1765,15 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     in_enact_tree = (
         repo.top.resolve().parent == repo.worktree_root().resolve() and repo.top != repo.main
     )
-    if in_enact_tree and not args.keep and not repo.git("status", "--porcelain"):
-        os.chdir(repo.main)
-        remove_worktree(repo, repo.top, branch if branch.startswith("enact/") else None)
-        result["removed_worktree"] = str(repo.top)
+    if in_enact_tree and not args.keep:
+        if repo.git("status", "--porcelain"):
+            result["kept_worktree"] = (
+                f"{repo.top} has untracked files, so it was not deleted. Delete "
+                f"or move them, then run `enact worktree remove {repo.top.name}`.")
+        else:
+            os.chdir(repo.main)
+            remove_worktree(repo, repo.top, branch if branch.startswith("enact/") else None)
+            result["removed_worktree"] = str(repo.top)
     return result
 
 
@@ -1977,6 +2108,12 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
             return {"ran": results, "reason": "another runner holds the lock"}
         try:
             fetch(repo)
+            # No check can be live under the lock, so stale CI trees go too.
+            # Cleanup must never cost a check, so failures are only logged.
+            try:
+                sweep_worktrees(repo, ci_trees=True)
+            except (Fail, OSError) as error:
+                log(f"worktree sweep failed: {error}")
             promotion = retry_ci_promotion(repo)
             if promotion:
                 results.append(promotion)
@@ -2578,9 +2715,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--check-worker", help=argparse.SUPPRESS)
     p.add_argument("--coordinator", type=int, default=0, help=argparse.SUPPRESS)
 
-    p = add("worktree", cmd_worktree, "Create or remove a bead worktree cut from staging.")
-    p.add_argument("action", choices=["create", "remove"])
-    p.add_argument("name")
+    p = add("worktree", cmd_worktree,
+            "Create or remove a bead worktree cut from staging, or prune dead ones.")
+    p.add_argument("action", choices=["create", "remove", "prune"])
+    p.add_argument("name", nargs="?")
 
     p = add("justiciar", cmd_justiciar, "Manage the fleet-wide justiciar lock.")
     p.add_argument("action", choices=["status", "request", "acquire", "release", "break"])

@@ -73,7 +73,8 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   master`): rebase onto `origin/staging`, merge `origin/master` if it is not an
   ancestor (backstop for direct-to-master pushes), run fast checks,
   fast-forward push `HEAD:staging`, retry on rejection, start the slow-CI
-  runner, remove the worktree.
+  runner, remove the worktree (or report `kept_worktree` if untracked files
+  remain).
 - `enact ci --detach`: one coalescing runner per machine (PID lock in the git
   common dir). Loop: fetch, test the newest `origin/staging` tip, repeat until
   the tip equals the last tested SHA; re-check after releasing the lock. No
@@ -754,6 +755,35 @@ blindly recreate jobs or hand-edit scheduler databases.
   loop stops as deadlocked when only outside work blocks it, and edges do
   not cross Beads graphs. The waiter runs from the project that owns the
   beads. An unknown ID fails at once instead of waiting forever.
+
+## Worktree sweep (2026-11-02)
+
+- playlist_survivors had collected 21 worktree directories (32 GB) because
+  cleanup only ran on the happy path: a push from a clean tree, an explicit
+  `worktree remove`, a CI check that exited normally. Leftovers were
+  killed CI runs' trees, trees pushed with stray files, `bin`/`obj`
+  directories a build server recreated after git deleted the tree, and
+  agents' scratch logs.
+- The slow-CI runner sweeps every time it takes its lock: per machine,
+  after every push, and off every session's critical path. Under the lock
+  no check is live, so every `ci-*` tree goes, including ones git left
+  locked "initializing". `enact worktree prune` runs the same sweep by hand
+  (for projects without slow CI), minus `ci-*` trees.
+- An `enact/<bead>` tree goes only when its bead is closed and the tree has
+  no uncommitted, untracked or unpublished (not on `origin/staging`) work.
+  An unclosed bead, a branch outside `enact/` (hand-made, Codex) and a
+  locked tree are never touched, nor are loose files.
+- A directory under the root that git does not track goes after an hour
+  untouched, unless it is hidden, holds registered trees (a hook's pool) or
+  has its own `.git` (another repository, or a checkout that lost its
+  registration and may still hold edits git can no longer report). Hooks
+  must still leave registered git worktrees, as push and recovery already
+  require. The hour keeps the sweep from racing a tree being created.
+- `remove_worktree` deletes what a build server recreates while git deletes
+  the tree, once git no longer tracks it; the sweep retries anything still
+  in use. Push reports `kept_worktree` instead of silently keeping a tree
+  with untracked files, and agents keep scratch output out of their
+  worktree and the worktree root.
 
 ## Stale failures and load-sensitive checks (2026-10-30)
 

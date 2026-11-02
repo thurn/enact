@@ -82,6 +82,10 @@ paused, blocked, waiting on recovery). Never end on your role emoji.
   nothing new to push. On exit 2, fix what it reports (rebase conflicts,
   failing fast checks) in the same worktree and run it again. Resolving
   conflicts is your job.
+- Write scratch output (build logs, captures, probe scripts) to your
+  session's scratchpad or the system temp directory, never into the
+  worktree root or the main checkout. Untracked files in your worktree stop
+  `enact push` from deleting it; it then reports `kept_worktree`.
 - Slow CI runs after your push without you. Do not wait for it. A failure
   becomes a Steward bead linked to affected runs. The vizier keeps the run
   alive until all delivered commits, including repairs, reach green master;

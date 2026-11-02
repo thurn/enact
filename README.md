@@ -118,6 +118,7 @@ Dolt mode, and the `dolt` CLI (used to resolve Beads merge conflicts).
 | `next --epic E --parallel N --wait S` | Vizier step: reserve and spawn, archive, wait, done, deadlock |
 | `start BEAD` | Session takes over its reserved bead |
 | `worktree create\|remove NAME` | Worktree from `origin/staging` (hookable) |
+| `worktree prune` | Delete dead worktrees (slow CI does this on each run) |
 | `push [--bead B]` | Rebase, merge diverged master, fast checks, push to staging, start CI |
 | `close BEAD --reason R` | Close, auto-close finished epics, sync |
 | `claim BEAD`, `meta BEAD k=v`, `release BEAD` | Bead bookkeeping (always synced) |

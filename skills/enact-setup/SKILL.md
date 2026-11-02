@@ -58,7 +58,9 @@ Run from the project's main checkout.
    `create`/`remove` hook scripts and add them to `[worktree]` in
    `.enact.toml`. The hooks get `ENACT_WORKTREE_PATH`, `ENACT_BRANCH` (empty
    means detached), `ENACT_BASE_SHA` and `ENACT_REPO`, and fully replace
-   `git worktree add`/`remove`.
+   `git worktree add`/`remove`. Create must still leave a git worktree of
+   this repository at `ENACT_WORKTREE_PATH`: slow CI's sweep deletes other
+   directories under the root unless they are hidden or hold worktrees.
 6. **AGENTS.md.** Add an "Enact" section adapted from
    `$ENACT/templates/AGENTS.md` to the project's conventions and voice. Its
    rule that **every change**, not only Enact runs, goes through
