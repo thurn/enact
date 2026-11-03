@@ -1,5 +1,16 @@
 # Enact design decisions
 
+## Marshal status reachability (2026-11-03)
+
+`enact status` evaluates delivery for every epic, including completed runs
+whose commits may still await slow CI. On a busy project this previously
+launched a separate `git merge-base --is-ancestor` process for each commit
+and for repeated legacy Steward failure ranges. The Marshal saw no JSON for
+minutes and ended its scheduled sweep before it could inspect run state.
+For one status call, cache `git rev-list` reachability by tip and reuse it
+across all epics. Other delivery callers use the same logic with a local
+cache. A missing ref remains unreachable, as with the former ancestry check.
+
 ## Marshal sweep leases (2026-10-29)
 
 Named sweep locks are session-owned leases. A short-lived mutation lock

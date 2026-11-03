@@ -323,6 +323,33 @@ class ShellTest(unittest.TestCase):
 
 
 class GraphTest(unittest.TestCase):
+    def test_bulk_delivery_reuses_ancestry_and_keeps_legacy_repairs(self):
+        graph = [
+            {"id": "one", "issue_type": "epic"},
+            {"id": "first", "parent": "one", "metadata": {"enact_commits": "a b"}},
+            {"id": "two", "issue_type": "epic"},
+            {"id": "second", "parent": "two", "metadata": {"enact_commits": "a"}},
+            {"id": "repair", "labels": ["role:steward"], "status": "open",
+             "metadata": {"enact_ci_range": "a..b", "enact_commits": "c"}},
+        ]
+        histories = {"a": "a", "b": "a b", "master": "a"}
+        calls = []
+
+        def git(*args, **kwargs):
+            calls.append(args)
+            return histories[args[1]]
+
+        repo = types.SimpleNamespace(config=types.SimpleNamespace(master="master"),
+                                     remote_ref=lambda branch: branch, git=git)
+        ancestry = {}
+        first = enact.run_delivery(repo, graph, "one", ancestry)
+        second = enact.run_delivery(repo, graph, "two", ancestry)
+        self.assertEqual(first["pending"], ["b", "c"])
+        self.assertEqual(first["stewards"], ["repair"])
+        self.assertTrue(second["complete"])
+        self.assertEqual(calls, [("rev-list", "b"), ("rev-list", "a"),
+                                 ("rev-list", "master")])
+
     def test_descendants_are_transitive(self):
         graph = [
             {"id": "e"},

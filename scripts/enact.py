@@ -789,7 +789,17 @@ def bead_runs(bead: dict[str, Any], graph: list[dict[str, Any]]) -> list[str]:
     return list(dict.fromkeys(runs))
 
 
-def run_delivery(repo: Repo, graph: list[dict[str, Any]], epic: str) -> dict[str, Any]:
+def run_delivery(repo: Repo, graph: list[dict[str, Any]], epic: str,
+                 ancestry: dict[str, set[str]] | None = None) -> dict[str, Any]:
+    # Status checks every epic. Cache reachability by tip across those runs;
+    # one git process per commit/range made busy projects take minutes.
+    ancestry = ancestry if ancestry is not None else {}
+
+    def is_ancestor(sha: str, tip: str) -> bool:
+        if tip not in ancestry:
+            ancestry[tip] = set(repo.git("rev-list", tip, check=False).split())
+        return sha in ancestry[tip]
+
     scope = {epic, *(b["id"] for b in descendants(graph, epic))}
     members = [b for b in graph if b["id"] in scope or epic in bead_runs(b, graph)]
     # Failure ranges also recover links when delivery metadata arrived after
@@ -803,17 +813,15 @@ def run_delivery(repo: Repo, graph: list[dict[str, Any]], epic: str) -> dict[str
             if bead in members or role_of(bead) != "steward":
                 continue
             green, sep, tip = (meta(bead, "enact_ci_range") or "").partition("..")
-            if sep and any(repo.git_ok("merge-base", "--is-ancestor", sha, tip)
-                           and not repo.git_ok("merge-base", "--is-ancestor", sha, green)
+            if sep and any(is_ancestor(sha, tip)
+                           and not is_ancestor(sha, green)
                            for sha in commits):
                 legacy.append(bead)
         if not legacy:
             break
         members += legacy
     master = repo.remote_ref(repo.config.master)
-    pending = [sha for sha in commits if not repo.git_ok(
-        "merge-base", "--is-ancestor", sha, master
-    )]
+    pending = [sha for sha in commits if not is_ancestor(sha, master)]
     stewards = [b["id"] for b in members
                 if role_of(b) == "steward" and b.get("status") != "closed"]
     return {"commits": commits, "pending": pending, "stewards": stewards,
@@ -2308,7 +2316,8 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
         and meta(b, "enact_session")
         and meta(b, "enact_archived") != "true"
     ]
-    deliveries = {b["id"]: run_delivery(repo, graph, b["id"])
+    ancestry: dict[str, set[str]] = {}
+    deliveries = {b["id"]: run_delivery(repo, graph, b["id"], ancestry)
                   for b in graph if b.get("issue_type") == "epic"}
     active_runs = []
     for bead in graph:
