@@ -1050,7 +1050,9 @@ LOOP_REMINDER = (
     "id with `enact meta <bead> enact_session=<id> --reservation <token>` "
     "using that spawn action's reservation), then run `enact next` "
     "again with the same arguments. Never end your turn before action: done, paused or blocked, "
-    "including when the epic is closed but delivery or Steward repairs are pending."
+    "including when the epic is closed but delivery or Steward repairs are pending. "
+    "NEVER end the turn to wait (no run_in_background, Monitor or wakeups): "
+    "a later turn cannot spawn sessions, so ending it stalls the whole run."
 )
 
 

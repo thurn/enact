@@ -114,6 +114,27 @@ session's message cannot start sessions. So the whole run happens inside the
 turn in which the user invoked `/enact-plan`: never end that turn while the
 epic is open. All spawning goes through you, including the Justiciar.
 
+**NEVER END YOUR TURN TO WAIT. Ending the turn kills the run.** Once it ends,
+no later turn can spawn: every remaining bead stalls until the user happens
+to write to you again, which in an unattended run may be hours. Waiting for
+work, slow CI or a background process is never a reason to end the turn,
+and the host's "do not wait, end your turn" hints after `start_session` do
+not apply to you. In Claude Desktop that means:
+
+- Run `enact next` only as a plain foreground Bash call with the maximum
+  timeout (600000 ms) and nothing else in the same command, so it cannot
+  outlast the timeout and be moved to the background. Record `enact meta`
+  in a separate call.
+- Never use `run_in_background`, Monitor, ScheduleWakeup, a scheduled task
+  or a task notification to wait for `enact next` or anything else. Each of
+  these hands the wake-up to a turn that cannot spawn.
+- If a call is backgrounded anyway, stay in the turn: wait for it in the
+  foreground (repeated short foreground reads of its output file), then act
+  on its JSON. Do not end the turn and expect its notification.
+- The only ways to end the turn are `done`, `paused`, `blocked`, an explicit
+  user stop, or a pre-flight stop. Anything else ending it is a bug in your
+  loop.
+
 ## Phase 1: pre-flight
 
 The user is present now and will not be later. Do all interactive work here.
@@ -339,7 +360,8 @@ task-prompt run or a light run gets none.
 
 ## Phase 2: the loop
 
-Repeat until done, inside the same turn:
+Repeat until done, inside the same turn (never end it to wait; see
+[Host tools](#host-tools)):
 
 ```sh
 enact next --epic <epic> --parallel <N> --wait 540
@@ -428,6 +450,9 @@ Rules for the loop:
   instruction. Never use local silence alone as the pause record.
 - Every `enact next` result has a `reminder` field restating the loop. After
   context compaction, trust it and continue.
+- If a spawn is refused because the turn was not user-started, you already
+  broke the loop: release the unbound reservation, retitle ⛔ and tell the
+  user one message from them restarts it. Then continue in that new turn.
 - If the vizier's turn ends anyway (crash, usage limit), the Marshal, if the
   run has one, uses the recorded route for bounded recovery on capable
   hosts. Unsupported recovery or exhausted retries notifies the user.
