@@ -214,6 +214,11 @@ filing anything, list every stoppage risk in the plan:
 - credentials, accounts, payments or access that agents do not have;
 - external parties: waiting on someone, a release window, a deploy;
 - anything irreversible or outward-facing the user has not authorized.
+- bars judged on samples (seeded games, LLM reviewers, benchmarks) that
+  demand perfection on a handful of cases ("5 games, zero mistakes"): agents
+  tune to the samples and never converge. Agree held-out inputs chosen after
+  the last change, a pass rate (e.g. 7 of 10), and a fallback after a fixed
+  number of failed rounds.
 
 Resolve each risk with the user now: get the decision, record a default, or
 cut the step from scope. Ask one question at a time with your recommendation.

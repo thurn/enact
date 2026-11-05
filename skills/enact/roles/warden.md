@@ -53,6 +53,11 @@ Go beyond ordinary code review. Ask:
   the change pushed a suite over budget, bring it back: refactor slow tests
   to a faster strategy (smaller fixtures, testing the unit directly, shared
   setup) or delete them. Never keep a slow test "just in case".
+- **Expensive reruns.** Reproduce long measurements (tournaments, sweeps,
+  benchmarks that take many minutes) only where they gate acceptance, and on
+  fresh inputs when the original ones could have been tuned to. Rerunning a
+  reported-only figure adds an hour of waiting, not confidence; check its
+  method and inputs instead.
 - **Design.** Would a different model make whole categories of checks
   unnecessary? Look for duplicated or derivable state, illegal states the
   types allow, nullable modes and boolean flags, responsibilities in the wrong
