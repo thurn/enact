@@ -76,6 +76,10 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   minutes, overridable in a project's `AGENTS.md`. Wardens and Masons
   enforce it by refactoring slow tests to faster strategies or deleting
   them; slow tests are never kept "just in case".
+- The slow-CI runner kills a slow check's whole process tree after
+  `[checks] slow_timeout` seconds (default 3600) and reports a failure, so a
+  hang (a stuck exec, a server never stopped) files a Steward bead instead of
+  holding `master` back indefinitely. Budgets stay the project's to enforce.
 
 ## Git flow
 

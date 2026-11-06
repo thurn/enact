@@ -21,6 +21,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -215,6 +216,8 @@ def require_actor(explicit: str | None) -> str:
 
 # Worktrees live inside the main checkout, ignored by git.
 DEFAULT_WORKTREE_ROOT = ".worktrees"
+# Far above the ~5 minute slow-check budget, so only a hang reaches it.
+DEFAULT_SLOW_TIMEOUT = 3600
 
 
 @dataclass(frozen=True)
@@ -224,6 +227,9 @@ class Config:
     master: str = "master"
     fast: str | None = None
     slow: str | None = None
+    # A hung slow check must fail, not hold master back forever (a stuck exec once held it
+    # 42 minutes): the runner kills it after this many seconds.
+    slow_timeout: int = DEFAULT_SLOW_TIMEOUT
     worktree_root: str = DEFAULT_WORKTREE_ROOT
     worktree_create: str | None = None
     worktree_remove: str | None = None
@@ -240,6 +246,7 @@ class Config:
             master=data.get("master_branch", "master"),
             fast=checks.get("fast") or None,
             slow=checks.get("slow") or None,
+            slow_timeout=int(checks.get("slow_timeout") or DEFAULT_SLOW_TIMEOUT),
             worktree_root=worktree.get("root", DEFAULT_WORKTREE_ROOT),
             worktree_create=worktree.get("create") or None,
             worktree_remove=worktree.get("remove") or None,
@@ -2198,6 +2205,39 @@ def ci_check_worker(repo: Repo, tip: str, coordinator: int) -> dict[str, Any]:
             write_json(lock, coordinator)
 
 
+def run_bounded(command: str, cwd: Path, timeout: int) -> tuple[int, str]:
+    """Run a project-configured check, its output as one stream, killing its whole process
+    tree once `timeout` seconds pass: a hung grandchild (a stuck exec, a server never told to
+    stop) fails the check instead of holding the runner. Returns (exit code, output)."""
+    args, shell = shell_args(command)
+    group: dict[str, Any] = (
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS
+        else {"start_new_session": True}
+    )
+    proc = subprocess.Popen(
+        args, shell=shell, cwd=cwd, text=True, encoding="utf-8", errors="replace",
+        # One stream, in order: the log tail must end where the check failed.
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, **group,
+    )
+    try:
+        output, _ = proc.communicate(timeout=timeout)
+        return proc.returncode, output or ""
+    except subprocess.TimeoutExpired:
+        if WINDOWS:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, check=False)
+        else:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(proc.pid, signal.SIGKILL)
+        try:
+            output, _ = proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:  # a descendant left the group and holds the pipe
+            proc.kill()
+            output = ""
+        note = f"enact: killed the check after {timeout} s (slow_timeout); it hung or ran away"
+        return 124, f"{output or ''}\n{note}\n"
+
+
 def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
     cfg = repo.config
     green = repo.git("rev-parse", repo.remote_ref(cfg.master), cwd=repo.main, check=False) or "?"
@@ -2217,18 +2257,12 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
     started = time.monotonic()
     log(f"slow CI on {tip[:12]} in {path} at {now()}")
     try:
-        args, shell = shell_args(cfg.slow)
-        proc = subprocess.run(
-            args, shell=shell, cwd=path, text=True, encoding="utf-8", errors="replace",
-            # One stream, in order: the log tail must end where the check failed.
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-        )
+        returncode, output = run_bounded(cfg.slow, path, cfg.slow_timeout)
     finally:
         remove_worktree(repo, path, None)
     seconds = round(time.monotonic() - started)
-    output = proc.stdout or ""
     sys.stderr.write(output[-20000:])
-    if proc.returncode == 0:
+    if returncode == 0:
         write_json(promotion, {"tip": tip})
         advanced = ci_pass(repo, tip)
         if advanced:

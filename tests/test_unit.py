@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 from pathlib import Path
@@ -290,6 +291,31 @@ class ConfigTest(unittest.TestCase):
         self.assertIsNone(cfg.worktree_remove)
         self.assertEqual(cfg.role_settings("warden", "claude"), {"model": "opus", "effort": "max"})
         self.assertEqual(cfg.role_settings("warden", "codex"), {})
+        self.assertEqual(cfg.slow_timeout, enact.DEFAULT_SLOW_TIMEOUT)
+        self.assertEqual(enact.Config.parse("[checks]\nslow_timeout = 900\n").slow_timeout, 900)
+
+
+class RunBoundedTest(unittest.TestCase):
+    def test_output_and_exit_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out = enact.run_bounded("echo hi; exit 3", Path(tmp), 30)
+        self.assertEqual((code, out.strip()), (3, "hi"))
+
+    @unittest.skipIf(enact.WINDOWS, "process groups are POSIX here")
+    def test_a_hung_check_is_killed_with_its_descendants(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = Path(tmp) / "pid"
+            started = time.monotonic()
+            code, out = enact.run_bounded(f"echo before; sleep 60 & echo $! > {pidfile}; wait",
+                                          Path(tmp), 1)
+            self.assertLess(time.monotonic() - started, 20)
+            self.assertEqual(code, 124)
+            self.assertIn("before", out)
+            self.assertIn("slow_timeout", out)
+            grandchild = int(pidfile.read_text())
+            time.sleep(0.2)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(grandchild, 0)
 
 
 class ShellTest(unittest.TestCase):
