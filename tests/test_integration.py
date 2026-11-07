@@ -940,7 +940,10 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         step = self.a.enact("next", "--epic", epic)
         self.assertEqual(step["action"], "wait")
         self.assertIn(repaired["staging"], step["delivery"]["pending"])
+        # That `next` may have started a detached runner; under load it can
+        # still hold the lock, so wait for whichever runner tests the repair.
         self.a.enact("ci")
+        self.wait_for_ci(self.a)
         step = self.a.enact("next", "--epic", epic)
         self.assertEqual(step["action"], "done")
         self.assertTrue(step["delivery"]["complete"])
