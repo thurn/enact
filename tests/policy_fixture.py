@@ -20,7 +20,7 @@ class PolicyWorld:
         self.stack = contextlib.ExitStack()
         self.path = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         self.repo = module.Repo(self.path, self.path, self.path / ".git", module.Config())
-        self.graph, self.dependencies = {}, {}
+        self.graph, self.dependencies, self.comments = {}, {}, {}
         for name, kwargs in (
             ("find_repo", {"return_value": self.repo}),
             ("Beads", {"return_value": self}),
@@ -46,12 +46,18 @@ class PolicyWorld:
         return bead
 
     def show(self, bead):
-        return json.loads(json.dumps(self.graph[bead]))
+        row = json.loads(json.dumps(self.graph[bead]))
+        row["dependencies"] = [
+            {"id": dep, "title": self.graph[dep]["title"], "dependency_type": "blocks"}
+            for dep in self.dependencies.get(bead, [])]
+        return row
 
     def all(self):
         return [self.show(bead) for bead in self.graph]
 
     def json(self, *args):
+        if args[0] == "comments":
+            return [{"text": text} for text in self.comments.get(args[1], [])]
         assert args == ("ready", "-n", "0", "--exclude-type", "epic", "--unassigned"), args
         return [bead for bead in self.all() if bead["status"] == "open"
                 and bead["issue_type"] != "epic" and not bead["assignee"]
@@ -69,6 +75,7 @@ class PolicyWorld:
     def run(self, command, bead, *args, actor=None):
         if command == "comments":
             assert bead == "add", (command, bead, args)
+            self.comments.setdefault(args[0], []).append(args[1])
             return ""
         row = self.graph[bead]
         if command == "close":

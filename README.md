@@ -105,6 +105,8 @@ root = ".worktrees"   # inside the checkout; gitignored
 # remove = "scripts/enact-worktree remove"
 [roles.warden.claude]
 effort = "max"
+[tiers.light.claude]  # beads labeled tier:light (mechanical work)
+model = "sonnet"
 ```
 
 Requirements: git, Python 3.11+, Beads (`bd`) 1.2+ in its default embedded
@@ -121,7 +123,8 @@ Dolt mode, and the `dolt` CLI (used to resolve Beads merge conflicts).
 | `worktree create\|remove NAME` | Worktree from `origin/staging` (hookable) |
 | `worktree prune` | Delete dead worktrees (slow CI does this on each run) |
 | `push [--bead B]` | Rebase, merge diverged master, fast checks, push to staging, start CI |
-| `close BEAD --reason R` | Close, auto-close finished epics, sync |
+| `close BEAD --reason R [--continue]` | Close, auto-close finished epics, sync; `--continue` claims the bead's next lane bead |
+| `brief BEAD` | One-read working context: bead, epics, dependency handoffs, lane |
 | `claim BEAD`, `meta BEAD k=v`, `release BEAD` | Bead bookkeeping (always synced) |
 | `sync` | Commit, merge (remote wins on conflict) and push Beads |
 | `ci [--detach\|--status\|--wait SHA]` | Coalescing slow-CI runner; watch one delivery |

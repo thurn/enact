@@ -9,3 +9,7 @@ slow = "python3 -m unittest -q tests.test_unit tests.test_integration"
 
 [worktree]
 root = ".worktrees"
+
+# Mechanical beads labeled `tier:light` run on a cheaper model.
+[tiers.light.claude]
+model = "sonnet"

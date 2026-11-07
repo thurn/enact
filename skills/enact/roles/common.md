@@ -1,10 +1,10 @@
 # Enact: common protocol for spawned sessions
 
 You are one session in an unattended Enact run. A vizier started you for one
-bead, and your role, given in your prompt, is fixed for the whole session.
-Nobody will answer questions: decide, act and record your reasoning on the
-bead. Enact roles are prompt files, not skills; never invoke a skill named
-after a role.
+bead (and, in a [lane](#lanes), the beads after it), and your role, given in
+your prompt, is fixed for the whole session. Nobody will answer questions:
+decide, act and record your reasoning on the bead. Enact roles are prompt
+files, not skills; never invoke a skill named after a role.
 
 `enact` means the helper command given in your prompt. Each subcommand prints
 one JSON object. Exit code 2 means you must act (resolve conflicts, fix
@@ -56,32 +56,40 @@ good, retitle first: `✅ [<bead>] <same summary>` when your work is done or
 there is nothing left for you (closed, obsolete, lost ownership), or
 `⛔ [<bead>] <same summary>` when you stop with work unfinished (released,
 paused, blocked, waiting on recovery). Never end on your role emoji.
-3. Read the bead in full (`bd show <bead> --json`), its parent epic, and the
-   beads it depends on. Read the project's `AGENTS.md`.
+3. Run `enact brief <bead>`: in one read it gives the bead with its
+   comments, its epics (the run epic holds the plan summary and code map),
+   each dependency's close reason, commits, touched files and handoff note,
+   and the other beads in its lane. Read the project's `AGENTS.md`.
 4. **Re-validate the bead.** It may have been planned days ago. If the code
    has moved on, adapt the plan to the code as it is now. If the bead is
    obsolete, close it with `enact close <bead> --reason "obsolete: ..."`. If it
    is too big, do the first coherent part and file the rest as new beads.
 
+## Context economy
+
+Every file you read stays in your context and is paid for again on every
+later step, so explore deliberately:
+
+- Start from the brief, the files the bead and its dependencies' handoffs
+  name, and any code map in `AGENTS.md` or the epic. Widen only when they
+  are not enough, and note on the bead what the planner missed.
+- Prefer `grep` and line ranges to whole files, and focused test runs to
+  full suites until you verify before pushing.
+- Read only your own role file and the sections of this one you need.
+
 ## Work
 
 - Create your worktree with `enact worktree create <bead>` and work only in
   the printed `path`. New trees start at `origin/staging`. `recovered: true`
-  means the prior owner explicitly released, or a routed lookup confirmed it
-  inactive. Inspect that tree's commits and edits against current staging;
-  preserve useful work and finish it. This is the authorized local handoff.
-  Remote replacements start at the latest pushed state; `enact_recovery`
-  retains the original host, path, branch, head and chat route. Never delete
-  that original work or edit an unassigned tree. Never edit the main checkout.
+  means you are taking over someone's work: follow `recovery.md` first.
+  Never edit the main checkout.
 - Follow `AGENTS.md` for conventions, commit style and test commands.
 - `enact push --bead <bead>` (run inside the worktree) rebases onto
   `origin/staging`, merges a diverged `master`, runs the fast checks, pushes,
-  appends the commits to your bead, starts the slow-CI runner from a durable
-  helper copy and deletes the worktree. If push succeeds but bookkeeping
-  fails, retry `enact push`: its receipt repairs metadata and CI even with
-  nothing new to push. On exit 2, fix what it reports (rebase conflicts,
-  failing fast checks) in the same worktree and run it again. Resolving
-  conflicts is your job.
+  records the commits on your bead, starts slow CI and deletes the worktree.
+  If push succeeds but bookkeeping fails, retry it: its receipt repairs
+  metadata and CI. On exit 2, fix what it reports (rebase conflicts, failing
+  fast checks) in the same worktree and run it again.
 - Write scratch output (build logs, captures, probe scripts) to your
   session's scratchpad or the system temp directory, never into the
   worktree root or the main checkout. Untracked files in your worktree stop
@@ -98,12 +106,22 @@ paused, blocked, waiting on recovery). Never end on your role emoji.
 - Use `enact` for ownership, start, close, release and assignment metadata;
   it fences stale sessions. Do not bypass a rejected operation with raw `bd`
   or git push. Use raw `bd ... --json` for other reads and writes, then
-  run `enact sync` to publish them to the Dolt remote. `enact claim` and
-  `enact close` sync
+  run `enact sync` to publish them; `enact claim` and `enact close` sync
   themselves. If `sync` reports dropped local values, another machine changed
   the same bead first; reapply your change only if it still makes sense.
 - Record decisions, surprises and deviations as comments on your bead
   (`bd comments add <bead> "..."`).
+
+## Lanes
+
+A `lane:<name>` label groups related beads that one session works one at a
+time, keeping what it learned. Deliver each bead on its own (worktree,
+push, handoff, close), closing with `--continue` ([Finish](#finish)). If
+the result has a `next` bead, it is already claimed for you: retitle to
+`[<next>]` (outside inline runs), run `enact brief` on it and work it from
+[Start](#start) step 4. When your context is already heavy (several beads
+in, or long debugging), close without `--continue`: a fresh session takes
+the rest of the lane.
 
 ## Follow-up beads
 
@@ -140,34 +158,23 @@ everything before you close your own bead, then run `enact sync`.
    are filed.
    If you made no code change, remove your worktree with
    `enact worktree remove <bead>`.
-2. `enact close <bead> --reason "<one-line outcome>"`.
-3. Retitle your session `✅ [<bead>] <same summary>`.
-4. End your turn with a short summary: what changed, surprises, follow-ups
+2. Leave a handoff for whoever builds on or reviews your work:
+   `bd comments add <bead> "Handoff: <files and functions touched, decisions,
+   gotchas, what a reviewer should check>"`. A few lines; `enact brief`
+   shows it to every dependent bead.
+3. `enact close <bead> --reason "<one-line outcome>"`, adding `--continue`
+   in a [lane](#lanes). If it returns a `next` bead, work that one now.
+4. Retitle your session `✅ [<bead>] <same summary>`.
+5. End your turn with a short summary: what changed, surprises, follow-ups
    filed. Do not archive yourself; the vizier does that.
 
 ## When things go wrong
 
 - **Ordinary difficulty is not a blocker.** Failing tests, confusing code,
   merge conflicts and flaky checks are your job. Keep working.
-- **Genuinely impossible acceptance:** preserve the open requirement and
-  request Justiciar recovery with the evidence. Do not close it as delivered
-  or repeatedly release it for replacements. After exhausted recovery the
-  Justiciar records `enact run block <epic> --exhausted --reason "<exact
-  missing access or decision>"`; the unfinished beads and work stay intact.
-- **Emergency** (the Beads database is gone or corrupt, the remote rejects
-  every push, disk is full, a core tool is broken for everyone): run
-  `enact justiciar request --reason "<what is broken, evidence>"`. Exit 3
-  prints the existing holder; add your evidence as a comment on its bead if
-  it names one, or `send_message` to its session if it is on this machine.
-  Then keep doing whatever useful work remains, or wait: the vizier spawns the
-  Justiciar and it may message you. "Tests are broken" is never an emergency.
-- **Resumed after an interruption** (usage limit, crash, a Marshal nudge):
-  check `bd show <bead>`, `enact status` and your worktree. Continue only if
-  you still own the bead and its run is active; otherwise preserve all files
-  and end the turn (⛔). A shared pause lets already running workers finish,
-  but never authorizes a stopped worker to restart. Only explicit user
-  resume clears paused or blocked state; never clear it as automatic
-  recovery.
+- **Impossible acceptance, an emergency** (Beads database gone or corrupt,
+  every push rejected, disk full, a core tool broken for everyone) **or a
+  resume after an interruption**: read `recovery.md` and follow it.
 - Never wait for a human, never end your turn mid-task to ask a question, and
   never leave your bead in progress when you stop for good. If you truly
   cannot continue in an active run, comment the exact state and run

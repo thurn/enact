@@ -151,8 +151,9 @@ and Beads writes and unmodified older helpers remain outside that protocol.
 - Decomposition: full graph up front or rolling milestones, at the vizier's
   discretion; "decompose milestone N" beads go to the executor role. Agents
   re-validate stale beads against current code.
-- Warden default: one Warden bead per substantial implementation bead (small
-  related beads batched); code-dependent work depends on the Warden bead.
+- Warden default: one Warden bead per lane or milestone area, per bead only
+  for risky changes (see Token economy); code-dependent work depends on the
+  Warden bead.
 - Milestones are child epics. Mason/Sage audits are "gate" epics blocking the
   next milestone epic (beads only lets epics block epics; a blocked epic hides
   its children from `bd ready`). Important findings become children of the
@@ -823,3 +824,47 @@ blindly recreate jobs or hand-edit scheduler databases.
   positive, which is strong evidence it is worthless. Stewards very
   seriously consider deleting such a test rather than repairing it, and
   repair it only when it guards behavior nothing else covers.
+
+## Token economy (2026-11-07)
+
+- With prompt caching, a session costs roughly its context size times its
+  turns. The expensive part is each fresh session rediscovering the code it
+  touches, paid again for every bead, Warden and cold reviewer, while the
+  planner had already read that code. The changes below move knowledge
+  forward instead of rediscovering it, without giving up fresh-context
+  review.
+- **Lanes.** A `lane:<name>` label groups related beads of one role that one
+  session works in priority order, delivering and closing each on its own.
+  `enact close --continue` claims the lane's next ready bead for the same
+  session under the ownership lock, copying the run, vizier, routing and
+  session metadata with a fresh reservation token, so the vizier counts it
+  as in flight and the Marshal can route recovery to it. The scheduler
+  starts no session on a lane bead while another bead of that lane is
+  assigned, and neither `enact next` nor `enact status` lists a session for
+  archiving while it holds an open bead. A worker that stops chaining just
+  closes without `--continue`, and the rest of the lane goes to a fresh
+  session. Lanes need no ordering edges, so they add no deadlock risk.
+  Wardens are never in lanes. `/enact` accepts several bead IDs as a lane it
+  works itself.
+- **Context packets.** Bead descriptions name the files, helpers and tests
+  to touch and what need not be read; the run epic holds a short code map;
+  beads are sized by code locality rather than topic. The Archivist keeps a
+  project code map current.
+- **Handoffs and `enact brief`.** Workers leave a `Handoff:` comment before
+  closing. `enact brief <bead>` returns, in one read, the bead with its
+  comments, its epic chain, each blocking dependency's close reason,
+  commits, touched files and latest handoff, and its lane. It replaces
+  several verbose `bd show` calls at every session start; it does not sync,
+  since `start` and `claim` just did.
+- **Reviews.** One Warden per lane or milestone area by default, a per-bead
+  Warden only for risky changes. Wardens and inline cold reviewers keep a
+  fresh context for independence but read the touched files and what they
+  call rather than the codebase. The inline cold review runs on a cheaper
+  model unless the change is risky.
+- **Tiers.** A `tier:<name>` label selects `[tiers.<name>.<provider>]`
+  model settings in `.enact.toml`, overriding the role's. The vizier labels
+  mechanical beads `tier:light`; new projects get `light = sonnet` for
+  Claude. Project configuration counts as a user request for model
+  settings, so Codex applies spawn `settings` too.
+- **Lean shared protocol.** Recovery, takeover and emergency procedures
+  moved from `common.md` to `roles/recovery.md`, read only when needed.

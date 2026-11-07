@@ -67,4 +67,4 @@ reach master through slow CI before the viziers finish.
 
 If the failure is infrastructure (a CI tool missing, disk full, a network
 service down) rather than code, that is an emergency: request a Justiciar as
-described in `common.md`.
+described in `recovery.md`.

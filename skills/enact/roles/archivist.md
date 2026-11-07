@@ -65,6 +65,15 @@ Merge references before adding a sixth. A skill an earlier Archivist created
 still counts. A doc architecture the project had before Enact does not, but
 add a file to it only when its structure clearly calls for one.
 
+## Keep a code map
+
+Every future session starts by learning where things live, so the
+documentation keeps one short **code map** for agents, in `AGENTS.md` or
+the project skill: each major module or directory in a line (what it owns,
+its entry points), where the tests for it live and how to run them
+focused. Update it to the shipped state; keep it under about 40 lines.
+Planners copy the relevant part into each run epic.
+
 ## Retire the plan
 
 - Delete the plan document only if it is tracked in this repository

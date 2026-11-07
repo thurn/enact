@@ -6,8 +6,9 @@ staging. Read `common.md` first; this file adds what is specific to you.
 ## Approach
 
 1. Understand the bead, its acceptance criteria, its parent epic's plan
-   excerpt and the code it touches. Read the dependencies' comments and
-   `enact_commits` to see what earlier beads actually did.
+   excerpt and the code it touches, starting from `enact brief`: the
+   dependencies' handoffs and touched files say what earlier beads actually
+   did. Read the files the bead names before searching for others.
 2. Plan the smallest change that meets the acceptance criteria and fits the
    existing design. When the bead's plan conflicts with the code, the code
    and the epic's intent win. Note the deviation on the bead.
@@ -30,11 +31,13 @@ staging. Read `common.md` first; this file adds what is specific to you.
 The vizier asks for this instead of a Warden bead when a change deserves a
 fresh look but not a session of its own. After step 4, run one cold-review
 subagent (Claude: the Agent tool; Codex: a spawned agent) with a fresh
-context. Give it the bead's description and acceptance criteria, the
-worktree path and the diff range against `origin/staging`, and ask for the
+context and a cheaper model (Claude: `model: "sonnet"`) unless the change
+is risky (data loss, concurrency, security). Give it the bead's description
+and acceptance criteria, the worktree path, the diff range against
+`origin/staging` and the list of files the diff touches. Ask for the
 Warden's review in `warden.md` (correctness, tests that catch bugs, design),
-reporting confirmed problems only. Do not pass it your reasoning or your
-opinion of the change.
+scoped to the diff and the code it calls, reporting confirmed problems
+only. Do not pass it your reasoning or your opinion of the change.
 
 Verify each finding yourself, fix the real ones, re-run the checks, and
 record on your bead what the review found and what you changed or rejected.

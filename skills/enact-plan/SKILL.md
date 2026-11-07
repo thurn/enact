@@ -19,7 +19,8 @@ the run starts.
 
 The invocation text is your input. It is one of:
 
-- a **bead ID**: execute that bead (an epic with all its descendants);
+- a **bead ID**: execute that bead (an epic with all its descendants), or
+  several bead IDs to execute together;
 - a **project plan document** (a path): audit it, decompose it into beads,
   execute them;
 - a **task prompt**: decompose it into a small graph, usually one executor
@@ -86,13 +87,14 @@ Use `create_thread` with `title`, the exact `prompt`, and this target:
 `{type: "project", projectId: <selected ID>, environment: {type: "local"}}`.
 Enact creates its own worktrees. Do not select cloud or app worktree mode.
 Omit `model` and `thinking` to use the user's defaults unless the invocation
-explicitly requests role model settings. Map an authorized `settings.model`
-to `model`, and `settings.effort` to `thinking`, using the current tool's
-supported combinations. If a preferred setting is unavailable, omit both
-and record the requested setting, default substitution and reason on the
-bead, then sync. An explicitly required model is a pre-flight blocker;
-never silently substitute. A definitive rejection can be retried once with
-defaults; uncertain creation must be reconciled before any second spawn.
+or the project's `.enact.toml` (the spawn action's `settings`) requests them.
+Map an authorized `settings.model` to `model`, and `settings.effort` to
+`thinking`, using the current tool's supported combinations. If a preferred
+setting is unavailable, omit both and record the requested setting, default
+substitution and reason on the bead, then sync. An explicitly required model
+is a pre-flight blocker; never silently substitute. A definitive rejection
+can be retried once with defaults; uncertain creation must be reconciled
+before any second spawn.
 
 Only a ready `threadId` is a worker identity. Retain returned `hostId` too.
 A `clientThreadId` means pending setup: never write it as `enact_session` or
@@ -168,6 +170,10 @@ The user is present now and will not be later. Do all interactive work here.
   its own. For a run of its own, create an epic titled after the bead, then
   `bd update <bead> --parent <new epic> --json`. Do not decompose it or add
   beads.
+- **Several beads**: the same, with one new epic holding them all. Beads
+  that touch related code form one lane (`bd label add <bead>
+  lane:<name>`; see [Build the graph](#build-the-graph)), worked in order by
+  one session.
 
 A [light run](#light-runs) adjusts the graph as described there. Then go to
 [Finish planning](#finish-planning).
@@ -232,18 +238,34 @@ Read enough of the codebase to decompose well. Then file the graph with raw
 
 - **One epic** for the run (`--type epic`) whose description holds the plan
   summary or task prompt, a link to the plan document, the decisions from the
-  audit, the role restrictions, and whole-run acceptance criteria. Leave
-  parallelism out.
+  audit, the role restrictions, whole-run acceptance criteria, and a short
+  **code map**: the modules the run touches, their entry points and test
+  commands. Leave parallelism out.
 - **Milestones** as child epics when the plan has phases. Milestone N+1
   depends on milestone N (or on its gate, below) with `bd dep add`.
-- **Beads** as children (`--parent`), each completable by one fresh session in
-  one sitting, with a standalone description, the relevant plan excerpt and
-  file pointers, `--acceptance` criteria an agent can verify, and `--priority`.
-  Give each its role label (`--labels role:<role>`); unlabeled beads are
-  executor beads.
+- **Beads** as children (`--parent`), each completable by one session in
+  one sitting, with `--acceptance` criteria an agent can verify,
+  `--priority` and a role label (`--labels role:<role>`; unlabeled beads
+  are executor beads). The description is a **context packet**, so the
+  worker starts where your reading ended instead of rediscovering it: the
+  relevant plan excerpt, the files and functions to change, existing
+  helpers to reuse, the tests to extend and how to run them, and what it
+  need not read.
+- **Size beads by code, not by topic.** Every session pays to learn the code
+  it touches, so work on the same module is one bead, or a lane.
 - **Dependencies** only where real (`bd dep add <dependent> <prerequisite>`).
   Unrelated work stays parallel. Two beads that would edit the same code
   non-additively get an ordering edge.
+- **Lanes**: label related beads of one role that touch
+  the same code `lane:<name>`, usually two to four executor beads. One
+  session works a lane in priority order, delivering and closing each bead
+  before claiming the next with `enact close --continue`; the helper starts
+  no other session on a lane while one holds it. Lanes need no ordering
+  edges of their own. Never put Wardens in lanes.
+- **Tiers**: label mechanical beads (renames, wiring a field through,
+  boilerplate tests, documentation edits) `tier:light`; the helper starts
+  them with the project's cheaper `[tiers.light]` model from `.enact.toml`.
+  Design work and every Warden, Mason and Sage keep the default.
 
 Decompose a plan fully up front by default. For a large or uncertain plan you
 may instead file concrete beads for the first milestone plus one executor
@@ -255,11 +277,12 @@ that milestone epic and gated on the previous milestone.
 For a plan, use every role unless AGENTS.md or the invocation restricts them:
 
 - **Executor** (`role:executor`, the default): implements.
-- **Warden** (`role:warden`): fresh review that fixes problems itself. By
-  default file one Warden bead per substantial implementation bead,
-  depending on it; batch small related beads under one Warden bead that
-  depends on all of them. Work that builds on that code depends on the Warden
-  bead; unrelated work does not.
+- **Warden** (`role:warden`): fresh review that fixes problems itself. A
+  Warden's cost is mostly learning the code, so by default file one Warden
+  per lane or per area of a milestone, depending on all its implementation
+  beads. Give a single bead its own Warden only when it is risky (data
+  loss, concurrency, security). Work that builds on that code depends on the
+  Warden bead; unrelated work does not.
 - **Mason** (`role:mason`): architecture audit at milestone boundaries; one
   pass at the end for a small project.
 - **Sage** (`role:sage`): process and tooling audit ("why was this slow?") at

@@ -17,6 +17,8 @@ session title always shows which role is working.
 The invocation text is your input. It is one of:
 
 - a **plain bead ID**: you are its Executor;
+- **several bead IDs**: you are their Executor, one at a time
+  ([Several beads](#several-beads));
 - an **epic ID**: you orchestrate its beads, one subagent per bead;
 - a **task prompt**: file one executor bead, then you are its Executor.
 
@@ -95,7 +97,9 @@ pushing when you are the Executor, and a Warden gives it after an Executor
 subagent pushes (subagents do not start subagents).
 
 The Warden always runs in a fresh subagent on its own bead, after the
-Executor has pushed. When no Warden bead exists yet, file one:
+Executor has pushed. One Warden covers related beads (several beads, a lane)
+together: most of its cost is learning the code. When no Warden bead exists
+yet, file one:
 
 ```sh
 bd create --title "Review <bead>: <summary>" --description "..." \
@@ -155,6 +159,21 @@ You implement it yourself, in this session.
 
 Then go to [Slow CI](#slow-ci).
 
+## Several beads
+
+You implement them yourself, in the order given, keeping what you learn
+from one for the next. That is the point: do not hand them to subagents.
+
+1. Label them one lane unless they share one already:
+   `bd label add <bead> lane:<name>` for each, then `enact sync`.
+2. For each bead in turn, as in [A plain bead](#a-plain-bead): claim it,
+   retitle `⚒️ [<bead>] ...`, work it as the Executor (read the role files
+   once) and close it. Skip a bead someone else holds (claim exit 3).
+3. Then decide [review](#review) once for all of them: a Warden bead that
+   depends on each.
+
+Then go to [Slow CI](#slow-ci).
+
 ## An epic
 
 Every bead in the epic runs in a subagent. You only pick, claim, title,
@@ -163,8 +182,9 @@ launch and check. Loop:
 1. `bd ready --parent <epic> --json`. Drop epics (gate epics close
    themselves), beads assigned to someone else, and beads whose
    `enact_host` or `enact_provider` metadata names another machine or
-   provider. Hold an Archivist bead until every other bead in the epic is
-   closed.
+   provider, and beads whose `lane:` label is shared by another open,
+   assigned bead (that lane's subagent will reach them). Hold an Archivist
+   bead until every other bead in the epic is closed.
 2. Nothing ready: if every descendant is closed, the epic is done. If open
    beads remain and no subagent of yours is running, the run is
    deadlocked or held elsewhere: report the open beads and stop (⛔).
@@ -173,9 +193,10 @@ launch and check. Loop:
    `enact claim <bead>` each; on exit 3 skip it.
 4. Title yourself with the running roles and launch one subagent per bead.
    The role is the bead's `role:` label (`executor` when unlabeled).
-5. When a subagent returns, check `bd show <bead> --json`. If the bead is
-   still open, read the subagent's summary and the bead's comments: if the
-   work can continue, launch one fresh subagent for the same bead; if not
+5. When a subagent returns, check `bd show <bead> --json` for its bead and
+   any lane beads it went on to claim. If one is still open, read the
+   subagent's summary and the bead's comments: if the work can continue,
+   launch one fresh subagent for the same bead; if not
    (or the second one also stops), comment the state on the bead, run
    `enact release <bead> --reason "..."`, and stop with a report (⛔).
 6. Outside a light run, a closed Executor bead labeled `review:inline` with
@@ -195,9 +216,10 @@ Codex: a spawned agent) and this prompt, filled in:
 > Read `<ROLES>/common.md` and then `<ROLES>/<role>.md` and follow them,
 > including the inline-run rules in `common.md`. The helper is
 > `<enact command>`; the project's main checkout is `<path>`. The bead is
-> already claimed for you. Work unattended: nobody will answer questions.
-> End with a short summary: outcome, each `staging` SHA you pushed, and any
-> follow-up beads you filed.
+> already claimed for you; if it has a `lane:` label, keep working its lane
+> with `enact close --continue`. Work unattended: nobody will answer
+> questions. End with a short summary: outcome per bead, each `staging` SHA
+> you pushed, and any follow-up beads you filed.
 
 Pass nothing else: no opinion of the work, no plan beyond the bead. Note
 each pushed `staging` SHA from the summary or the bead's `enact_commits`.

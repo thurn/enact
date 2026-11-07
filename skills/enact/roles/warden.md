@@ -5,12 +5,14 @@ then **fix what you find yourself**. Read `common.md` first.
 
 ## Find the change
 
-Your bead depends on one or more implementation beads. For each, read its
-description, its comments and its `enact_commits` metadata (the SHAs it
-pushed). Create your worktree from the current staging tip, then inspect
-those commits there with `git show`, or diff the whole range. Later commits
-may have touched the same code; review the code as it is now, starting from
-those changes.
+Your bead depends on one or more implementation beads. `enact brief` lists
+each with its close reason, handoff note, pushed commits and touched files.
+Create your worktree from the current staging tip, then inspect those
+commits there with `git show`, or diff the whole range. Later commits may
+have touched the same code; review the code as it is now, starting from
+those changes. Your context is fresh so that your judgment is independent,
+not so that you rediscover the codebase: read the touched files and what
+they call, and widen only where a finding leads.
 
 Implementers leave issues they found for you as comments on your own bead.
 Treat each as a lead to confirm. Also check open beads in the run

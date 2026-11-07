@@ -234,6 +234,7 @@ class Config:
     worktree_create: str | None = None
     worktree_remove: str | None = None
     roles: dict[str, Any] = field(default_factory=dict)
+    tiers: dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
     def parse(text: str) -> Config:
@@ -251,11 +252,18 @@ class Config:
             worktree_create=worktree.get("create") or None,
             worktree_remove=worktree.get("remove") or None,
             roles=data.get("roles", {}),
+            tiers=data.get("tiers", {}),
         )
 
-    def role_settings(self, role: str, host_provider: str) -> dict[str, str]:
-        entry = self.roles.get(role, {}).get(host_provider, {})
-        return {k: v for k, v in entry.items() if k in ("model", "effort") and v}
+    def role_settings(self, role: str, host_provider: str,
+                      tier: str | None = None) -> dict[str, str]:
+        """Model settings for a spawn: the role's, overridden by the bead's
+        `tier:<name>` label when the project configures that tier."""
+        settings: dict[str, str] = {}
+        for table, key in ((self.roles, role), (self.tiers, tier)):
+            entry = table.get(key, {}).get(host_provider, {}) if key else {}
+            settings.update({k: v for k, v in entry.items() if k in ("model", "effort") and v})
+        return settings
 
 
 @dataclass(frozen=True)
@@ -389,11 +397,15 @@ def meta(bead: dict[str, Any], key: str) -> str | None:
     return None if value in (None, "") else str(value)
 
 
-def role_of(bead: dict[str, Any]) -> str:
+def label_value(bead: dict[str, Any], prefix: str) -> str | None:
     for label in bead.get("labels") or []:
-        if label.startswith("role:"):
+        if label.startswith(prefix + ":"):
             return label.split(":", 1)[1]
-    return "executor"
+    return None
+
+
+def role_of(bead: dict[str, Any]) -> str:
+    return label_value(bead, "role") or "executor"
 
 
 def spawn_order(bead: dict[str, Any]) -> tuple[Any, ...]:
@@ -697,7 +709,13 @@ def cmd_close(args: argparse.Namespace) -> dict[str, Any]:
     if saved.get("status") != "closed":
         raise Fail("close lost during sync; recheck ownership", code=3)
     closed = close_finished_epics(repo)
-    return {"closed": args.bead, "epics_closed": closed, "sync": result}
+    report = {"closed": args.bead, "epics_closed": closed, "sync": result}
+    if args.continue_lane:
+        # Under the same lock, so a vizier on this host cannot reserve it first.
+        following = continue_lane(repo, beads, saved, actor)
+        report["next"] = following and {key: following.get(key) for key in (
+            "id", "title", "description", "acceptance_criteria", "labels")}
+    return report
 
 
 @serialized
@@ -753,6 +771,65 @@ def cmd_sync(args: argparse.Namespace) -> dict[str, Any]:
     return sync(find_repo())
 
 
+def handoff(comments: list[dict[str, Any]]) -> str | None:
+    """A finished bead's note for its successors: the latest comment starting
+    with "Handoff", else its latest comment."""
+    texts = [c.get("text") or "" for c in comments]
+    notes = [t for t in texts if t.lower().startswith("handoff")]
+    return (notes or texts or [None])[-1]
+
+
+def cmd_brief(args: argparse.Namespace) -> dict[str, Any]:
+    """Everything a session needs to start on a bead, in one compact read,
+    instead of several verbose `bd show` calls."""
+    repo = find_repo()
+    beads = Beads(repo)
+    bead = beads.show(args.bead)
+    graph = beads.all()
+    by_id = {b["id"]: b for b in graph}
+
+    def comments(bead_id: str) -> list[dict[str, Any]]:
+        return beads.json("comments", bead_id) or []
+
+    def files(bead: dict[str, Any]) -> list[str]:
+        found: list[str] = []
+        for sha in (meta(bead, "enact_commits") or "").split():
+            out = repo.git("diff-tree", "--no-commit-id", "--name-only", "-r", sha, check=False)
+            found += [f for f in out.splitlines() if f and f not in found]
+        return found
+
+    epics = []
+    parent = bead.get("parent")
+    while parent in by_id and len(epics) < 10:
+        epic = by_id[parent]
+        epics.append({k: epic.get(k) for k in ("id", "title", "description",
+                                               "acceptance_criteria", "labels")})
+        parent = epic.get("parent")
+    dependencies = []
+    for dep in bead.get("dependencies") or []:
+        if dep.get("dependency_type") == "parent-child":
+            continue
+        full = by_id.get(dep["id"], dep)
+        dependencies.append({
+            "id": dep["id"], "title": full.get("title"), "status": full.get("status"),
+            "role": role_of(full), "close_reason": full.get("close_reason"),
+            "commits": (meta(full, "enact_commits") or "").split(),
+            "files": files(full), "handoff": handoff(comments(dep["id"])),
+        })
+    return {
+        "bead": {**{k: bead.get(k) for k in (
+            "id", "title", "status", "priority", "assignee", "labels", "description",
+            "acceptance_criteria", "notes", "design")},
+            "commits": (meta(bead, "enact_commits") or "").split(),
+            "comments": [c.get("text") for c in comments(args.bead)]},
+        "epics": epics,
+        "dependencies": dependencies,
+        "lane": [{"id": b["id"], "title": b.get("title"), "status": b.get("status"),
+                  "assignee": b.get("assignee")}
+                 for b in sorted(graph, key=spawn_order) if same_lane(bead, b, graph)],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Vizier scheduling
 
@@ -794,6 +871,52 @@ def bead_runs(bead: dict[str, Any], graph: list[dict[str, Any]]) -> list[str]:
     if current.get("issue_type") == "epic":
         runs.append(current["id"])
     return list(dict.fromkeys(runs))
+
+
+# A lane continuation copies these so the vizier, Marshal and archive
+# bookkeeping see the next bead as the same session's work.
+LANE_CARRY = ("enact_run", "enact_vizier", "enact_spawn_host", "enact_spawn_provider",
+              "enact_spawn_app", "enact_spawn_project", "enact_session", "enact_actor")
+
+
+def same_lane(bead: dict[str, Any], other: dict[str, Any], graph: list[dict[str, Any]]) -> bool:
+    """Another bead with the same `lane:<name>` label in the same run."""
+    lane = label_value(bead, "lane")
+    return (bool(lane) and other["id"] != bead["id"] and label_value(other, "lane") == lane
+            and bool(set(bead_runs(bead, graph)) & set(bead_runs(other, graph))))
+
+
+def lane_held(bead: dict[str, Any], graph: list[dict[str, Any]]) -> bool:
+    """One session works a lane at a time, so its warm context carries over."""
+    return any(same_lane(bead, other, graph) and other.get("status") != "closed"
+               and other.get("assignee") for other in graph)
+
+
+def busy_sessions(graph: list[dict[str, Any]]) -> set[str]:
+    """Sessions still holding an open bead: never archive them."""
+    return {meta(b, "enact_session") or "" for b in graph
+            if b.get("status") != "closed" and b.get("assignee")} - {""}
+
+
+def continue_lane(repo: Repo, beads: Beads, closed: dict[str, Any],
+                  actor: str) -> dict[str, Any] | None:
+    """Claim the next ready bead of the closed bead's lane for the same session."""
+    if not label_value(closed, "lane"):
+        return None
+    graph = beads.all()
+    by_id = {b["id"]: b for b in graph}
+    ready = beads.json("ready", "-n", "0", "--exclude-type", "epic", "--unassigned") or []
+    options = [by_id.get(b["id"], b) for b in ready]
+    options = sorted((b for b in options
+                      if same_lane(closed, b, graph) and role_of(b) == role_of(closed)
+                      and targeted_here(b) and not stopped_runs(b, graph)), key=spawn_order)
+    carry = {key: meta(closed, key) or "" for key in LANE_CARRY if meta(closed, key)}
+    if meta(closed, "enact_reservation"):
+        carry["enact_reservation"] = uuid.uuid4().hex
+    for bead in options:
+        if claim(repo, bead["id"], actor, carry):
+            return beads.show(bead["id"])
+    return None
 
 
 def run_delivery(repo: Repo, graph: list[dict[str, Any]], epic: str,
@@ -1047,7 +1170,7 @@ def spawn_action(repo: Repo, bead: dict[str, Any], epic: str, vizier: str) -> di
         "reservation": meta(bead, "enact_reservation"),
         "title": session_title(role, bead),
         "prompt": spawn_prompt(role, bead, epic, vizier),
-        "settings": repo.config.role_settings(role, provider()),
+        "settings": repo.config.role_settings(role, provider(), label_value(bead, "tier")),
     }
 
 
@@ -1075,6 +1198,7 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
     if epic not in by_id:
         raise Fail(f"epic {epic} not found")
     mine = [b for b in graph if meta(b, "enact_vizier") == vizier]
+    busy = busy_sessions(graph)
     result: dict[str, Any] = {
         "epic": epic,
         "vizier": vizier,
@@ -1084,6 +1208,7 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
             for b in mine
             if b.get("status") == "closed"
             and meta(b, "enact_session")
+            and meta(b, "enact_session") not in busy
             and meta(b, "enact_archived") != "true"
         ],
         "reminder": LOOP_REMINDER,
@@ -1124,6 +1249,7 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
         and targeted_here(b)
         and not stopped_runs(b, graph, epic)
         and not (hold_archivist and role_of(b) == "archivist")
+        and not lane_held(by_id.get(b["id"], b), graph)
     ]
     candidates.sort(key=spawn_order)
     for bead in candidates:
@@ -2319,6 +2445,7 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
     graph = Beads(repo).all()
     here = host_name()
     ours = [b for b in graph if spawned_here(b, here, provider())]
+    busy = busy_sessions(graph)
     working = [
         {
             "bead": b["id"],
@@ -2350,6 +2477,7 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
         for b in ours
         if b.get("status") == "closed"
         and meta(b, "enact_session")
+        and meta(b, "enact_session") not in busy
         and meta(b, "enact_archived") != "true"
     ]
     ancestry: dict[str, set[str]] = {}
@@ -2607,6 +2735,12 @@ root = ".worktrees"   # inside the checkout; gitignored
 # create = "scripts/enact-worktree create"   # replaces `git worktree add`
 # remove = "scripts/enact-worktree remove"   # replaces `git worktree remove`
 
+# Model settings for spawned sessions, by role and by a bead's `tier:<name>`
+# label (a tier overrides its role). The vizier labels mechanical beads
+# `tier:light`; reviews and design work keep the default model.
+[tiers.light.claude]
+model = "sonnet"
+
 # [roles.warden.claude]
 # model = "opus"
 # effort = "max"
@@ -2711,6 +2845,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("bead")
     p.add_argument("--reason", required=True)
     p.add_argument("--actor")
+    p.add_argument("--continue", dest="continue_lane", action="store_true",
+                   help="then claim the next ready bead in this bead's lane")
+
+    p = add("brief", cmd_brief, "Print one bead's working context: bead, epics, "
+            "dependency handoffs and lane.")
+    p.add_argument("bead")
 
     p = add("meta", cmd_meta, "Set metadata key=value pairs on a bead and sync.")
     p.add_argument("bead")

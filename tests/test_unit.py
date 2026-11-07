@@ -282,6 +282,8 @@ class ConfigTest(unittest.TestCase):
             [roles.warden.claude]
             model = "opus"
             effort = "max"
+            [tiers.light.claude]
+            model = "sonnet"
             """
         )
         self.assertEqual(cfg.master, "main")
@@ -291,6 +293,10 @@ class ConfigTest(unittest.TestCase):
         self.assertIsNone(cfg.worktree_remove)
         self.assertEqual(cfg.role_settings("warden", "claude"), {"model": "opus", "effort": "max"})
         self.assertEqual(cfg.role_settings("warden", "codex"), {})
+        # A bead's tier overrides its role's model; unknown tiers change nothing.
+        self.assertEqual(cfg.role_settings("warden", "claude", "light"),
+                         {"model": "sonnet", "effort": "max"})
+        self.assertEqual(cfg.role_settings("executor", "claude", "heavy"), {})
         self.assertEqual(cfg.slow_timeout, enact.DEFAULT_SLOW_TIMEOUT)
         self.assertEqual(enact.Config.parse("[checks]\nslow_timeout = 900\n").slow_timeout, 900)
 
@@ -1033,6 +1039,56 @@ class CommandPolicyTest(unittest.TestCase):
         self.a.enact("close", second, "--reason", "done", session="exec-2")
         self.assertEqual(self.a.show(epic)["status"], "closed")
         self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "done")
+
+    def test_one_session_works_a_lane_and_is_archived_only_after_it(self):
+        epic = self.a.create("lanes", type="epic")
+        first = self.a.create("first", parent=epic, priority=1, labels="lane:cli,tier:light")
+        second = self.a.create("second", parent=epic, priority=2, labels="lane:cli")
+        other = self.a.create("other", parent=epic, priority=3)
+        self.a.repo = self.a.repo.__class__(
+            self.a.path, self.a.path, self.a.path / ".git",
+            enact.Config(tiers={"light": {"claude": {"model": "sonnet"}}}))
+        with mock.patch.object(enact, "find_repo", return_value=self.a.repo):
+            step = self.a.enact("next", "--epic", epic, "--parallel", "3")
+        self.assertEqual((step["bead"], step["settings"]), (first, {"model": "sonnet"}))
+        self.a.enact("meta", first, "enact_session=worker", "--reservation", step["reservation"])
+        self.start_worker(self.a, first, "worker")
+        # The rest of the lane waits for the session that holds it.
+        step = self.a.enact("next", "--epic", epic, "--parallel", "3")
+        self.assertEqual(step["bead"], other)
+        done = self.a.enact("close", first, "--reason", "done", "--continue", session="worker")
+        self.assertEqual(done["next"]["id"], second)
+        saved = self.a.show(second)
+        self.assertEqual((saved["assignee"], saved["metadata"]["enact_session"]),
+                         ("worker", "worker"))
+        self.assertEqual(saved["metadata"]["enact_vizier"], "sess-a")
+        step = self.a.enact("next", "--epic", epic, "--parallel", "3")
+        self.assertEqual((step["action"], step["archive"]), ("wait", []))
+        self.assertEqual(sorted(step["inflight"]), [second, other])
+        last = self.a.enact("close", second, "--reason", "done", "--continue", session="worker")
+        self.assertIsNone(last["next"])
+        step = self.a.enact("next", "--epic", epic, "--parallel", "3")
+        self.assertEqual(step["archive"], [{"bead": first, "session": "worker"},
+                                           {"bead": second, "session": "worker"}])
+
+    def test_brief_gathers_epics_dependency_handoffs_and_lane(self):
+        epic = self.a.create("run", type="epic", description="code map: cli.py")
+        done = self.a.create("done", parent=epic, labels="lane:cli")
+        work = self.a.create("work", parent=epic, labels="lane:cli",
+                             acceptance_criteria="it works")
+        self.a.bd("dep", "add", work, done)
+        self.a.graph[done].update(status="closed", close_reason="shipped")
+        self.a.bd("comments", "add", done, "Handoff: touched cli.py; beware X")
+        self.a.bd("comments", "add", done, "unrelated later note")
+        self.a.bd("comments", "add", work, "Warden lead: check Y")
+        brief = self.a.enact("brief", work)
+        self.assertEqual(brief["bead"]["acceptance_criteria"], "it works")
+        self.assertEqual(brief["bead"]["comments"], ["Warden lead: check Y"])
+        self.assertEqual([e["description"] for e in brief["epics"]], ["code map: cli.py"])
+        [dep] = brief["dependencies"]
+        self.assertEqual((dep["id"], dep["close_reason"], dep["handoff"]),
+                         (done, "shipped", "Handoff: touched cli.py; beware X"))
+        self.assertEqual([b["id"] for b in brief["lane"]], [done])
 
     def test_run_holds_recovery_budgets_and_explicit_resume(self):
         epic = self.a.create("acceptance needs new access", type="epic",
