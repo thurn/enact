@@ -485,6 +485,7 @@ class GraphTest(unittest.TestCase):
         self.assertIn(enact.EMOJI["executor"], enact.TITLE_NOTICE)
         root = enact.ENACT_ROOT
         for path in ("skills/enact/SKILL.md", "skills/enact-plan/SKILL.md",
+                     "skills/enact-sweep/SKILL.md",
                      "skills/enact/roles/common.md", "skills/enact/roles/marshal.md",
                      "skills/enact/roles/justiciar.md", "templates/AGENTS.md"):
             text = (root / path).read_text(encoding="utf-8")

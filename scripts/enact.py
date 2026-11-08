@@ -2695,7 +2695,7 @@ def link_dir(target: Path, link: Path) -> str:
     return "linked"
 
 
-SKILLS = ("enact", "enact-plan", "enact-setup")
+SKILLS = ("enact", "enact-plan", "enact-setup", "enact-sweep")
 # Skills Enact used to ship; install removes their now-dangling links.
 RETIRED_SKILLS = ("enact-intake",)
 

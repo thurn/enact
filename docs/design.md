@@ -276,8 +276,8 @@ and Beads writes and unmodified older helpers remain outside that protocol.
 - Skills linked per machine into user-level skill dirs (symlinks; junctions on
   Windows). `enact-setup` per project: beads init, dolt remote, staging
   branch, `.enact.toml`, AGENTS.md bullets.
-- Three skills: `enact-plan` (the vizier), `enact` (inline) and
-  `enact-setup`. Role files stay in `skills/enact/roles/` so spawn prompts
+- Four skills: `enact-plan` (the vizier), `enact` (inline),
+  `enact-setup` and `enact-sweep` (backlog sweep). Role files stay in `skills/enact/roles/` so spawn prompts
   and Marshal tasks written before the split keep working.
 - Titles: 🔮 Vizier, ⚒️ Executor, 🛡️ Warden, 🔥 Justiciar, 🚒 Steward,
   🎖️ Marshal, 🧱 Mason, 📖 Sage, 📜 Archivist; ✅ on completion, ⛔ when
@@ -871,3 +871,21 @@ blindly recreate jobs or hand-edit scheduler databases.
   settings, so Codex applies spawn `settings` too.
 - **Lean shared protocol.** Recovery, takeover and emergency procedures
   moved from `common.md` to `roles/recovery.md`, read only when needed.
+
+## Backlog sweep (2026-11-08)
+
+- `/enact-sweep` triages stale beads and runs the survivors. A bead is
+  stale when it is open, unassigned and outside every live run. Ownership
+  decides, not age: a fresh bead under a dead run is stale, while an old
+  bead queued in a live run is not. `bd stale` measures only age, so it
+  would close queued work.
+- Verdicts are done, obsolete, keep and human, each with evidence. Read-only
+  subagents on the light tier triage large backlogs, and only the sweeper
+  writes to Beads. Closes are reversible (`bd reopen`), so the invocation
+  authorizes them without a confirmation step.
+- Human beads are settled while the user is present, the same way as the
+  stoppage audit, or deferred. An unattended run never starts on one.
+- The run starts in the sweep's own turn, because Claude Desktop lets only
+  a user-started turn start sessions. A scheduled task cannot launch a
+  vizier. Kept beads move into one `Bead sweep <date>` epic and go to
+  enact-plan as "several beads".

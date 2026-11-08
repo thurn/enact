@@ -7,12 +7,16 @@ it files what it needs as a [Beads](https://github.com/gastownhall/beads)
 graph and runs every bead in a fresh top-level session for days, across
 machines and model providers, synchronized through one GitHub remote.
 
+To clear a backlog, `/enact-sweep` finds stale beads (open work no live
+run owns), closes the ones that shipped or no longer matter, and runs the
+rest as a vizier in the same turn.
+
 For smaller work, `/enact` runs a bead, an epic or a task prompt inside the
 current session with the same roles, using subagents for an epic's beads,
 and waits for slow CI before it finishes.
 
 Enact has no state of its own beyond the bead graph, no server and no CI
-dependency: three skills, nine short role prompts and a stdlib Python
+dependency: four skills, nine short role prompts and a stdlib Python
 helper.
 
 ## Layout
@@ -23,6 +27,7 @@ helper.
 | `skills/enact/SKILL.md` | Inline execution in one session: `/enact <bead\|epic\|task>` |
 | `skills/enact/roles/*.md` | Role prompts for spawned sessions and subagents |
 | `skills/enact-setup/SKILL.md` | Machine and project setup: `/enact-setup` |
+| `skills/enact-sweep/SKILL.md` | Close stale beads, run the rest: `/enact-sweep` |
 | `scripts/enact.py` | Helper: claims, sync, push, slow CI, locks |
 | `templates/AGENTS.md` | Sample AGENTS.md section |
 | `docs/design.md` | Design decisions and rationale |
