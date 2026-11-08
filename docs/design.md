@@ -87,9 +87,12 @@ and Beads writes and unmodified older helpers remain outside that protocol.
 - `enact push` (used by executors *and* humans, replacing `git push origin
   master`): rebase onto `origin/staging`, merge `origin/master` if it is not an
   ancestor (backstop for direct-to-master pushes), run fast checks,
-  fast-forward push `HEAD:staging`, retry on rejection, start the slow-CI
-  runner, remove the worktree (or report `kept_worktree` if untracked files
-  remain).
+  fast-forward push `HEAD:staging`, retry on rejection, remove the worktree
+  (or report `kept_worktree` if untracked files remain), then start the
+  slow-CI runner. The order matters: a project's remove hook may save build
+  caches that the runner's fresh worktree warms itself from, and a runner
+  started first raced it to a cold build (2026-11-08, Beryl's first Windows
+  run). The delivery receipt stays until the runner has started.
 - `enact ci --detach`: one coalescing runner per machine (PID lock in the git
   common dir). Loop: fetch, test the newest `origin/staging` tip, repeat until
   the tip equals the last tested SHA; re-check after releasing the lock. No

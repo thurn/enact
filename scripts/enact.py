@@ -1803,8 +1803,13 @@ def delivery_receipts(repo: Repo) -> Path:
 
 
 @serialized
-def finish_delivery(repo: Repo, receipt: Path, data: dict[str, Any]) -> dict[str, Any]:
-    """Replay bookkeeping after a confirmed push; retain receipt on any failure."""
+def finish_delivery(repo: Repo, receipt: Path, data: dict[str, Any],
+                    start: bool = True) -> dict[str, Any]:
+    """Replay bookkeeping after a confirmed push; retain receipt on any failure.
+
+    Without `start`, a delivery that wants slow CI keeps its receipt: the
+    caller starts CI and retires it (`cmd_push`, after removing its worktree).
+    """
     result: dict[str, Any] = {"staging": data["head"], "commits": data["commits"]}
     if data.get("bead"):
         beads = Beads(repo)
@@ -1824,6 +1829,8 @@ def finish_delivery(repo: Repo, receipt: Path, data: dict[str, Any]) -> dict[str
                 break
         else:
             raise Fail("delivery metadata lost during sync; retry enact push", code=2)
+    if data["ci"] and not start:
+        return result
     if data["ci"]:
         result["ci"] = start_ci(repo)
     receipt.unlink(missing_ok=True)
@@ -1861,6 +1868,7 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     recovered = recover_deliveries(repo)
     staging = repo.remote_ref(cfg.staging)
     result: dict[str, Any] = {"pushed": False, "reason": "nothing to push"}
+    pending_ci: Path | None = None
     for attempt in range(6):
         integrate(repo)
         before = repo.git("rev-parse", staging)
@@ -1888,7 +1896,8 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
             sync(repo)
             require_owner(Beads(repo).show(args.bead), require_actor(None))
         if repo.git_ok("push", "-q", cfg.remote, f"HEAD:refs/heads/{cfg.staging}"):
-            result = {"pushed": True, **finish_delivery(repo, receipt, data)}
+            result = {"pushed": True, **finish_delivery(repo, receipt, data, start=False)}
+            pending_ci = receipt if data["ci"] else None
             if recovered:
                 result["recovered"] = recovered
             break
@@ -1898,7 +1907,7 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     else:
         raise Fail(f"could not push to {cfg.staging} after repeated attempts")
     # A vizier's worker leaves repair to its run, even while that run is held.
-    if ("ci" in result and not meta(bead, "enact_vizier")
+    if (pending_ci and not meta(bead, "enact_vizier")
             and not vizier_active(repo, Beads(repo).all())):
         result["watch_ci"] = watch_ci_notice(result["staging"])
     elif result.get("pushed") and not args.bead:
@@ -1908,15 +1917,23 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     in_enact_tree = (
         repo.top.resolve().parent == repo.worktree_root().resolve() and repo.top != repo.main
     )
-    if in_enact_tree and not args.keep:
-        if repo.git("status", "--porcelain"):
-            result["kept_worktree"] = (
-                f"{repo.top} has untracked files, so it was not deleted. Delete "
-                f"or move them, then run `enact worktree remove {repo.top.name}`.")
-        else:
-            os.chdir(repo.main)
-            remove_worktree(repo, repo.top, branch if branch.startswith("enact/") else None)
-            result["removed_worktree"] = str(repo.top)
+    runner = ci_runner(repo) if pending_ci else None
+    try:
+        if in_enact_tree and not args.keep:
+            if repo.git("status", "--porcelain"):
+                result["kept_worktree"] = (
+                    f"{repo.top} has untracked files, so it was not deleted. Delete "
+                    f"or move them, then run `enact worktree remove {repo.top.name}`.")
+            else:
+                os.chdir(repo.main)
+                remove_worktree(repo, repo.top, branch if branch.startswith("enact/") else None)
+                result["removed_worktree"] = str(repo.top)
+    finally:
+        # Slow CI starts after the remove hook, which may save the build
+        # caches the runner's fresh worktree warms itself from.
+        if pending_ci:
+            result["ci"] = start_ci(repo, runner)
+            pending_ci.unlink(missing_ok=True)
     return result
 
 
@@ -2100,18 +2117,24 @@ def ci_wait(repo: Repo, sha: str, seconds: int, interval: int) -> dict[str, Any]
         time.sleep(min(interval, max(deadline - time.monotonic(), 1)))
 
 
-def start_ci(repo: Repo) -> dict[str, Any]:
-    status = ci_status(repo)
-    if status["running"]:
-        return {"started": False, "reason": "runner already active", **status}
-    # The caller may be delivering Enact itself and remove its own worktree.
-    # Keep an immutable copy in the git common directory before launching.
+def ci_runner(repo: Repo) -> Path:
+    """An immutable copy of this script in the git common directory, which
+    the runner launches from: the caller may be delivering Enact itself and
+    remove its own worktree, this script's file with it."""
     source = Path(__file__).read_bytes()
     runner = repo.state / f"ci-runner-{hashlib.sha256(source).hexdigest()}.py"
     if not runner.exists():
         temp = runner.with_suffix(f".{os.getpid()}.tmp")
         temp.write_bytes(source)
         temp.replace(runner)
+    return runner
+
+
+def start_ci(repo: Repo, runner: Path | None = None) -> dict[str, Any]:
+    status = ci_status(repo)
+    if status["running"]:
+        return {"started": False, "reason": "runner already active", **status}
+    runner = runner or ci_runner(repo)
     cmd = [sys.executable, str(runner), "ci"]
     kwargs: dict[str, Any] = {}
     if WINDOWS:

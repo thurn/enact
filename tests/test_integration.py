@@ -506,9 +506,9 @@ module = runpy.run_path(sys.argv[1], run_name='fault_test')
 def fail_sync(repo):
     raise RuntimeError('injected sync outage')
 original_finish = module['finish_delivery']
-def finish(repo, receipt, data):
+def finish(repo, receipt, data, **kwargs):
     module['cmd_push'].__globals__['sync'] = fail_sync
-    return original_finish(repo, receipt, data)
+    return original_finish(repo, receipt, data, **kwargs)
 module['cmd_push'].__globals__['finish_delivery'] = finish
 module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
                                      no_ci=False, keep=False))
@@ -576,6 +576,33 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.assertTrue((path / ".hooked").exists())
 
     # -- slow CI ----------------------------------------------------------
+
+    def test_slow_ci_starts_after_the_remove_hook(self):
+        # The hook stands in for one that saves build caches the CI worktree
+        # clones: removing the pushed tree takes longer than the runner takes
+        # to reach its check, which needs what the hook wrote.
+        saved = (self.tmp / "saved").as_posix()
+        hook = (
+            "python3 -c \"import os,subprocess,time; "
+            "tree=os.environ['ENACT_WORKTREE_PATH']; "
+            "time.sleep(0 if os.path.basename(tree).startswith('ci-') else 10); "
+            f"open('{saved}','w').close(); "
+            "subprocess.check_call(['git','worktree','remove','--force',tree])\""
+        )
+        slow = shlex.join([Path(sys.executable).as_posix(), "-c",
+                           f"import os,sys; sys.exit(not os.path.exists('{saved}'))"])
+        # Committed to master and staging: the push reads the worktree's
+        # settings, the runner the main checkout's.
+        toml = ENACT_TOML.replace('"python3 check.py slow"', json.dumps(slow))
+        self.a.commit_file(".enact.toml", toml + f"[worktree]\nremove = '''{hook}'''\n")
+        self.a.git("push", "-q", "origin", "HEAD:master", "HEAD:staging")
+        path = Path(self.a.enact("worktree", "create", "warm")["path"])
+        self.configure_git(path)
+        self.a.commit_file("warm.txt", "warm", cwd=path)
+        result = self.a.enact("push", cwd=path)
+        self.assertEqual(result["removed_worktree"], str(path))
+        self.wait_for_ci(self.a)
+        self.assertEqual(self.remote_sha("master"), result["staging"])
 
     def ci_without_promotion(self):
         # Keep the simulated unavailable remote in both the coordinator and
