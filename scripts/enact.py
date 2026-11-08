@@ -314,7 +314,8 @@ class Repo:
         if text and not text.endswith("\n"):
             text += "\n"
         ignore_file.parent.mkdir(parents=True, exist_ok=True)
-        ignore_file.write_text(text + pattern + "\n", encoding="utf-8")
+        # LF on Windows too: the file is committed and shared across machines.
+        ignore_file.write_text(text + pattern + "\n", encoding="utf-8", newline="\n")
         return pattern
 
 
@@ -430,6 +431,9 @@ def dolt_db_dir(repo: Repo) -> Path:
 
 
 DOLT_BUSY_SECONDS = 60
+# What Dolt says while another process has the store open: on Windows its
+# file lock keeps it from opening the store at all, even read-only.
+DOLT_BUSY = ("database is read only", "fslock")
 
 
 def dolt(args: list[str], db: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -440,8 +444,9 @@ def dolt(args: list[str], db: Path, check: bool = True) -> subprocess.CompletedP
     delay = 0.1
     while True:
         proc = run(["dolt", *args], db, check=False)
+        output = proc.stdout + proc.stderr
         if (proc.returncode == 0 or time.monotonic() >= deadline or
-                "database is read only" not in proc.stdout + proc.stderr):
+                not any(busy in output for busy in DOLT_BUSY)):
             break
         time.sleep(random.uniform(delay, 2 * delay))
         delay = min(delay * 2, 2.0)
@@ -2803,6 +2808,7 @@ def cmd_setup(args: argparse.Namespace) -> dict[str, Any]:
                 root=ENACT_ROOT, master=args.master, fast=args.fast or "", slow=args.slow or ""
             ),
             encoding="utf-8",
+            newline="\n",
         )
         report["enact_toml"] = "created"
     else:

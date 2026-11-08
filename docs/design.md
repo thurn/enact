@@ -654,8 +654,10 @@ blindly recreate jobs or hand-edit scheduler databases.
   fails with "database is read only". bd waits instead, and bd's workspace
   gate cannot be borrowed (an exclusive holder makes bd fail fast), so every
   direct Dolt call retries that error with jittered backoff for up to 60 s.
-  Other failures are not retried. A real scenario syncs while a held store
-  is released.
+  On Windows, Dolt's file lock keeps it from opening a held store at all
+  ("fslock ... being used by another process"), which is retried the same
+  way (2026-11-08). Other failures are not retried. A real scenario syncs
+  while a held store is released.
 - Within an ownership lock, reuse identical Beads show/list reads across helper
   instances. Every write attempt and every synchronization clears those reads;
   leaving the lock discards them. Cache raw JSON so each caller receives

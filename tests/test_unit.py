@@ -932,6 +932,15 @@ class SyncTest(unittest.TestCase):
             self.assertEqual(enact.dolt(["pull"], Path(".")).stdout, "ok")
         self.assertEqual(run.call_count, 3)
         self.assertEqual(sleep.call_count, 2)
+        # On Windows the store cannot be opened at all while it is busy.
+        locked = subprocess.CompletedProcess([], 1, "", (
+            "level=warning msg=\"failed to load database with error: fslock new "
+            "C:\\db\\.dolt\\noms\\LOCK: The process cannot access the file because "
+            "it is being used by another process.\""))
+        with mock.patch.object(enact.time, "sleep"), \
+                mock.patch.object(enact, "run", side_effect=[locked, done]) as run:
+            self.assertEqual(enact.dolt(["remote"], Path(".")).stdout, "ok")
+        self.assertEqual(run.call_count, 2)
         # Other failures are not retried, and a store that stays busy fails.
         with mock.patch.object(enact, "run", return_value=busy) as run, \
                 mock.patch.object(enact, "DOLT_BUSY_SECONDS", 0):

@@ -48,15 +48,46 @@ def sh(cmd, cwd, check=True, env=None):
     return proc.stdout.strip()
 
 
-def rmtree(path):
-    """shutil.rmtree that also deletes read-only files (git's objects on Windows)."""
+def stop_processes_in(path):
+    """Stop every process started from `path`, and what each started.
+
+    A slow-CI runner and its check outlive the test that launched them, and
+    a runner may hold its lock guard between lock cycles. On Windows they
+    keep the fixture open, so the next test could not delete it.
+    """
+    query = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and "
+             "$_.CommandLine.Contains($env:ENACT_TEST_TREE) } | "
+             "ForEach-Object { $_.ProcessId }")
+    pids = subprocess.run(["powershell", "-NoProfile", "-Command", query],
+                          capture_output=True, text=True,
+                          env={**os.environ, "ENACT_TEST_TREE": str(path)}).stdout.split()
+    for pid in pids:
+        if pid.isdigit() and int(pid) != os.getpid():
+            subprocess.run(["taskkill", "/F", "/T", "/PID", pid], capture_output=True)
+
+
+def rmtree(path, timeout=60):
+    """shutil.rmtree that also deletes read-only files (git's objects on Windows).
+
+    Windows deletes no file a process holds open, nor its working directory.
+    A slow-CI runner holds both in its repository until it exits, a moment
+    after it releases its lock, so a busy tree is retried until it is free.
+    """
     def writable(func, target, _):
         os.chmod(target, stat.S_IWRITE)
         func(target)
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=writable)
-    else:
-        shutil.rmtree(path, onerror=writable)
+    deadline = time.time() + timeout
+    while True:
+        try:
+            if sys.version_info >= (3, 12):
+                shutil.rmtree(path, onexc=writable)
+            else:
+                shutil.rmtree(path, onerror=writable)
+            return
+        except PermissionError:
+            if os.name != "nt" or time.time() > deadline:
+                raise
+            time.sleep(0.5)
 
 
 @unittest.skipUnless(shutil.which("git"), "needs git")
@@ -382,6 +413,8 @@ class EnactTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        if os.name == "nt":
+            stop_processes_in(cls.base)
         rmtree(cls.base)
 
     def setUp(self):
@@ -400,6 +433,8 @@ class EnactTest(unittest.TestCase):
             deadline = time.time() + 30
             while lock.exists() and time.time() < deadline:
                 time.sleep(0.5)
+        if os.name == "nt":
+            stop_processes_in(self.tmp)
 
     def clone(self, name, host, session, first=False):
         path = self.tmp / name
@@ -473,7 +508,8 @@ class EnactTest(unittest.TestCase):
         self.assertEqual(self.a.git("status", "--porcelain"), "")
         # A clone whose .gitignore lacks the root falls back to info/exclude.
         gitignore = self.a.path / ".gitignore"
-        gitignore.write_text(gitignore.read_text().replace("/.worktrees/\n", ""))
+        # LF: on Windows, git's check-ignore matches a line holding only "\r".
+        gitignore.write_text(gitignore.read_text().replace("/.worktrees/\n", ""), newline="\n")
         self.a.git("commit", "-qam", "drop ignore")
         self.a.enact("worktree", "create", "inside2")
         self.assertIn("/.worktrees/", (self.a.path / ".git" / "info" / "exclude").read_text())
