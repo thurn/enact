@@ -217,10 +217,11 @@ def require_actor(explicit: str | None) -> str:
 # Worktrees live inside the main checkout, ignored by git.
 DEFAULT_WORKTREE_ROOT = ".worktrees"
 # Tiers every project has without configuring them: a Claude model by name, so a plan can
-# assign beads to models with `tier:opus` and `tier:sonnet`. A project's own
+# assign beads to models with `tier:fable`, `tier:opus` and `tier:sonnet`. A project's own
 # `[tiers.<name>.<provider>]` overrides one; another provider's sessions keep their role's
 # settings unless the project maps the tier for them.
 BUILTIN_TIERS: dict[str, dict[str, dict[str, str]]] = {
+    "fable": {"claude": {"model": "fable"}},
     "opus": {"claude": {"model": "opus"}},
     "sonnet": {"claude": {"model": "sonnet"}},
 }
@@ -2773,9 +2774,9 @@ root = ".worktrees"   # inside the checkout; gitignored
 
 # Model settings for spawned sessions, by role and by a bead's `tier:<name>`
 # label (a tier overrides its role). The vizier labels mechanical beads
-# `tier:light`; reviews and design work keep the default model. `tier:opus`
-# and `tier:sonnet` are built in for Claude and need no entry here; map them
-# for another provider with `[tiers.opus.<provider>]`.
+# `tier:light`; reviews and design work keep the default model. `tier:fable`,
+# `tier:opus` and `tier:sonnet` are built in for Claude and need no entry
+# here; map them for another provider with `[tiers.opus.<provider>]`.
 [tiers.light.claude]
 model = "sonnet"
 

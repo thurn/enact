@@ -909,3 +909,7 @@ blindly recreate jobs or hand-edit scheduler databases.
 - The policy goes in the run epic, not on it as a label: children inherit an
   epic's labels, and a bead with two tier labels takes whichever is listed
   first.
+- `tier:fable` joined them the same day. A user auditing a plan asked to
+  "tag the biggest design challenges to fable": the beads whose design every
+  later bead builds on. The vizier uses it only when asked, since the other
+  two already cover "mechanical" and "everything else".

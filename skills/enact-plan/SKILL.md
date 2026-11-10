@@ -270,11 +270,13 @@ Read enough of the codebase to decompose well. Then file the graph with raw
 - **Models by name**: when the invocation or AGENTS.md asks for beads to be
   assigned to models, label every bead instead: `tier:sonnet` for mechanical
   work, `tier:opus` for everything else, including every Warden, Mason and
-  Sage, unless they name another default. Both tiers work in any project
-  with no configuration. A lane's session starts on its first bead's tier,
-  so give a lane one tier. Record the policy in the run epic so beads filed
-  later follow it, and never put a tier label on an epic: children inherit
-  an epic's labels.
+  Sage, unless they name another default. `tier:fable` is the third: use it
+  only where the user asks, typically for the few beads that settle a
+  design everything later builds on. All three work in any project with no
+  configuration. A lane's session starts on its first bead's tier, so give
+  a lane one tier. Record the policy in the run epic so beads filed later
+  follow it, and never put a tier label on an epic: children inherit an
+  epic's labels.
 
 Decompose a plan fully up front by default. For a large or uncertain plan you
 may instead file concrete beads for the first milestone plus one executor

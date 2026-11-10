@@ -297,9 +297,12 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(cfg.role_settings("warden", "claude", "light"),
                          {"model": "sonnet", "effort": "max"})
         self.assertEqual(cfg.role_settings("executor", "claude", "heavy"), {})
-        # `tier:opus` and `tier:sonnet` need no configuration, for Claude only; a project's
-        # own entry for the tier wins.
+        # `tier:fable`, `tier:opus` and `tier:sonnet` need no configuration, for Claude only;
+        # a project's own entry for the tier wins.
         self.assertEqual(cfg.role_settings("executor", "claude", "opus"), {"model": "opus"})
+        self.assertEqual(cfg.role_settings("warden", "claude", "fable"),
+                         {"model": "fable", "effort": "max"})
+        self.assertEqual(cfg.role_settings("executor", "codex", "fable"), {})
         self.assertEqual(cfg.role_settings("warden", "claude", "sonnet"),
                          {"model": "sonnet", "effort": "max"})
         self.assertEqual(cfg.role_settings("executor", "codex", "opus"), {})
