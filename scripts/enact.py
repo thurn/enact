@@ -216,6 +216,14 @@ def require_actor(explicit: str | None) -> str:
 
 # Worktrees live inside the main checkout, ignored by git.
 DEFAULT_WORKTREE_ROOT = ".worktrees"
+# Tiers every project has without configuring them: a Claude model by name, so a plan can
+# assign beads to models with `tier:opus` and `tier:sonnet`. A project's own
+# `[tiers.<name>.<provider>]` overrides one; another provider's sessions keep their role's
+# settings unless the project maps the tier for them.
+BUILTIN_TIERS: dict[str, dict[str, dict[str, str]]] = {
+    "opus": {"claude": {"model": "opus"}},
+    "sonnet": {"claude": {"model": "sonnet"}},
+}
 # Far above the ~5 minute slow-check budget, so only a hang reaches it.
 DEFAULT_SLOW_TIMEOUT = 3600
 
@@ -258,9 +266,9 @@ class Config:
     def role_settings(self, role: str, host_provider: str,
                       tier: str | None = None) -> dict[str, str]:
         """Model settings for a spawn: the role's, overridden by the bead's
-        `tier:<name>` label when the project configures that tier."""
+        `tier:<name>` label when that tier is built in or the project configures it."""
         settings: dict[str, str] = {}
-        for table, key in ((self.roles, role), (self.tiers, tier)):
+        for table, key in ((self.roles, role), (BUILTIN_TIERS, tier), (self.tiers, tier)):
             entry = table.get(key, {}).get(host_provider, {}) if key else {}
             settings.update({k: v for k, v in entry.items() if k in ("model", "effort") and v})
         return settings
@@ -2765,7 +2773,9 @@ root = ".worktrees"   # inside the checkout; gitignored
 
 # Model settings for spawned sessions, by role and by a bead's `tier:<name>`
 # label (a tier overrides its role). The vizier labels mechanical beads
-# `tier:light`; reviews and design work keep the default model.
+# `tier:light`; reviews and design work keep the default model. `tier:opus`
+# and `tier:sonnet` are built in for Claude and need no entry here; map them
+# for another provider with `[tiers.opus.<provider>]`.
 [tiers.light.claude]
 model = "sonnet"
 

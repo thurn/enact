@@ -131,7 +131,9 @@ questions from here instead of asking again:
   Do not run the old epic. Close an old epic left with no open children
   (`--reason "Sweep <date>: remaining beads moved to <sweep epic>"`).
 - Group beads that touch the same code into one `lane:<name>`. Label
-  mechanical ones `tier:light`.
+  mechanical ones `tier:light`, or assign every bead `tier:sonnet` or
+  `tier:opus` when the user asks for models by name (enact-plan, "Build the
+  graph").
 - You already did the stoppage audit in step 4.
 
 From then on you are the vizier: retitle `🔮 [<epic>] Bead sweep` and run

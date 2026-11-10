@@ -891,3 +891,21 @@ blindly recreate jobs or hand-edit scheduler databases.
   a user-started turn start sessions. A scheduled task cannot launch a
   vizier. Kept beads move into one `Bead sweep <date>` epic and go to
   enact-plan as "several beads".
+
+## Models by name (2026-11-10)
+
+- `tier:opus` and `tier:sonnet` are built-in tiers: for the Claude provider
+  they select that model with no entry in `.enact.toml`. A user asked a plan
+  to "assign beads to opus or sonnet based on complexity, default opus", and
+  the only way to pin the default was a project-level tier added for the
+  occasion.
+- A project's own `[tiers.<name>.<provider>]` still wins, so it can remap a
+  built-in tier or map it for another provider. A provider with no mapping
+  keeps its role's settings, as with any unknown tier.
+- The vizier assigns every bead a named tier only when the invocation or
+  AGENTS.md asks for models by name. Otherwise it labels mechanical beads
+  `tier:light` and leaves the rest on the user's default, as before, so
+  existing projects and runs do not change.
+- The policy goes in the run epic, not on it as a label: children inherit an
+  epic's labels, and a bead with two tier labels takes whichever is listed
+  first.

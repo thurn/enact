@@ -112,6 +112,7 @@ root = ".worktrees"   # inside the checkout; gitignored
 effort = "max"
 [tiers.light.claude]  # beads labeled tier:light (mechanical work)
 model = "sonnet"
+# tier:opus and tier:sonnet are built in for Claude and need no entry
 ```
 
 Requirements: git, Python 3.11+, Beads (`bd`) 1.2+ in its default embedded

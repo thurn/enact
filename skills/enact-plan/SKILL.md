@@ -262,10 +262,19 @@ Read enough of the codebase to decompose well. Then file the graph with raw
   before claiming the next with `enact close --continue`; the helper starts
   no other session on a lane while one holds it. Lanes need no ordering
   edges of their own. Never put Wardens in lanes.
-- **Tiers**: label mechanical beads (renames, wiring a field through,
-  boilerplate tests, documentation edits) `tier:light`; the helper starts
-  them with the project's cheaper `[tiers.light]` model from `.enact.toml`.
-  Design work and every Warden, Mason and Sage keep the default.
+- **Tiers**: a `tier:<name>` label picks the model a bead's session starts
+  on. Label mechanical beads (renames, wiring a field through, boilerplate
+  tests, documentation edits) `tier:light`; the helper starts them with the
+  project's cheaper `[tiers.light]` model from `.enact.toml`. Design work
+  and every Warden, Mason and Sage keep the default.
+- **Models by name**: when the invocation or AGENTS.md asks for beads to be
+  assigned to models, label every bead instead: `tier:sonnet` for mechanical
+  work, `tier:opus` for everything else, including every Warden, Mason and
+  Sage, unless they name another default. Both tiers work in any project
+  with no configuration. A lane's session starts on its first bead's tier,
+  so give a lane one tier. Record the policy in the run epic so beads filed
+  later follow it, and never put a tier label on an epic: children inherit
+  an epic's labels.
 
 Decompose a plan fully up front by default. For a large or uncertain plan you
 may instead file concrete beads for the first milestone plus one executor

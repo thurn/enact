@@ -297,6 +297,16 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(cfg.role_settings("warden", "claude", "light"),
                          {"model": "sonnet", "effort": "max"})
         self.assertEqual(cfg.role_settings("executor", "claude", "heavy"), {})
+        # `tier:opus` and `tier:sonnet` need no configuration, for Claude only; a project's
+        # own entry for the tier wins.
+        self.assertEqual(cfg.role_settings("executor", "claude", "opus"), {"model": "opus"})
+        self.assertEqual(cfg.role_settings("warden", "claude", "sonnet"),
+                         {"model": "sonnet", "effort": "max"})
+        self.assertEqual(cfg.role_settings("executor", "codex", "opus"), {})
+        mapped = enact.Config.parse(
+            '[tiers.opus.claude]\nmodel = "fable"\n[tiers.opus.codex]\nmodel = "sol"\n')
+        self.assertEqual(mapped.role_settings("executor", "claude", "opus"), {"model": "fable"})
+        self.assertEqual(mapped.role_settings("executor", "codex", "opus"), {"model": "sol"})
         self.assertEqual(cfg.slow_timeout, enact.DEFAULT_SLOW_TIMEOUT)
         self.assertEqual(enact.Config.parse("[checks]\nslow_timeout = 900\n").slow_timeout, 900)
 
