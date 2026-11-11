@@ -489,6 +489,15 @@ class GraphTest(unittest.TestCase):
         for role in enact.SPAWNED_ROLES:
             self.assertTrue((enact.ROLES_DIR / f"{role}.md").is_file(), role)
 
+    def test_spawn_prompt_guards_a_required_model(self):
+        # A host may quietly start the worker on another model (2026-11-10:
+        # a tier:fable bead ran on Opus), so the prompt makes it check first.
+        bead = {"id": "x-1", "title": "Work"}
+        prompt = enact.spawn_prompt("executor", bead, "x-0", "viz", "fable")
+        self.assertIn("must run on the `fable` model", prompt)
+        self.assertLess(prompt.index("fable"), prompt.index("enact start"))
+        self.assertNotIn("must run on", enact.spawn_prompt("executor", bead, "x-0", "viz"))
+
     def test_every_session_is_told_to_end_on_a_status_title(self):
         # Users read run state from title emojis, so each instruction source
         # names the finished emoji.
@@ -1074,6 +1083,8 @@ class CommandPolicyTest(unittest.TestCase):
         with mock.patch.object(enact, "find_repo", return_value=self.a.repo):
             step = self.a.enact("next", "--epic", epic, "--parallel", "3")
         self.assertEqual((step["bead"], step["settings"]), (first, {"model": "sonnet"}))
+        self.assertIn("set_session_model", step["model_required"])
+        self.assertIn("must run on the `sonnet` model", step["prompt"])
         self.a.enact("meta", first, "enact_session=worker", "--reservation", step["reservation"])
         self.start_worker(self.a, first, "worker")
         # The rest of the lane waits for the session that holds it.

@@ -431,6 +431,20 @@ action or after nine minutes. Handle the JSON:
      <bead> in epic <epic>; work unattended and follow the role files named in
      the prompt.", plus `model`/`effort` from `settings` when present. Do not
      pass `permission_mode`, so the session inherits yours.
+   - **A required model** (`settings.model`, flagged `model_required`):
+     `start_session` silently ignores a model pricier than yours, so a
+     `tier:fable` bead started by an Opus vizier runs on Opus. Start the
+     child with the prompt "Enact holding turn: reply only `ready` and end
+     your turn; your instructions follow in the next message." instead of
+     `prompt`. Read its `model` with `get_session`; if it is not the
+     `settings.model` family, `set_session_model` it (on an unknown id,
+     retry once with the picker's id for that family) and confirm with
+     `get_session`. Then send `prompt` with `send_message`. Workers never
+     start sessions, so their turns need not be user-started. If the model
+     cannot be set, stop and archive the child, release the reservation
+     with the reason, and `enact run block <epic> --reason "<model>
+     unavailable for <bead>"`: never substitute another model. The prompt
+     tells the worker to refuse on the wrong model as a backstop.
    - Codex: use the project and spawn adapter above, including the ready ID,
      model policy and created-chat receipt.
 

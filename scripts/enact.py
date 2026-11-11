@@ -1146,7 +1146,22 @@ def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
             "remaining": limit - 1 - sum(item["epoch"] == control["epoch"] for item in history)}
 
 
-def spawn_prompt(role: str, bead: dict[str, Any], epic: str, vizier: str) -> str:
+def model_check(model: str | None) -> str:
+    """The spawn prompt's guard against starting on the wrong model: a host can
+    quietly substitute its own (Claude Desktop's `start_session` ignores any
+    model pricier than the caller's), so the worker checks before it claims."""
+    if not model:
+        return ""
+    return (
+        f"This bead must run on the `{model}` model. Before anything else, "
+        f"check the model your system prompt says you run on; if it is not "
+        f"a {model} model, do not run `enact start`: retitle ⛔, reply only "
+        f"`wrong model: <yours>, required {model}` and end your turn.\n"
+    )
+
+
+def spawn_prompt(role: str, bead: dict[str, Any], epic: str, vizier: str,
+                 model: str | None = None) -> str:
     script = Path(__file__).resolve()
     python = sys.executable or "python3"
     token = meta(bead, "enact_reservation")
@@ -1155,6 +1170,7 @@ def spawn_prompt(role: str, bead: dict[str, Any], epic: str, vizier: str) -> str
         f"You are an Enact {role} session (emoji {EMOJI.get(role, '')}). "
         f"Your bead is {bead['id']} ({bead.get('title', '')}) in epic {epic}; "
         f"you were started by vizier {vizier} on host {host_name()}.\n\n"
+        f"{model_check(model)}"
         f"Read {ROLES_DIR / 'common.md'} and then {ROLES_DIR / (role + '.md')}, "
         f"and follow them. The Enact helper is `\"{python}\" \"{script}\"`, "
         f"referred to as `enact` in those files.\n"
@@ -1177,15 +1193,30 @@ def spawn_action(repo: Repo, bead: dict[str, Any], epic: str, vizier: str) -> di
     role = role_of(bead)
     if role not in SPAWNED_ROLES:
         role = "executor"
-    return {
+    settings = repo.config.role_settings(role, provider(), label_value(bead, "tier"))
+    action = {
         "action": "spawn",
         "bead": bead["id"],
         "role": role,
         "reservation": meta(bead, "enact_reservation"),
         "title": session_title(role, bead),
-        "prompt": spawn_prompt(role, bead, epic, vizier),
-        "settings": repo.config.role_settings(role, provider(), label_value(bead, "tier")),
+        "prompt": spawn_prompt(role, bead, epic, vizier, settings.get("model")),
+        "settings": settings,
     }
+    if settings.get("model"):
+        action["model_required"] = MODEL_REQUIRED
+    return action
+
+
+# Restated on every spawn that names a model, so it survives the vizier's
+# context compaction (the 2026-11-10 tier:fable bead ran on Opus).
+MODEL_REQUIRED = (
+    "settings.model is required, never a hint. Claude Desktop: start_session "
+    "silently ignores a model pricier than yours, so start the child with the "
+    "holding prompt, set_session_model it to settings.model, confirm with "
+    "get_session, then send `prompt` with send_message (enact-plan skill, "
+    "spawn step). If it cannot be switched, stop the child and release."
+)
 
 
 LOOP_REMINDER = (

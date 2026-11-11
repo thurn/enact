@@ -913,3 +913,20 @@ blindly recreate jobs or hand-edit scheduler databases.
   "tag the biggest design challenges to fable": the beads whose design every
   later bead builds on. The vizier uses it only when asked, since the other
   two already cover "mechanical" and "everything else".
+
+## Required models (2026-11-10)
+
+- A `tier:fable` bead spawned by an Opus vizier ran on Opus:
+  `start_session`'s `model` is silently ignored above the caller's own
+  model. The user caught it from the session list.
+- The vizier now starts such a child on a holding prompt, switches it with
+  `set_session_model`, confirms with `get_session` and only then sends the
+  Enact prompt. The holding turn is one trivial reply on the vizier's
+  model; the worker's whole bead runs on the tier's.
+- A spawn action that names a model carries `model_required`, restating the
+  steps, so they survive compaction, and the prompt tells the worker to
+  refuse before `enact start` on any other model. A refusal leaves the
+  reservation unbound for the Marshal to recover, so a vizier that skipped
+  the steps fails loudly instead of looping.
+- A model that cannot be set blocks the run rather than substituting,
+  matching the Codex adapter's rule for an explicitly required model.
