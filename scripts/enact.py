@@ -36,8 +36,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, BinaryIO
 
+
+
+def stable_checkout(root: Path) -> Path:
+    """The Enact checkout live sessions run from, even when `root` is one of
+    its delivery worktrees, which `enact push` deletes."""
+    return root.parent.parent if root.parent.name == ".worktrees" else root
+
+
 ENACT_ROOT = Path(__file__).resolve().parent.parent
-ROLES_DIR = ENACT_ROOT / "skills" / "enact" / "roles"
+# Prompts name role files by path, and a session reads them after the
+# delivering worktree is gone, so they point at the stable checkout.
+ROLES_DIR = stable_checkout(ENACT_ROOT) / "skills" / "enact" / "roles"
 JUSTICIAR_REF = "refs/enact/justiciar"
 EMOJI = {
     "vizier": "🔮",
@@ -2244,11 +2254,7 @@ def ci_os() -> str:
 
 
 def enact_checkout() -> Path:
-    """The Enact checkout live sessions run from, even when this copy of the
-    helper is in one of its delivery worktrees."""
-    if ENACT_ROOT.parent.name == ".worktrees":
-        return ENACT_ROOT.parent.parent
-    return ENACT_ROOT
+    return stable_checkout(ENACT_ROOT)
 
 
 def update_enact() -> str:

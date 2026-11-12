@@ -487,7 +487,8 @@ class GraphTest(unittest.TestCase):
         self.assertIn(str(enact.ROLES_DIR / "common.md"), prompt)
         self.assertIn(str(enact.ROLES_DIR / "warden.md"), prompt)
         for role in enact.SPAWNED_ROLES:
-            self.assertTrue((enact.ROLES_DIR / f"{role}.md").is_file(), role)
+            self.assertTrue((enact.ENACT_ROOT / "skills" / "enact" / "roles"
+                             / f"{role}.md").is_file(), role)
 
     def test_spawn_prompt_guards_a_required_model(self):
         # A host may quietly start the worker on another model (2026-11-10:
@@ -889,6 +890,12 @@ class CiScheduleTest(unittest.TestCase):
         self.assertFalse(result["supported"])
         self.assertTrue(result["cron"].startswith("*/30 * * * * "))
         self.assertEqual(calls, [])
+
+    def test_prompts_name_role_files_in_the_stable_checkout(self):
+        self.assertEqual(enact.ROLES_DIR,
+                         enact.stable_checkout(enact.ENACT_ROOT) / "skills" / "enact" / "roles")
+        self.assertNotIn(".worktrees", enact.ROLES_DIR.parts)
+        self.assertIn(str(enact.ROLES_DIR / "steward.md"), enact.watch_ci_notice("abc"))
 
     def test_the_schedule_runs_the_stable_checkout_not_a_worktree(self):
         with mock.patch.object(enact, "ENACT_ROOT", Path("/x/enact/.worktrees/feature")):
