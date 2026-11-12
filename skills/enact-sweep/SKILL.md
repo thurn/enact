@@ -23,9 +23,9 @@ The invocation may add:
 
 Claude Desktop only lets a session start other sessions during a turn the
 user started. A scheduled task, a wakeup or another session's message
-cannot start a run. So "schedule a run" means the vizier loop runs here,
-right after the sweep, in the turn the user started with `/enact-sweep`. As
-the vizier, never end the turn to wait.
+cannot start a run. So "schedule a run" means the vizier starts its session
+pool here, right after the sweep, in the turn the user started with
+`/enact-sweep`. After that it waits in the background like any vizier.
 
 ## Paths
 
@@ -113,7 +113,8 @@ here, retitle `✅ Bead sweep` and end.
 3. **human**: ask the user now (retitle `🔍 Bead sweep` while you wait),
    one question at a time with your recommendation, the way enact-plan's
    stoppage audit does. A resolved bead becomes **keep**, with the answer
-   added as a comment. Defer an unresolved one (`bd defer <id>`) and list it in the final report.
+   added as a comment. Defer an unresolved one (`bd defer <id>`) and list
+   it in the final report.
 4. `enact sync`.
 
 ## 5. Run the rest

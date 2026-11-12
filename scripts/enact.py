@@ -207,7 +207,8 @@ def as_owner(actor: str, bead: dict[str, Any]) -> str:
     """The bead's assignee or bound session when it is another name for actor."""
     aliases = session_aliases()
     if actor in aliases:
-        for name in (bead.get("assignee"), meta(bead, "enact_session")):
+        for name in (bead.get("assignee"), meta(bead, "enact_session"),
+                     meta(bead, "enact_pool_session")):
             if name and name in aliases:
                 return name
     return actor
@@ -763,7 +764,8 @@ def cmd_start(args: argparse.Namespace) -> dict[str, Any]:
     actor = as_owner(actor, bead)
     owner = bead.get("assignee") or ""
     token = meta(bead, "enact_reservation")
-    assigned = meta(bead, "enact_session")
+    # A pool hand-out names its member before the vizier records the binding.
+    assigned = meta(bead, "enact_session") or meta(bead, "enact_pool_session")
     if bead.get("status") == "closed":
         raise Fail(f"{args.bead} is already closed", code=3)
     if owner != actor:
@@ -845,7 +847,8 @@ def cmd_meta(args: argparse.Namespace) -> dict[str, Any]:
             require_owner(bead, actor)
         protected = routing | {"enact_vizier", "enact_actor", "enact_reservation",
                                "enact_spawn_host", "enact_spawn_provider", "enact_recovery",
-                               "enact_worktree", "enact_branch", "enact_worktree_host"}
+                               "enact_worktree", "enact_branch", "enact_worktree_host",
+                               "enact_pool_session"}
         if protected.intersection(pairs):
             raise Fail("ownership and recovery fields are managed by Enact", code=3)
     if any(key.startswith(("enact_control", "enact_vizier_route_",
@@ -968,7 +971,8 @@ def bead_runs(bead: dict[str, Any], graph: list[dict[str, Any]]) -> list[str]:
 # A lane continuation copies these so the vizier and archive
 # bookkeeping see the next bead as the same session's work.
 LANE_CARRY = ("enact_run", "enact_vizier", "enact_spawn_host", "enact_spawn_provider",
-              "enact_spawn_app", "enact_spawn_project", "enact_session", "enact_actor")
+              "enact_spawn_app", "enact_spawn_project", "enact_session", "enact_actor",
+              "enact_pool_session")
 
 
 def same_lane(bead: dict[str, Any], other: dict[str, Any], graph: list[dict[str, Any]]) -> bool:
@@ -985,9 +989,89 @@ def lane_held(bead: dict[str, Any], graph: list[dict[str, Any]]) -> bool:
 
 
 def busy_sessions(graph: list[dict[str, Any]]) -> set[str]:
-    """Sessions still holding an open bead: never archive them."""
-    return {meta(b, "enact_session") or "" for b in graph
+    """Sessions still holding an open bead: never archive or reuse them."""
+    return {meta(b, key) or "" for b in graph for key in ("enact_session", "enact_pool_session")
             if b.get("status") != "closed" and b.get("assignee")} - {""}
+
+
+# ---------------------------------------------------------------------------
+# Session pool (Claude Desktop)
+#
+# Claude Desktop lets one session start at most POOL_LIMIT sessions over its
+# whole life, and only in a turn the user started. A vizier therefore starts
+# a fixed pool in its first turn and hands every bead to an idle member with
+# clear_session and send_message, which work from any turn. The pool is
+# machine-local state per vizier; which members are busy comes from the graph.
+
+POOL_LIMIT = 10
+# A member that refused clear_session (still finishing, open on screen) is
+# skipped for this long before it is offered again.
+POOL_REST_SECONDS = 60
+
+
+def pool_path(repo: Repo, vizier: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", vizier)
+    return repo.state / f"pool-{safe}.json"
+
+
+def load_pool(repo: Repo, vizier: str) -> dict[str, Any]:
+    try:
+        pool = json.loads(pool_path(repo, vizier).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pool = {}
+    return {"sessions": list(pool.get("sessions", [])), "started": int(pool.get("started", 0)),
+            "resting": dict(pool.get("resting", {}))}
+
+
+def save_pool(repo: Repo, vizier: str, pool: dict[str, Any]) -> None:
+    write_json(pool_path(repo, vizier), pool)
+
+
+def idle_members(pool: dict[str, Any], graph: list[dict[str, Any]],
+                 justiciar: dict[str, Any] | None) -> list[str]:
+    """Members holding no open bead, no Justiciar duty and no rest, in turn."""
+    busy = busy_sessions(graph)
+    if justiciar and justiciar.get("pool_session"):
+        busy.add(justiciar["pool_session"])
+    clock = time.time()
+    return [s for s in pool["sessions"]
+            if s not in busy and pool["resting"].get(s, 0) <= clock]
+
+
+def take_member(repo: Repo, vizier: str, pool: dict[str, Any], session: str) -> None:
+    """Rotate a handed-out member to the back so work spreads over the pool."""
+    pool["sessions"] = [s for s in pool["sessions"] if s != session] + [session]
+    pool["resting"].pop(session, None)
+    save_pool(repo, vizier, pool)
+
+
+def cmd_pool(args: argparse.Namespace) -> dict[str, Any]:
+    repo = find_repo()
+    vizier = args.vizier or require_actor(None)
+    pool = load_pool(repo, vizier)
+    sessions = args.sessions or []
+    if args.action == "add":
+        new = [s for s in dict.fromkeys(sessions) if s not in pool["sessions"]]
+        if pool["started"] + len(new) > POOL_LIMIT:
+            raise Fail(f"a vizier may start at most {POOL_LIMIT} sessions; "
+                       f"{pool['started']} already started", code=3, pool=pool)
+        pool["sessions"] += new
+        pool["started"] += len(new)
+    elif args.action == "drop":
+        gone = set(pool["sessions"]) if args.all else set(sessions)
+        pool["sessions"] = [s for s in pool["sessions"] if s not in gone]
+        for session in gone:
+            pool["resting"].pop(session, None)
+    elif args.action == "rest":
+        until = time.time() + POOL_REST_SECONDS
+        for session in sessions:
+            if session in pool["sessions"]:
+                pool["resting"][session] = until
+    if args.action != "status":
+        save_pool(repo, vizier, pool)
+    graph = Beads(repo).all()
+    return {"vizier": vizier, "pool": pool["sessions"], "started": pool["started"],
+            "limit": POOL_LIMIT, "idle": idle_members(pool, graph, justiciar_state(repo))}
 
 
 def continue_lane(repo: Repo, beads: Beads, closed: dict[str, Any],
@@ -1239,6 +1323,30 @@ MODEL_REQUIRED = (
 )
 
 
+# Restated on every pool hand-out, so it survives the vizier's compaction.
+POOL_NOTICE = (
+    "Pool hand-out: never call start_session for this. clear_session `session`; "
+    "set_session_model (and set_session_effort) to settings, or to your own model "
+    "and effort when settings names none, confirming a required model with "
+    "get_session; send `prompt` with send_message; then record `enact meta <bead> "
+    "enact_session=<session> --reservation <token>` (no bead for a Justiciar). If "
+    "clear or send is refused because the session is busy, pinned or open on "
+    "screen, run `enact pool rest <session>`; if it is archived or missing, "
+    "`enact pool drop <session>`. Then release the reservation: `enact release "
+    "<bead> --reservation <token> --reason \"<refusal>\"` (for a Justiciar, "
+    "`enact justiciar break` and request it again)."
+)
+
+
+POOL_REMINDER = (
+    "Pool vizier: act on this result (pool hand-outs follow `pool_notice`; archive "
+    "listed sessions only when the action is done), then start `enact next` again "
+    "with the same arguments as a background command and end your turn. Its exit "
+    "wakes you. Never run two at once, and never start sessions after pre-flight: "
+    "only a user-started turn may, and each vizier may start ten in its life."
+)
+
+
 LOOP_REMINDER = (
     "Vizier loop: act on this result (archive listed sessions and record "
     "enact_archived=true; start one session per spawn action and record its "
@@ -1264,20 +1372,29 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
         raise Fail(f"epic {epic} not found")
     mine = [b for b in graph if meta(b, "enact_vizier") == vizier]
     busy = busy_sessions(graph)
+    pool = load_pool(repo, vizier)
+    members = set(pool["sessions"])
+    # Once a vizier has a pool it never starts sessions again, even if every
+    # member is lost: it may be running in a turn that cannot.
+    pooled = pool["started"] > 0
+    finished = [
+        {"bead": b["id"], "session": meta(b, "enact_session")}
+        for b in mine
+        if b.get("status") == "closed"
+        and meta(b, "enact_session")
+        and meta(b, "enact_session") not in busy
+        and meta(b, "enact_archived") != "true"
+    ]
     result: dict[str, Any] = {
         "epic": epic,
         "vizier": vizier,
         "host": host_name(),
-        "archive": [
-            {"bead": b["id"], "session": meta(b, "enact_session")}
-            for b in mine
-            if b.get("status") == "closed"
-            and meta(b, "enact_session")
-            and meta(b, "enact_session") not in busy
-            and meta(b, "enact_archived") != "true"
-        ],
-        "reminder": LOOP_REMINDER,
+        # Pool members are reused, so they are archived only when the run ends.
+        "archive": [item for item in finished if item["session"] not in members],
+        "reminder": POOL_REMINDER if pooled else LOOP_REMINDER,
     }
+    if pooled:
+        result["pool_notice"] = POOL_NOTICE
     inflight = [b for b in mine if b.get("status") != "closed"]
     result["inflight"] = [b["id"] for b in inflight]
 
@@ -1288,19 +1405,31 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
         return {**result, "action": control["state"], "control": control}
 
     request = justiciar_state(repo)
+    idle = idle_members(pool, graph, request) if pooled else []
     if request and request.get("state") == "requested" and request.get("host") == host_name():
         result["justiciar"] = request
-        if justiciar_transition(repo, request, {"state": "spawning", "vizier": vizier}):
-            return {
+        member = idle[0] if idle else None
+        changes = {"state": "spawning", "vizier": vizier}
+        if member:
+            changes["pool_session"] = member
+        if (member or not pooled) and justiciar_transition(repo, request, changes):
+            action = {
                 **result,
                 "action": "spawn-justiciar",
                 "title": f"{EMOJI['justiciar']} {request.get('reason', 'Emergency')[:48]}",
                 "prompt": justiciar_prompt(request),
                 "settings": repo.config.role_settings("justiciar", provider()),
             }
+            if member:
+                take_member(repo, vizier, pool, member)
+                action["session"] = member
+            return action
 
     if by_id[epic].get("status") == "closed" and not inflight and delivery["complete"]:
-        return {**result, "action": "done"}
+        # The run is over: archive the whole pool with the other finished chats.
+        listed = {item["session"] for item in finished}
+        return {**result, "action": "done", "archive": finished,
+                "pool_archive": sorted(members - busy - listed)}
     if len(inflight) >= parallel:
         return {**result, "action": "wait", "reason": "capacity"}
 
@@ -1317,6 +1446,12 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
         and not lane_held(by_id.get(b["id"], b), graph)
     ]
     candidates.sort(key=spawn_order)
+    if candidates and pooled and not members:
+        # Only a turn the user starts may start replacements.
+        return {**result, "action": "pool-empty", "started": pool["started"],
+                "limit": POOL_LIMIT}
+    if candidates and pooled and not idle:
+        return {**result, "action": "wait", "reason": "pool busy"}
     for bead in candidates:
         reservation = {
             "enact_run": epic,
@@ -1327,8 +1462,16 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
             "enact_spawn_project": str(repo.main),
             "enact_reservation": uuid.uuid4().hex,
         }
+        if pooled:
+            reservation["enact_pool_session"] = idle[0]
         if claim(repo, bead["id"], f"vizier:{host_name()}:{provider()}:{vizier}", reservation):
-            return {**result, **spawn_action(repo, beads.show(bead["id"]), epic, vizier)}
+            action = spawn_action(repo, beads.show(bead["id"]), epic, vizier)
+            if pooled:
+                take_member(repo, vizier, pool, idle[0])
+                # A pool member already exists: no holding prompt is needed.
+                action.pop("model_required", None)
+                action["session"] = idle[0]
+            return {**result, **action}
         log(f"lost the claim race for {bead['id']}; trying the next bead")
     if candidates:
         # The graph predates the winning claim; it cannot prove a deadlock.
@@ -1369,6 +1512,20 @@ def stale_hours(beads_list: list[dict[str, Any]]) -> float | None:
 def cmd_next(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     vizier = args.vizier or require_actor(None)
+    # A background wait must never overlap another for the same vizier: both
+    # could hand out the same pool member.
+    lock = repo.state / f"next-{pool_path(repo, vizier).stem}.lock"
+    guard = try_lock(lock)
+    if guard is None:
+        raise Fail("another `enact next` is already running for this vizier; "
+                   "wait for it to exit", code=3)
+    try:
+        return next_step(repo, args, vizier)
+    finally:
+        release_lock(lock, guard)
+
+
+def next_step(repo: Repo, args: argparse.Namespace, vizier: str) -> dict[str, Any]:
     deadline = time.monotonic() + max(args.wait, 0)
     # Archives already reported (and possibly refused because the session was
     # still busy) only wake the vizier again at the end of the wait.
@@ -2733,7 +2890,8 @@ def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
         "--set-metadata", "enact_recovery=" + json.dumps(records),
         "--unset-metadata", "enact_vizier", "--unset-metadata", "enact_session",
         "--unset-metadata", "enact_actor", "--unset-metadata", "enact_archived",
-        "--unset-metadata", "enact_reservation", actor=actor)
+        "--unset-metadata", "enact_reservation", "--unset-metadata", "enact_pool_session",
+        actor=actor)
     result = sync(repo)
     saved = beads.show(args.bead)
     if saved.get("assignee") or recovery_records(saved) != records:
@@ -2985,6 +3143,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--vizier", help="vizier identity (default: this session)")
     p.add_argument("--wait", type=int, default=0, help="block up to N seconds for an action")
     p.add_argument("--interval", type=int, default=60)
+
+    p = add("pool", cmd_pool, "Track the sessions a Claude Desktop vizier reuses.")
+    p.add_argument("action", choices=["add", "drop", "rest", "status"])
+    p.add_argument("sessions", nargs="*")
+    p.add_argument("--all", action="store_true", help="drop every member")
+    p.add_argument("--vizier", help="vizier identity (default: this session)")
 
     p = add("wait", cmd_wait, "Block until every named bead is closed.")
     p.add_argument("beads", nargs="+")

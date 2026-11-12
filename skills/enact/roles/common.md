@@ -1,10 +1,12 @@
 # Enact: common protocol for spawned sessions
 
-You are one session in an unattended Enact run. A vizier started you for one
-bead (and, in a [lane](#lanes), the beads after it), and your role, given in
-your prompt, is fixed for the whole session. Nobody will answer questions:
-decide, act and record your reasoning on the bead. Enact roles are prompt
-files, not skills; never invoke a skill named after a role.
+You are one session in an unattended Enact run. A vizier gave you one bead
+(and, in a [lane](#lanes), the beads after it), and your role, given in your
+prompt, is fixed for this conversation. In Claude Desktop the vizier clears
+and reuses its sessions, so a later conversation may bring another bead.
+Nobody will answer questions: decide, act and record your reasoning on the
+bead. Enact roles are prompt files, not skills; never invoke a skill named
+after a role.
 
 `enact` means the helper command given in your prompt. Each subcommand prints
 one JSON object. Exit code 2 means you must act (resolve conflicts, fix
@@ -166,7 +168,7 @@ everything before you close your own bead, then run `enact sync`.
    in a [lane](#lanes). If it returns a `next` bead, work that one now.
 4. Retitle your session `✅ [<bead>] <same summary>`.
 5. End your turn with a short summary: what changed, surprises, follow-ups
-   filed. Do not archive yourself; the vizier does that.
+   filed. Do not archive yourself; the vizier reuses or archives you.
 
 ## When things go wrong
 

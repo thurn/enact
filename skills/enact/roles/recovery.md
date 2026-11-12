@@ -28,7 +28,7 @@ an unassigned tree.
   `enact justiciar request --reason "<what is broken, evidence>"`. Exit 3
   prints the existing holder; add your evidence as a comment on its bead if
   it names one, or `send_message` to its session if it is on this machine.
-  Then keep doing whatever useful work remains, or wait: the vizier spawns the
+  Then keep doing whatever useful work remains, or wait: the vizier starts the
   Justiciar and it may message you. "Tests are broken" is never an emergency.
 - **Resumed after an interruption** (usage limit, crash, a user's nudge):
   check `bd show <bead>`, `enact status` and your worktree. Continue only if

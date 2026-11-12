@@ -1001,3 +1001,38 @@ blindly recreate jobs or hand-edit scheduler databases.
   stoppage audit, inline runs, sweeps and ad hoc sessions following
   AGENTS.md. Spawned workers and the Justiciar never ask, so they keep ✅
   and ⛔.
+
+## Session pool and background waits (2026-11-12)
+
+- Claude Desktop now caps a session at ten sessions started over its life,
+  and still lets only a user-started turn start one. A vizier that started
+  one session per bead stopped after ten beads.
+- A live probe from turns woken by a background task (no user, no
+  side-session exception) showed `start_session` refused, while
+  `clear_session`, `set_session_model` and `send_message` on an idle child
+  worked, after thirteen automatic wakes in a row. The cleared child saw no
+  earlier messages and ran on the newly set model.
+- So a Claude Desktop vizier starts a fixed pool (`parallel + 1`, the spare
+  for a Justiciar, at most ten) in its first turn and hands each bead to an
+  idle member: clear, set model and effort, send the spawn prompt. It never
+  starts sessions after pre-flight. A lost member is replaced only in a
+  turn the user starts (`action: pool-empty` when none remain).
+- Because nothing after pre-flight needs a user-started turn, the vizier no
+  longer holds one turn open with foreground `enact next` calls. It runs
+  `enact next` in the background and ends its turn; the exit notification
+  wakes it. Remote Control messages and session reports no longer break a
+  run. Codex keeps its foreground loop.
+- The pool is machine-local state per vizier (`pool-<vizier>.json`:
+  members, sessions started, members resting). Which members are busy comes
+  from the graph: an open bead bound by `enact_session` or reserved by
+  `enact_pool_session`, or the Justiciar lock's `pool_session`. The
+  reservation names the member, so its worker may run `enact start` before
+  the vizier records the binding, and no other session can take it.
+- A member that refuses `clear_session` (still finishing its turn, pinned,
+  open on screen) rests for a minute; an archived or missing one is
+  dropped. Members rotate so work spreads over the pool. Members are
+  archived only when the run is done.
+- `enact next` holds a per-vizier lock, since two overlapping background
+  waits could hand out the same member.
+- Old viziers have no pool file and see the old behaviour and reminder.
+  Once a vizier has started a pool it never falls back to `start_session`.

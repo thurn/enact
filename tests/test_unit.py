@@ -1071,6 +1071,82 @@ class CommandPolicyTest(unittest.TestCase):
         self.assertEqual(step["archive"], [{"bead": first, "session": "worker"},
                                            {"bead": second, "session": "worker"}])
 
+    def test_pool_vizier_reuses_members_instead_of_starting_sessions(self):
+        # Claude Desktop caps a session at ten starts, all in user-started
+        # turns, so a pool vizier hands beads to idle members it started.
+        epic = self.a.create("pool", type="epic")
+        beads = [self.a.create(f"b{i}", parent=epic, priority=i) for i in range(3)]
+        self.a.enact("pool", "add", *[f"local_{i}" for i in range(11)], code=3)
+        pool = self.a.enact("pool", "add", "local_a", "local_b", "local_c")
+        self.assertEqual((pool["started"], pool["idle"]), (3, ["local_a", "local_b", "local_c"]))
+        self.a.enact("pool", "add", *[f"local_{i}" for i in range(8)], code=3)
+
+        def desktop(session):
+            return {"ENACT_SESSION": "", "CLAUDE_CODE_SESSION_ID": f"cli-{session}",
+                    "CLAUDE_CODE_HOST_SESSION_ID": session}
+
+        step = self.a.enact("next", "--epic", epic, "--parallel", "2")
+        self.assertEqual((step["action"], step["bead"], step["session"]),
+                         ("spawn", beads[0], "local_a"))
+        self.assertIn("never call start_session", step["pool_notice"])
+        self.assertIn("background", step["reminder"])
+        self.a.enact("meta", beads[0], "enact_session=local_a", "--reservation", step["reservation"])
+        self.a.enact("start", beads[0], "--reservation", step["reservation"], env=desktop("local_a"))
+        # A reused member answers at once and may start before the vizier records it.
+        step = self.a.enact("next", "--epic", epic, "--parallel", "2")
+        self.assertEqual((step["bead"], step["session"]), (beads[1], "local_b"))
+        self.a.enact("start", beads[1], "--reservation", step["reservation"],
+                     env=desktop("local_c"), code=3)
+        self.a.enact("start", beads[1], "--reservation", step["reservation"], env=desktop("local_b"))
+        self.a.enact("meta", beads[1], "enact_session=local_b", "--reservation", step["reservation"])
+        self.assertEqual(self.a.show(beads[1])["assignee"], "local_b")
+        self.assertEqual(self.a.enact("next", "--epic", epic, "--parallel", "2")["reason"],
+                         "capacity")
+        self.a.enact("close", beads[0], "--reason", "done", env=desktop("local_a"))
+        # Members rotate, finished members stay unarchived, and a refusal rests one.
+        self.a.enact("pool", "rest", "local_c")
+        step = self.a.enact("next", "--epic", epic, "--parallel", "2")
+        self.assertEqual((step["bead"], step["session"], step["archive"]),
+                         (beads[2], "local_a", []))
+        self.a.enact("release", beads[2], "--reservation", step["reservation"],
+                     "--reason", "clear refused")
+        self.assertNotIn("enact_pool_session", self.a.show(beads[2])["metadata"])
+        self.a.enact("pool", "rest", "local_a")
+        self.assertEqual(self.a.enact("next", "--epic", epic, "--parallel", "2")["reason"],
+                         "pool busy")
+        self.a.enact("pool", "drop", "local_a", "local_c")
+        self.a.enact("close", beads[1], "--reason", "done", env=desktop("local_b"))
+        step = self.a.enact("next", "--epic", epic, "--parallel", "2")
+        self.assertEqual((step["bead"], step["session"]), (beads[2], "local_b"))
+        self.a.enact("start", beads[2], "--reservation", step["reservation"], env=desktop("local_b"))
+        self.a.enact("close", beads[2], "--reason", "done", env=desktop("local_b"))
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual(step["action"], "done")
+        self.assertEqual(sorted(i["bead"] for i in step["archive"]), sorted(beads))
+        self.assertEqual(step["pool_archive"], [])
+
+    def test_lost_pool_and_justiciar_use_members(self):
+        epic = self.a.create("pool", type="epic")
+        self.a.create("work", parent=epic)
+        self.a.enact("pool", "add", "local_a")
+        with mock.patch.object(enact, "justiciar_state",
+                               return_value={"state": "requested", "host": "host-a",
+                                             "reason": "deadlock", "sha": "x"}), \
+                mock.patch.object(enact, "justiciar_transition", return_value=True) as move:
+            step = self.a.enact("next", "--epic", epic)
+        self.assertEqual((step["action"], step["session"]), ("spawn-justiciar", "local_a"))
+        self.assertEqual(move.call_args.args[2]["pool_session"], "local_a")
+        # The Justiciar holds its member until it releases the lock.
+        with mock.patch.object(enact, "justiciar_state",
+                               return_value={"state": "active", "pool_session": "local_a"}):
+            self.assertEqual(self.a.enact("next", "--epic", epic)["reason"], "pool busy")
+        # A pool vizier never falls back to starting sessions.
+        self.a.enact("pool", "drop", "--all")
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual((step["action"], step["started"]), ("pool-empty", 1))
+        self.assertEqual(self.a.enact("next", "--epic", epic, session="other-vizier")["action"],
+                         "spawn")
+
     def test_brief_gathers_epics_dependency_handoffs_and_lane(self):
         epic = self.a.create("run", type="epic", description="code map: cli.py")
         done = self.a.create("done", parent=epic, labels="lane:cli")
