@@ -332,6 +332,8 @@ class Machine:
             "CLAUDE_CODE_HOST_SESSION_ID": "",
             "CODEX_THREAD_ID": "",
             "BD_NON_INTERACTIVE": "1",
+            # Never fast-forward the real Enact checkout from a test.
+            "ENACT_NO_SELF_UPDATE": "1",
         }
 
     def enact(self, *args, code=0, cwd=None, session=None, env=None):

@@ -13,8 +13,9 @@ with `enact ci --wait <sha>` until slow CI passes, then retitles ✅.
 
 The slow-CI runner filed your bead. It records:
 
-- `enact_ci_os`: the OS that failed. Prefer fixing it on that OS. If you are
-  on a different OS and cannot reproduce, comment and keep going with
+- `enact_ci_os`: the OS that failed. Viziers on that OS get the bead first;
+  any machine may take it after it waits two hours unclaimed. If you are on
+  a different OS and cannot reproduce, comment and keep going with
   analysis: the cause is often visible in the log.
 - `enact_ci_host`: the machine that failed. A pass on another machine, or
   master advancing from another machine's runner, does not prove the

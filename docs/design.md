@@ -930,3 +930,36 @@ blindly recreate jobs or hand-edit scheduler databases.
   the steps fails loudly instead of looping.
 - A model that cannot be set blocks the run rather than substituting,
   matching the Codex adapter's rule for an explicitly required model.
+
+## Machines on different OSes (2026-11-11)
+
+- Beryl runs Enact on a Mac and a Windows PC. A Windows-only slow-CI failure
+  sat unworked for hours: its Steward had no target, so a Mac vizier could
+  take a failure it cannot reproduce, no vizier ran on the PC to take it,
+  and the Mac session that pushed the commits got `passed` from `ci --wait`
+  once the Mac's own run promoted master.
+- A Steward goes first to a machine that can reproduce it: its
+  `enact_ci_host`, or any machine on its `enact_ci_os`. After
+  `STEWARD_HANDOFF_HOURS` (2) unclaimed, any machine's vizier may take it:
+  the cause is often plain from the log, and an open Steward holds its runs.
+  An explicit `enact_host` still wins, and Stewards without CI metadata
+  route as before.
+- `ci --wait` adds `other_os_stewards` to every result when another OS's
+  open Steward covers the SHA. Its state is unchanged, since another OS
+  failing never stopped this one promoting. `watch_ci` tells the session to
+  repair it if the log makes the cause plain, and otherwise to comment its
+  analysis and name the bead in its final reply.
+- `enact ci --schedule install` polls slow CI every 30 minutes from launchd
+  (macOS) or Task Scheduler (Windows); elsewhere it prints a cron line. A
+  runner otherwise starts only from that machine's own pushes, viziers,
+  waits and Marshal, so a machine with no session running never tested its
+  peers' commits. A poll of a tested tip only fetches. The schedule runs the
+  stable Enact checkout, never a delivery worktree.
+- `enact push` fast-forwards the Enact checkout to its master first (only
+  on master, clean, fast-forward; `ENACT_NO_SELF_UPDATE` turns it off), so
+  machines without a vizier or Marshal pulling Enact do not drift. It takes
+  effect from the next command.
+- Promotion is unchanged: any machine's pass advances master. An OS quorum
+  would hold master whenever one machine is asleep or off, and every
+  project's master would then depend on its least available machine. A
+  peer OS's failure is repaired through its Steward instead.

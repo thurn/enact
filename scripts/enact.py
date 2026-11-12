@@ -18,8 +18,10 @@ import functools
 import hashlib
 import json
 import os
+import plistlib
 import random
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -64,6 +66,11 @@ WINDOWS = os.name == "nt"
 # Seconds a directory git does not track must sit untouched before the
 # worktree sweep deletes it, so it never races a tree being created.
 SWEEP_AGE = 3600
+# Hours an unclaimed slow-CI failure waits for a machine on its own OS
+# before any machine's vizier may take it.
+STEWARD_HANDOFF_HOURS = 2.0
+# Minutes between scheduled slow-CI polls (`enact ci --schedule install`).
+CI_SCHEDULE_MINUTES = 30
 
 
 class Fail(Exception):
@@ -424,9 +431,35 @@ def spawn_order(bead: dict[str, Any]) -> tuple[Any, ...]:
     return role_of(bead) != "steward", bead.get("priority", 2), number
 
 
+def bead_age_hours(bead: dict[str, Any]) -> float | None:
+    try:
+        created = dt.datetime.fromisoformat(str(bead.get("created_at")).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=dt.timezone.utc)
+    return (dt.datetime.now(dt.timezone.utc) - created).total_seconds() / 3600
+
+
+def steward_targeted_here(bead: dict[str, Any]) -> bool:
+    """A slow-CI failure goes first to a machine that can reproduce it: the
+    failing host, or another machine on the same OS. Once it has waited
+    STEWARD_HANDOFF_HOURS unclaimed, any machine may take it, since a fix is
+    often plain from the log and an open Steward holds its runs."""
+    failed_host, failed_os = meta(bead, "enact_ci_host"), meta(bead, "enact_ci_os")
+    if not failed_host and not failed_os:
+        return True  # legacy or hand-filed Steward
+    if failed_host == host_name() or failed_os == ci_os():
+        return True
+    age = bead_age_hours(bead)
+    return age is None or age >= STEWARD_HANDOFF_HOURS
+
+
 def targeted_here(bead: dict[str, Any]) -> bool:
     want_host = meta(bead, "enact_host")
     want_provider = meta(bead, "enact_provider")
+    if not want_host and role_of(bead) == "steward" and not steward_targeted_here(bead):
+        return False
     return (not want_host or want_host == host_name()) and (
         not want_provider or want_provider == provider()
     )
@@ -1899,6 +1932,7 @@ def recover_deliveries(repo: Repo) -> list[dict[str, Any]]:
 @serialized
 def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
+    enact_update = update_enact()
     sync(repo)
     assigned = worktree_bead(repo, repo.top)
     if assigned and args.bead and args.bead != assigned["id"]:
@@ -1958,6 +1992,7 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     elif result.get("pushed") and not args.bead:
         result["title"] = TITLE_NOTICE
     result["local_branches"] = track_local_branches(repo)
+    result["enact_update"] = enact_update
     branch = repo.git("rev-parse", "--abbrev-ref", "HEAD")
     in_enact_tree = (
         repo.top.resolve().parent == repo.worktree_root().resolve() and repo.top != repo.main
@@ -2121,7 +2156,12 @@ def watch_ci_notice(sha: str) -> str:
         f"owns it. Run `enact ci --wait {sha}` (600000 ms tool timeout) until it "
         "reports `passed`. On `failed`, claim the Steward bead with "
         f"`enact claim <bead>`, follow {ROLES_DIR / 'steward.md'}, and watch "
-        "your fix the same way. Title this session `🔮 <summary>` while waiting, "
+        "your fix the same way. If a result lists `other_os_stewards`, your "
+        "commits also failed slow CI on another OS, which a machine on that OS "
+        "repairs first: read its bead's log, and if the cause is plain from it, "
+        "claim the unassigned bead and repair it as a Steward; otherwise comment "
+        "your analysis on the bead and name it in your final reply. "
+        "Title this session `🔮 <summary>` while waiting, "
         "`🚒 <summary>` while repairing, and `✅ <summary>` once CI passes "
         "(`⛔` if you stop without it)."
     )
@@ -2141,24 +2181,30 @@ def ci_wait(repo: Repo, sha: str, seconds: int, interval: int) -> dict[str, Any]
     while True:
         sync(repo)
         fetch(repo)
-        if repo.git_ok("merge-base", "--is-ancestor", sha, master):
-            return {"sha": sha, "state": "passed"}
         graph = Beads(repo).all()
-        # A Steward someone else holds is already being repaired, and another
-        # OS failing does not stop this one promoting master: keep waiting.
-        stewards = [b["id"] for b in graph if role_of(b) == "steward"
-                    and b.get("status") != "closed" and meta(b, "enact_ci_os") == ci_os()
-                    and (b.get("assignee") or "") in session_aliases() | {""}
-                    and steward_covers(repo, b, sha)]
+        covering = [b for b in graph if role_of(b) == "steward"
+                    and b.get("status") != "closed" and steward_covers(repo, b, sha)]
+        # Another OS failing does not stop this one promoting master, but the
+        # session that pushed should know its commits broke a peer machine.
+        elsewhere = {"other_os_stewards": [
+            {"id": b["id"], "os": meta(b, "enact_ci_os"), "host": meta(b, "enact_ci_host"),
+             "assignee": b.get("assignee") or None}
+            for b in covering if meta(b, "enact_ci_os") not in (None, ci_os())]}
+        elsewhere = elsewhere if elsewhere["other_os_stewards"] else {}
+        if repo.git_ok("merge-base", "--is-ancestor", sha, master):
+            return {"sha": sha, "state": "passed", **elsewhere}
+        # A Steward someone else holds is already being repaired: keep waiting.
+        stewards = [b["id"] for b in covering if meta(b, "enact_ci_os") == ci_os()
+                    and (b.get("assignee") or "") in session_aliases() | {""}]
         if stewards:
             return {"sha": sha, "state": "failed", "stewards": stewards,
-                    "vizier_active": vizier_active(repo, graph)}
+                    "vizier_active": vizier_active(repo, graph), **elsewhere}
         status = ci_status(repo)
         if not status["running"] and status["last_tested"] != repo.git(
                 "rev-parse", repo.remote_ref(repo.config.staging)):
             status = start_ci(repo)
         if time.monotonic() >= deadline:
-            return {"sha": sha, "state": "waiting", "ci": status}
+            return {"sha": sha, "state": "waiting", "ci": status, **elsewhere}
         time.sleep(min(interval, max(deadline - time.monotonic(), 1)))
 
 
@@ -2195,6 +2241,100 @@ def start_ci(repo: Repo, runner: Path | None = None) -> dict[str, Any]:
 
 def ci_os() -> str:
     return {"darwin": "macos", "win32": "windows"}.get(sys.platform, sys.platform)
+
+
+def enact_checkout() -> Path:
+    """The Enact checkout live sessions run from, even when this copy of the
+    helper is in one of its delivery worktrees."""
+    if ENACT_ROOT.parent.name == ".worktrees":
+        return ENACT_ROOT.parent.parent
+    return ENACT_ROOT
+
+
+def update_enact() -> str:
+    """Fast-forward the Enact checkout to its master, so every machine runs
+    the helper and roles slow CI last passed. Best effort: a checkout that is
+    dirty, off master or diverged is left alone and reported. The change takes
+    effect from the next command."""
+    if os.environ.get("ENACT_NO_SELF_UPDATE"):
+        return "disabled"
+    root = enact_checkout()
+    if not (root / ".git").exists():
+        return "not a git checkout"
+    git = lambda *args: run(["git", *args], root, check=False)  # noqa: E731
+    if git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip() != "master":
+        return "not on master"
+    if git("status", "--porcelain", "--untracked-files=no").stdout.strip():
+        return "local changes"
+    before = git("rev-parse", "HEAD").stdout.strip()
+    pulled = git("pull", "--ff-only", "-q")
+    if pulled.returncode != 0:
+        return f"pull failed: {(pulled.stderr or pulled.stdout).strip()[-200:]}"
+    return "updated" if git("rev-parse", "HEAD").stdout.strip() != before else "current"
+
+
+def ci_schedule_name(repo: Repo) -> str:
+    digest = hashlib.sha256(str(repo.main.resolve()).encode()).hexdigest()[:8]
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", repo.main.name).strip("-").lower() or "project"
+    return f"enact-ci-{slug}-{digest}"
+
+
+def ci_schedule_command(repo: Repo) -> list[str]:
+    python = Path(sys.executable)
+    if WINDOWS and (python.parent / "pythonw.exe").exists():
+        python = python.parent / "pythonw.exe"  # no console window every poll
+    script = enact_checkout() / "scripts" / "enact.py"
+    return [str(python), str(script), "ci", "--detach", "--repo", str(repo.main)]
+
+
+def ci_schedule(repo: Repo, action: str, minutes: int) -> dict[str, Any]:
+    """Poll this machine's slow CI on a timer, so each OS tests staging
+    whether or not this machine has a session running. The runner only
+    fetches when staging is already tested."""
+    name, command = ci_schedule_name(repo), ci_schedule_command(repo)
+    result: dict[str, Any] = {"name": name, "os": ci_os()}
+    if sys.platform == "darwin":
+        label = f"dev.enact.{name}"
+        plist = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+        domain = f"gui/{os.getuid()}"
+        result.update(label=label, plist=str(plist))
+        if action == "status":
+            loaded = run(["launchctl", "print", f"{domain}/{label}"], repo.main, check=False)
+            return {**result, "installed": plist.exists(), "loaded": loaded.returncode == 0}
+        run(["launchctl", "bootout", domain, str(plist)], repo.main, check=False)
+        if action == "remove":
+            plist.unlink(missing_ok=True)
+            return {**result, "installed": False}
+        env = {k: v for k, v in os.environ.items()
+               if k in ("PATH", "HOME", "LANG") or k.startswith(("ENACT_", "BERYL_"))}
+        plist.parent.mkdir(parents=True, exist_ok=True)
+        plist.write_bytes(plistlib.dumps({
+            "Label": label, "ProgramArguments": command, "WorkingDirectory": str(repo.main),
+            "StartInterval": minutes * 60, "RunAtLoad": True, "EnvironmentVariables": env,
+            "StandardOutPath": str(repo.state / "ci-schedule.log"),
+            "StandardErrorPath": str(repo.state / "ci-schedule.log"),
+        }))
+        run(["launchctl", "bootstrap", domain, str(plist)], repo.main)
+        return {**result, "installed": True, "minutes": minutes}
+    if WINDOWS:
+        task = f"Enact\\{name}"
+        result["task"] = task
+        if action == "status":
+            query = run(["schtasks", "/Query", "/TN", task], repo.main, check=False)
+            return {**result, "installed": query.returncode == 0}
+        if action == "remove":
+            run(["schtasks", "/Delete", "/F", "/TN", task], repo.main, check=False)
+            return {**result, "installed": False}
+        line = subprocess.list2cmdline(command)
+        if len(line) > 261:
+            raise Fail(f"scheduled command is longer than schtasks allows: {line}")
+        run(["schtasks", "/Create", "/F", "/SC", "MINUTE", "/MO", str(minutes),
+             "/TN", task, "/TR", line], repo.main)
+        return {**result, "installed": True, "minutes": minutes}
+    line = shlex.join(command)
+    return {**result, "supported": False,
+            "cron": f"*/{minutes} * * * * {line}",
+            "hint": "add the cron line with `crontab -e`"}
 
 
 def report_ci_failure(repo: Repo, tip: str, green: str, log_tail: str) -> str:
@@ -2298,8 +2438,10 @@ def retry_ci_promotion(repo: Repo) -> dict[str, Any] | None:
 
 
 def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
-    repo = find_repo()
+    repo = find_repo(Path(args.repo) if args.repo else None)
     cfg = repo.config
+    if args.schedule:
+        return ci_schedule(repo, args.schedule, args.minutes)
     if args.detach:
         return start_ci(repo)
     if args.status:
@@ -2968,6 +3110,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="block until SHA reaches master or a Steward bead covers it")
     p.add_argument("--timeout", type=int, default=540, help="seconds --wait blocks for")
     p.add_argument("--interval", type=int, default=30, help=argparse.SUPPRESS)
+    p.add_argument("--schedule", choices=["install", "remove", "status"],
+                   help="poll slow CI on a timer (launchd, Task Scheduler)")
+    p.add_argument("--minutes", type=int, default=CI_SCHEDULE_MINUTES,
+                   help="minutes between scheduled polls")
+    p.add_argument("--repo", help="project checkout (default: the current directory)")
     p.add_argument("--check-worker", help=argparse.SUPPRESS)
     p.add_argument("--coordinator", type=int, default=0, help=argparse.SUPPRESS)
 

@@ -775,9 +775,17 @@ class CiWatchTest(unittest.TestCase):
         result, _ = self.wait([self.steward("other")], covered)
         self.assertEqual(result["state"], "waiting")
         elsewhere = self.steward()
-        elsewhere["metadata"]["enact_ci_os"] = "plan9"
+        elsewhere["metadata"].update(enact_ci_os="plan9", enact_ci_host="bell")
         result, _ = self.wait([elsewhere], covered)
         self.assertEqual(result["state"], "waiting")
+        # The pushing session still hears that its commits broke another OS.
+        self.assertEqual(result["other_os_stewards"],
+                         [{"id": "s", "os": "plan9", "host": "bell", "assignee": None}])
+        result, _ = self.wait([elsewhere], covered | {("sha", "origin/master")})
+        self.assertEqual(result["state"], "passed")
+        self.assertEqual(result["other_os_stewards"][0]["id"], "s")
+        result, _ = self.wait([], covered | {("sha", "origin/master")})
+        self.assertNotIn("other_os_stewards", result)
         # Already-green work is not blamed for a later failure.
         result, _ = self.wait([self.steward()], covered | {("sha", "green")})
         self.assertEqual(result["state"], "waiting")
@@ -808,6 +816,85 @@ class CiWatchTest(unittest.TestCase):
         start.assert_called_once()
         _, start = self.wait([], set(), {"running": False, "last_tested": "tip"})
         start.assert_not_called()
+
+
+class StewardRoutingTest(unittest.TestCase):
+    def steward(self, hours_old, **ci):
+        created = enact.dt.datetime.now(enact.dt.timezone.utc) - enact.dt.timedelta(hours=hours_old)
+        return {"id": "s", "labels": ["role:steward"], "created_at": created.isoformat(),
+                "metadata": {f"enact_ci_{k}": v for k, v in ci.items()}}
+
+    def targeted(self, bead, host="jarvis", os_name="macos"):
+        with mock.patch.object(enact, "host_name", return_value=host), \
+                mock.patch.object(enact, "ci_os", return_value=os_name), \
+                mock.patch.object(enact, "provider", return_value="claude"):
+            return enact.targeted_here(bead)
+
+    def test_a_failure_goes_to_its_os_first_then_to_any_machine(self):
+        fresh = self.steward(0.1, os="windows", host="cygnus")
+        self.assertTrue(self.targeted(fresh, "cygnus", "windows"))
+        self.assertTrue(self.targeted(fresh, "other-pc", "windows"))
+        self.assertFalse(self.targeted(fresh))
+        stale = self.steward(enact.STEWARD_HANDOFF_HOURS + 0.1, os="windows", host="cygnus")
+        self.assertTrue(self.targeted(stale))
+
+    def test_explicit_targets_and_legacy_stewards_keep_their_routing(self):
+        self.assertTrue(self.targeted(self.steward(0)))
+        pinned = self.steward(9, os="windows", host="cygnus")
+        pinned["metadata"]["enact_host"] = "cygnus"
+        self.assertFalse(self.targeted(pinned))
+        self.assertTrue(self.targeted(pinned, "cygnus", "windows"))
+        executor = {"id": "e", "metadata": {"enact_ci_os": "windows"}}
+        self.assertTrue(self.targeted(executor))
+
+
+class CiScheduleTest(unittest.TestCase):
+    def schedule(self, platform, action="install"):
+        tmp = Path(tempfile.mkdtemp())
+        repo = types.SimpleNamespace(main=tmp / "my project", state=tmp / "state")
+        calls = []
+
+        def fake_run(cmd, cwd, check=True, env=None):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(enact, "run", side_effect=fake_run), \
+                mock.patch.object(enact.sys, "platform", platform), \
+                mock.patch.object(enact, "WINDOWS", platform == "win32"), \
+                mock.patch.object(enact.os, "getuid", create=True, return_value=501), \
+                mock.patch.object(enact.Path, "home", return_value=tmp):
+            return enact.ci_schedule(repo, action, 30), calls, tmp
+
+    def test_macos_installs_a_launch_agent_that_detaches_the_runner(self):
+        result, calls, tmp = self.schedule("darwin")
+        plist = enact.plistlib.loads(Path(result["plist"]).read_bytes())
+        self.assertEqual(plist["StartInterval"], 1800)
+        self.assertEqual(plist["ProgramArguments"][2:],
+                         ["ci", "--detach", "--repo", str(tmp / "my project")])
+        self.assertIn("PATH", plist["EnvironmentVariables"])
+        self.assertEqual([c[:2] for c in calls],
+                         [["launchctl", "bootout"], ["launchctl", "bootstrap"]])
+        result, _, _ = self.schedule("darwin", "remove")
+        self.assertFalse(result["installed"])
+
+    def test_windows_creates_a_scheduled_task(self):
+        result, calls, _ = self.schedule("win32")
+        self.assertTrue(result["task"].startswith("Enact\\enact-ci-my-project-"))
+        create = calls[0]
+        self.assertEqual(create[:6], ["schtasks", "/Create", "/F", "/SC", "MINUTE", "/MO"])
+        self.assertIn("ci --detach --repo", create[-1])
+
+    def test_other_platforms_get_a_cron_line(self):
+        result, calls, _ = self.schedule("linux")
+        self.assertFalse(result["supported"])
+        self.assertTrue(result["cron"].startswith("*/30 * * * * "))
+        self.assertEqual(calls, [])
+
+    def test_the_schedule_runs_the_stable_checkout_not_a_worktree(self):
+        with mock.patch.object(enact, "ENACT_ROOT", Path("/x/enact/.worktrees/feature")):
+            self.assertEqual(enact.enact_checkout(), Path("/x/enact"))
+        with mock.patch.object(enact, "ENACT_ROOT", Path("/x/enact")):
+            self.assertEqual(enact.enact_checkout(), Path("/x/enact"))
 
 
 class WaitTest(unittest.TestCase):
