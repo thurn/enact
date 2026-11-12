@@ -25,7 +25,8 @@ Claude Desktop only lets a session start other sessions during a turn the
 user started. A scheduled task, a wakeup or another session's message
 cannot start a run. So "schedule a run" means the vizier starts its session
 pool here, right after the sweep, in the turn the user started with
-`/enact-sweep`. After that it waits in the background like any vizier.
+`/enact-sweep`. After that it waits in the background. On Codex Desktop the
+vizier starts fresh chats as work becomes ready and waits in the foreground.
 
 ## Paths
 

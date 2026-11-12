@@ -1019,24 +1019,35 @@ class CommandPolicyTest(unittest.TestCase):
                      "unsupported lookup", session="observer", code=3)
         self.a.enact("close", bead, "--reason", "legacy completed", session="legacy")
 
-    def test_vizier_schedules_archives_and_finishes(self):
+    def test_codex_vizier_starts_and_archives_fresh_chats_even_with_pool_state(self):
         epic = self.a.create("epic", type="epic")
         first = self.a.create("first", parent=epic, priority=1)
         second = self.a.create("second", parent=epic, labels="role:warden")
         self.a.bd("dep", "add", second, first)
-        step = self.a.enact("next", "--epic", epic)
+        self.a.enact("pool", "add", "exec-1", "unused-member")
+
+        def codex(*args, thread="sess-a"):
+            return self.a.enact(*args, env={"ENACT_PROVIDER": "", "ENACT_APP": "codex",
+                                          "ENACT_SESSION": "", "CODEX_THREAD_ID": thread})
+
+        step = codex("next", "--epic", epic)
         self.assertEqual((step["action"], step["bead"], step["role"]), ("spawn", first, "executor"))
         self.assertIn("executor.md", step["prompt"])
-        self.a.enact("meta", first, "enact_session=exec-1", "--reservation", step["reservation"])
-        self.start_worker(self.a, first, "exec-1")
-        self.a.enact("close", first, "--reason", "done", session="exec-1")
-        step = self.a.enact("next", "--epic", epic)
+        self.assertIn("foreground", step["reminder"])
+        self.assertNotIn("pool_notice", step)
+        self.assertNotIn("session", step)
+        codex("meta", first, "enact_session=exec-1", "--reservation", step["reservation"])
+        codex("start", first, "--reservation", step["reservation"], thread="exec-1")
+        codex("close", first, "--reason", "done", thread="exec-1")
+        step = codex("next", "--epic", epic)
         self.assertEqual(step["archive"], [{"bead": first, "session": "exec-1"}])
         self.assertEqual((step["action"], step["bead"], step["role"]), ("spawn", second, "warden"))
-        self.start_worker(self.a, second, "exec-2")
-        self.a.enact("close", second, "--reason", "done", session="exec-2")
+        codex("start", second, "--reservation", step["reservation"], thread="exec-2")
+        codex("close", second, "--reason", "done", thread="exec-2")
         self.assertEqual(self.a.show(epic)["status"], "closed")
-        self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "done")
+        step = codex("next", "--epic", epic)
+        self.assertEqual(step["action"], "done")
+        self.assertNotIn("pool_archive", step)
 
     def test_one_session_works_a_lane_and_is_archived_only_after_it(self):
         epic = self.a.create("lanes", type="epic")

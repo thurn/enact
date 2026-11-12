@@ -351,33 +351,30 @@ task-prompt run or a light run gets none.
    than `parallel + 1`, run with what you have.
 4. Title yourself `🔮 [<epic>] <short summary>`.
 5. Give the user a short summary: the epic, bead count, milestones,
-   parallelism, pool size, what would make you stop. Then start the loop
-   without waiting for approval.
+   parallelism, pool size (Claude Desktop), and what would make you stop.
+   Then start the loop without waiting for approval.
 
 ## Phase 2: the loop
 
-```sh
-enact next --epic <epic> --parallel <N> --wait 3000
-```
+In Claude Desktop, run `enact next --epic <epic> --parallel <N> --wait 3000`
+with `run_in_background` and end your turn: one short line, title still 🔮.
+When its notification wakes you, read the JSON from its output file, act on
+it, start it again the same way and end your turn. A wake with no finished
+`enact next` (a session's report, a stale notice) needs no action: end the
+turn. If you find none running and no result unhandled, start one.
 
-In Claude Desktop, run it with `run_in_background` and end your turn: one
-short line, title still 🔮. When its notification wakes you, read the JSON
-from its output file, act on it, start it again the same way and end your
-turn. A wake with no finished `enact next` (a session's report, a stale
-notice) needs no action: end the turn. If you find none running and no
-result unhandled, start one.
-
-In Codex, repeat it inside the same turn as one foreground process:
+In Codex, run `enact next --epic <epic> --parallel <N> --wait 540`
+inside the same turn as one foreground process:
 `exec_command` may return a `session_id` before the helper finishes; resume
 that same process with `write_stdin` in waits of at most 60 seconds. If the
 orchestration wrapper itself yields a cell ID, resume it with its `wait`
-tool first. Never launch a second `next` while the first still runs. Read the final JSON once the
-process exits. Check user steering between waits: a stop records the shared
-pause immediately, then drain the pending process without acting on a stale
-spawn result. Retain any unbound reservation and its token under the shared
-hold. After explicit resume, reconcile whether a child was created; if
-confirmed unbound, release with that token before scheduling again. Never
-release a bound or uncertain child just to restart the loop.
+tool first. Never launch a second `next` while the first still runs. Read the
+final JSON once the process exits. Check user steering between waits. On a
+stop, record the shared pause immediately, then drain the process without
+acting on a stale spawn result. Retain any unbound reservation and its token
+under the shared hold. After explicit resume, reconcile whether a child was
+created; if confirmed unbound, release with that token before scheduling
+again. Never release a bound or uncertain child just to restart the loop.
 
 The helper reserves as a unique vizier actor and returns when there is an
 action or when the wait runs out. Handle the JSON:
@@ -421,10 +418,11 @@ action or when the wait runs out. Handle the JSON:
    --expected-owner <assignee> --expected-session <child> --inactive
    <stopped|archived|missing> --evidence "<lookup result>" --reason
    "<why>" --reservation <token>`.
-3. **`action: spawn-justiciar`**: hand `prompt` to pool member `session` the
-   same way (Codex: start a session with `title` and `prompt`). There is no
-   bead to record. If the hand-out fails, `enact justiciar break`, then
-   request it again with the same reason.
+3. **`action: spawn-justiciar`**: in Claude Desktop, hand `prompt` to pool
+   member `session` the same way. If the hand-out fails, run
+   `enact justiciar break`, then request it again with the same reason.
+   In Codex, use the spawn adapter above for the project target, settings
+   and created-chat receipt. There is no bead to record.
 4. **`action: pool-empty`** (Claude Desktop): every member is lost and only
    a turn the user starts may start more. Retitle `🔍 [<epic>] <summary>`,
    tell the user `started` of `limit` sessions are used, and end the turn.
@@ -441,10 +439,10 @@ action or when the wait runs out. Handle the JSON:
 7. **`action: done`**: the epic is closed, nothing of yours is in flight,
    required Stewards are closed, and all run deliveries reached green master.
    A closed epic with `action: wait` is still running; keep the loop alive.
-   Archive everything in `archive` and `pool_archive`, then
-   `enact pool drop --all`. Finally retitle `✅ [<epic>] <same
-   summary>`, write a short final report (outcome, bead count, anything for
-   the user to look at) and end the turn. Stay unarchived.
+   Handle `archive` as above. In Claude Desktop, archive the sessions in
+   `pool_archive`, then run `enact pool drop --all`. Finally retitle
+   `✅ [<epic>] <same summary>`, write a short final report (outcome, bead
+   count, anything for the user to look at) and end the turn. Stay unarchived.
 8. **`action: paused` or `blocked`**: no new spawning or recovery. Report
    the shared reason, retitle `⛔ [<epic>] <same summary>` and end the turn,
    preserving unfinished requirements.
@@ -457,9 +455,9 @@ Rules for the loop:
   summarize progress or narrate waits. One short line per action is enough.
 - Do not answer `side-sessions-event` notices or session reports except by
   continuing the loop. The beads graph is the only signal.
-- If the user writes to you mid-run, answer briefly, then resume the loop:
-  a background `enact next` may still be running, so do not start another.
-  Apply any changed instruction (parallelism, stop) from the next restart.
+- If the user writes to you mid-run, answer briefly, then resume the loop.
+  Reuse any pending `enact next` process. Apply changed parallelism to the
+  next call.
   Higher parallelism in Claude Desktop needs more members: their message
   started a user turn, so start them now (within the limit) and
   `enact pool add` them. "Stop"

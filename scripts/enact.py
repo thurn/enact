@@ -1354,8 +1354,7 @@ LOOP_REMINDER = (
     "using that spawn action's reservation), then run `enact next` "
     "again with the same arguments. Never end your turn before action: done, paused or blocked, "
     "including when the epic is closed but delivery or Steward repairs are pending. "
-    "NEVER end the turn to wait (no run_in_background, Monitor or wakeups): "
-    "a later turn cannot spawn sessions, so ending it stalls the whole run."
+    "Run `enact next` in the foreground and continue in this turn."
 )
 
 
@@ -1372,11 +1371,11 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
         raise Fail(f"epic {epic} not found")
     mine = [b for b in graph if meta(b, "enact_vizier") == vizier]
     busy = busy_sessions(graph)
-    pool = load_pool(repo, vizier)
-    members = set(pool["sessions"])
+    pool = load_pool(repo, vizier) if provider() == "claude" else {}
+    members = set(pool.get("sessions", []))
     # Once a vizier has a pool it never starts sessions again, even if every
     # member is lost: it may be running in a turn that cannot.
-    pooled = pool["started"] > 0
+    pooled = pool.get("started", 0) > 0
     finished = [
         {"bead": b["id"], "session": meta(b, "enact_session")}
         for b in mine
@@ -1427,9 +1426,10 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
 
     if by_id[epic].get("status") == "closed" and not inflight and delivery["complete"]:
         # The run is over: archive the whole pool with the other finished chats.
-        listed = {item["session"] for item in finished}
-        return {**result, "action": "done", "archive": finished,
-                "pool_archive": sorted(members - busy - listed)}
+        if pooled:
+            listed = {item["session"] for item in finished}
+            result["pool_archive"] = sorted(members - busy - listed)
+        return {**result, "action": "done", "archive": finished}
     if len(inflight) >= parallel:
         return {**result, "action": "wait", "reason": "capacity"}
 

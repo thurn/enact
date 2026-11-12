@@ -1034,5 +1034,11 @@ blindly recreate jobs or hand-edit scheduler databases.
   archived only when the run is done.
 - `enact next` holds a per-vizier lock, since two overlapping background
   waits could hand out the same member.
-- Old viziers have no pool file and see the old behaviour and reminder.
-  Once a vizier has started a pool it never falls back to `start_session`.
+- The scheduler only reads pool state for Claude. Older Claude viziers
+  without a pool keep the foreground loop. Once a Claude vizier has
+  started a pool it never falls back to `start_session`. Codex keeps fresh
+  chats per spawn (including Justiciar), per-chat launch settings, and the
+  540-second foreground wait. The Codex Desktop tools can send a follow-up
+  with a model override but expose no operation equivalent to Claude's
+  `clear_session`. Fresh chats give each assignment its own context and
+  history.
