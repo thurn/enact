@@ -110,10 +110,10 @@ here, retitle `✅ Bead sweep` and end.
 2. **keep**: when the triage found the context packet wrong, add the
    corrections with `bd comments add <id> "Sweep <date>: ..."` so the
    worker does not rediscover them.
-3. **human**: ask the user now, one question at a time with your
-   recommendation, the way enact-plan's stoppage audit does. A resolved
-   bead becomes **keep**, with the answer added as a comment. Defer an
-   unresolved one (`bd defer <id>`) and list it in the final report.
+3. **human**: ask the user now (retitle `🔍 Bead sweep` while you wait),
+   one question at a time with your recommendation, the way enact-plan's
+   stoppage audit does. A resolved bead becomes **keep**, with the answer
+   added as a comment. Defer an unresolved one (`bd defer <id>`) and list it in the final report.
 4. `enact sync`.
 
 ## 5. Run the rest

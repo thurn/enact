@@ -392,6 +392,7 @@ class GraphTest(unittest.TestCase):
         for text in (prompt, enact.watch_ci_notice("abc"), enact.TITLE_NOTICE):
             self.assertIn("✅", text)
         self.assertIn(enact.EMOJI["executor"], enact.TITLE_NOTICE)
+        self.assertIn("🔍", enact.TITLE_NOTICE)
         root = enact.ENACT_ROOT
         for path in ("skills/enact/SKILL.md", "skills/enact-plan/SKILL.md",
                      "skills/enact-sweep/SKILL.md",
@@ -400,6 +401,10 @@ class GraphTest(unittest.TestCase):
             text = (root / path).read_text(encoding="utf-8")
             self.assertIn("✅", text, path)
             self.assertIn("⛔", text, path)
+        # Sessions a user is present for end a turn on a question with 🔍.
+        for path in ("AGENTS.md", "skills/enact/SKILL.md", "skills/enact-plan/SKILL.md",
+                     "skills/enact-sweep/SKILL.md", "templates/AGENTS.md"):
+            self.assertIn("🔍", (root / path).read_text(encoding="utf-8"), path)
 
     def test_archivist_waits_for_other_open_work_in_the_run(self):
         archivist = {"id": "d", "status": "open", "labels": ["role:archivist"]}

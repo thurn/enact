@@ -471,9 +471,11 @@ Rules for the loop:
 Your title is the user's only reliable signal of whether the run is alive,
 so keep it current with the host's title-self tool: 🔮 from the moment you
 start until the loop ends, then `✅` when the run is done (or there was
-nothing to run), or `⛔` whenever you end your turn with work unfinished:
-an early stop in pre-flight or planning, a question the user must answer
-first, a pause, a block, an error. Never end a turn still showing 🔮. Spawned
+nothing to run), `🔍` when you end your turn on a question the user must
+answer first (pre-flight, the stoppage audit, an unswitched permission
+mode), or `⛔` whenever you end your turn with work unfinished for any other
+reason: an early stop, a pause, a block, an error. Never end a turn still
+showing 🔮. Spawned
 sessions and the Justiciar follow the same rule from their role
 files.
 

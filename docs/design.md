@@ -287,7 +287,7 @@ inspection; uncertainty never authorizes releasing ownership.
   is now a stub that retires those tasks).
 - Titles: 🔮 Vizier, ⚒️ Executor, 🛡️ Warden, 🔥 Justiciar, 🚒 Steward,
   🧱 Mason, 📖 Sage, 📜 Archivist; ✅ on completion, ⛔ when
-  stopped unfinished.
+  stopped unfinished, 🔍 when a turn ends waiting on the user.
 - Status titles are an accessibility contract (2026-11-01): the host's
   running indicator has poor contrast, so users read state from the emoji.
   Every session Enact starts or instructs (vizier, workers,
@@ -991,3 +991,13 @@ blindly recreate jobs or hand-edit scheduler databases.
   At about twenty pushes an hour a two-minute check often loses the race, and
   rerunning all of it repeated work the new commits could not affect: a
   project's check may compare the trees and rerun only what they reach.
+
+## Waiting on the user (2026-11-12)
+
+- A turn that ends on a question or decision for the user ends on 🔍, not
+  ⛔. A session titled ⛔ while it only waited for an answer read as a
+  failure to the user who was meant to answer it.
+- 🔍 applies only where a user is present: the vizier's pre-flight and
+  stoppage audit, inline runs, sweeps and ad hoc sessions following
+  AGENTS.md. Spawned workers and the Justiciar never ask, so they keep ✅
+  and ⛔.

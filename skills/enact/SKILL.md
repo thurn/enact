@@ -58,12 +58,13 @@ with ToolSearch first) or `set_thread_title` (Codex), as
   🛡️ Warden, 🚒 Steward, 🧱 Mason, 📖 Sage, 📜 Archivist; with several at
   once, all their emojis (`⚒️🛡️ [<epic>] ...`);
 - 🔮 while you orchestrate between subagents or wait for slow CI;
-- ✅ when finished, or ⛔ when you stopped without finishing.
+- ✅ when finished, or ⛔ when you stopped without finishing;
+- 🔍 when your turn ends on a question or decision for the user.
 
 Retitle before each subagent starts and after it returns. `<id>` is the
 bead you are working, or the epic for an epic. Title yourself ⚒️ (🔮 for an
-epic) as soon as you start. Every way your turn ends for good ends on ✅
-or ⛔ first, including the early stops below (no setup, a plan document, a
+epic) as soon as you start. Every way your turn ends ends on ✅, ⛔ or 🔍
+first, including the early stops below (no setup, a plan document, a
 large task, a lost claim): the user reads run state from the emoji alone.
 
 ## Pre-flight

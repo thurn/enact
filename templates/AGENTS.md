@@ -20,7 +20,8 @@
   `set_session_title` on `self`; Codex: `set_thread_title`), 🔮 while it
   waits on slow CI, 🚒 while it fixes a Steward bead, and `✅ <same
   summary>` as its last step when done, or `⛔` if it stops without
-  finishing. Never end a session on a working emoji.
+  finishing. A turn that ends waiting on the user's answer or decision
+  ends on `🔍 <same summary>`. Never end a session on a working emoji.
 - Never commit to, or push directly to, `master` or `staging`. `master`
   advances only when slow CI passes on `staging`; a slow-CI failure files a
   P0 Steward bead. `enact ci --status` shows the runner and its log. Enact

@@ -62,12 +62,13 @@ ROLE_NOTICE = (
     "Enact roles are prompt files, not skills: never invoke a skill named after a role "
     f"({', '.join(EMOJI)}). Work fully unattended: nobody will answer questions."
 )
-# Users read status from the title emoji, so every session ends on ✅ or ⛔.
+# Users read status from the title emoji, so every turn ends on ✅, ⛔ or 🔍.
 TITLE_NOTICE = (
     "Keep this session's title showing its state: `⚒️ <short summary>` while you "
     "work (`set_session_title` on `self` in Claude Desktop, `set_thread_title` in "
-    "Codex), then `✅ <same summary>` as your last step when finished, or "
-    "`⛔ <same summary>` if you stop without finishing."
+    "Codex), then `✅ <same summary>` as your last step when finished, "
+    "`⛔ <same summary>` if you stop without finishing, or `🔍 <same summary>` "
+    "when your turn ends waiting on the user's answer or decision."
 )
 WINDOWS = os.name == "nt"
 # Seconds a directory git does not track must sit untouched before the

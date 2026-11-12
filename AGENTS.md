@@ -20,9 +20,10 @@
   push prints `watch_ci`, follow it before finishing.
 - Title every session working here `⚒️ <short summary>` from the start
   (🔮 while waiting on slow CI, 🚒 while fixing a Steward bead) and end it on
-  `✅ <same summary>`, or `⛔` if you stop without finishing. Enact users
-  read session state from these emojis; the host's activity indicator is
-  not accessible enough to rely on.
+  `✅ <same summary>`, or `⛔` if you stop without finishing. A turn that
+  ends waiting on the user's answer or decision ends on `🔍 <same
+  summary>`. Enact users read session state from these emojis; the host's
+  activity indicator is not accessible enough to rely on.
 - Slow-CI failures file Steward beads in this repository's own Beads graph
   (prefix `en`).
 - Projects and live sessions on every machine use this repository directly,
