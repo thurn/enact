@@ -580,9 +580,48 @@ def serialized(function):
     return call
 
 
+# Dolt appends every chunk a write makes to one journal and never compacts it
+# on its own: a week of bd writes grew Beryl's to 410 MB, and every bd command,
+# which opens the embedded store afresh, spent about a second reading it (0.2 s
+# after a `dolt gc`). Sync compacts it once it passes this size.
+DOLT_JOURNAL = "v" * 32
+COMPACT_JOURNAL_BYTES = 64 << 20
+
+
 @serialized
 def sync(repo: Repo) -> dict[str, Any]:
-    """Commit local Beads writes, merge the remote and push refs/dolt/data."""
+    """Commit local Beads writes, merge the remote and push refs/dolt/data,
+    then compact an embedded store whose journal has grown (`compact_beads`)."""
+    result = sync_beads(repo)
+    compact_beads(repo)
+    return result
+
+
+def compact_beads(repo: Repo) -> bool:
+    """Run `dolt gc` on an embedded store whose journal passed
+    COMPACT_JOURNAL_BYTES. It reclaims unreferenced chunks and rewrites the
+    journal into table files without touching history, so the remote and other
+    clones see nothing; `bd gc` would also squash commits they already have.
+    Best effort: a failure is logged and sync's result stands."""
+    try:
+        db = dolt_db_dir(repo)
+    except (Fail, OSError, KeyError, ValueError):
+        return False  # server mode, or no Beads database here
+    try:
+        size = (db / ".dolt" / "noms" / DOLT_JOURNAL).stat().st_size
+    except OSError:
+        return False
+    if size < COMPACT_JOURNAL_BYTES or not shutil.which("dolt"):
+        return False
+    proc = dolt(["gc"], db, check=False)
+    if proc.returncode != 0:
+        log(f"dolt gc failed: {(proc.stderr or proc.stdout).strip()[-500:]}")
+        return False
+    log(f"compacted the Beads store (journal was {size >> 20} MB)")
+    return True
+
+
+def sync_beads(repo: Repo) -> dict[str, Any]:
     _beads_reads.get(repo.common, {}).clear()
     beads = Beads(repo)
     # Embedded databases need no Beads schema/engine initialization to sync.

@@ -912,6 +912,28 @@ class SyncTest(unittest.TestCase):
             self.assertEqual(enact.dolt(["push"], Path("."), check=False).returncode, 1)
         self.assertEqual(run.call_count, 1)
 
+    def test_sync_compacts_a_grown_journal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".beads").mkdir()
+            (root / ".beads" / "metadata.json").write_text(
+                '{"dolt_mode":"embedded","dolt_database":"db"}')
+            noms = root / ".beads" / "embeddeddolt" / "db" / ".dolt" / "noms"
+            noms.mkdir(parents=True)
+            journal = noms / enact.DOLT_JOURNAL
+            repo = enact.Repo(root, root, root / ".git", enact.Config())
+            done = subprocess.CompletedProcess([], 0, "", "")
+            with mock.patch.object(enact.shutil, "which", return_value="dolt"), \
+                    mock.patch.object(enact, "dolt", return_value=done) as dolt:
+                journal.write_bytes(b"x" * 10)
+                self.assertFalse(enact.compact_beads(repo))
+                with journal.open("r+b") as f:
+                    f.truncate(enact.COMPACT_JOURNAL_BYTES)
+                self.assertTrue(enact.compact_beads(repo))
+            dolt.assert_called_once_with(["gc"], noms.parent.parent, check=False)
+            (root / ".beads" / "metadata.json").write_text('{"dolt_mode":"server"}')
+            self.assertFalse(enact.compact_beads(repo))
+
     def test_server_mode_retains_beads_sync(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

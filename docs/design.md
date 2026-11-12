@@ -968,3 +968,21 @@ blindly recreate jobs or hand-edit scheduler databases.
   would hold master whenever one machine is asleep or off, and every
   project's master would then depend on its least available machine. A
   peer OS's failure is repaired through its Steward instead.
+
+## Many sessions on one host (2026-11-11)
+
+- A push holds the ownership lock only for its bookkeeping: the first
+  ownership check, then the final check, the push to staging and the delivery
+  record. It once held it through the rebase and the fast check, so with a
+  dozen sessions on one machine every claim, close, meta and sync waited out
+  other sessions' checks and failed "ownership operation busy" after 180 s,
+  and a plain `enact sync` took 100 s of wall time for 6 s of work. The remote
+  still arbitrates pushes: one that loses the race is rejected and
+  re-integrates. Two sessions may now find one delivery receipt; the first to
+  lock it finishes it and the other skips it.
+- Sync compacts an embedded Beads store whose Dolt journal passed 64 MiB with
+  `dolt gc`, which rewrites storage but not history. Dolt never compacts the
+  journal itself: a week of writes grew Beryl's to 410 MB, and each bd
+  command, which opens the store afresh, spent about a second reading it
+  (0.2 s after the gc). `bd gc` is not used: it also squashes commits that the
+  remote and other clones already have.
