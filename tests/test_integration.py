@@ -615,6 +615,40 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         result = self.a.enact("push", "--no-ci", cwd=wt)
         self.assertTrue(result["pushed"])
 
+    def test_a_recheck_after_a_lost_race_names_the_commit_checked(self):
+        # The first check lands a peer's commit on staging, so the push is
+        # rejected, re-integrates and checks again, naming what passed first.
+        seen = self.tmp / "checked.txt"
+        peer = self.b.path
+        script = (
+            "import os, pathlib, subprocess\n"
+            f"seen = pathlib.Path({str(seen)!r})\n"
+            "runs = seen.read_text().splitlines() if seen.exists() else []\n"
+            "seen.write_text(''.join(r + '\\n' for r in runs + [os.environ.get('ENACT_CHECKED', '-')]))\n"
+            "if not runs:\n"
+            f"    git = lambda *a: subprocess.run(['git', *a], cwd={str(peer)!r}, check=True)\n"
+            "    git('fetch', '-q', 'origin')\n"
+            "    git('checkout', '-q', '-B', 'race', 'origin/staging')\n"
+            f"    pathlib.Path({str(peer)!r}, 'race.txt').write_text('race')\n"
+            "    git('add', 'race.txt')\n"
+            "    git('commit', '-q', '-m', 'race')\n"
+            "    git('push', '-q', 'origin', 'HEAD:staging')\n"
+        )
+        check = self.tmp / "race_check.py"
+        check.write_text(script)
+        fast = shlex.join([Path(sys.executable).as_posix(), check.as_posix()])
+        wt = Path(self.a.enact("worktree", "create", "race")["path"])
+        self.configure_git(wt)
+        self.a.commit_file(".enact.toml", ENACT_TOML.replace(
+            '"python3 check.py fast"', json.dumps(fast)), cwd=wt)
+        first = self.a.git("rev-parse", "HEAD", cwd=wt)
+        self.assertTrue(self.a.enact("push", "--no-ci", cwd=wt)["pushed"])
+        runs = seen.read_text().splitlines()
+        self.assertEqual(runs[0], "-")
+        self.assertEqual(len(runs), 2)
+        # What passed first was the worktree's commit on the old staging tip.
+        self.assertEqual(runs[1], first)
+
     def test_worktree_create_hook_replaces_git(self):
         hook = (
             "python3 -c \"import os,subprocess; subprocess.check_call(['git','worktree','add',"

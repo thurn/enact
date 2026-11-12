@@ -986,3 +986,8 @@ blindly recreate jobs or hand-edit scheduler databases.
   command, which opens the store afresh, spent about a second reading it
   (0.2 s after the gc). `bd gc` is not used: it also squashes commits that the
   remote and other clones already have.
+- After a push loses the race to staging and re-integrates, its fast check
+  runs again with `ENACT_CHECKED` naming the commit the last pass checked.
+  At about twenty pushes an hour a two-minute check often loses the race, and
+  rerunning all of it repeated work the new commits could not affect: a
+  project's check may compare the trees and rerun only what they reach.

@@ -1946,6 +1946,10 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     staging = repo.remote_ref(cfg.staging)
     result: dict[str, Any] = {"pushed": False, "reason": "nothing to push"}
     pending_ci: Path | None = None
+    # The commit the fast check last passed. After a push loses the race to
+    # staging, the check runs again with ENACT_CHECKED set to it, so a project's
+    # check may skip what the commits that landed meanwhile cannot affect.
+    checked = ""
     for attempt in range(6):
         integrate(repo)
         before = repo.git("rev-parse", staging)
@@ -1956,8 +1960,9 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
             result["recovered"] = recovered
             break
         if cfg.fast and not args.skip_checks:
-            if run_shell(cfg.fast, repo.top) != 0:
+            if run_shell(cfg.fast, repo.top, {"ENACT_CHECKED": checked} if checked else None):
                 raise Fail("fast checks failed; fix them and run `enact push` again", code=2)
+            checked = head
         commits = repo.git("rev-list", "--reverse", f"{before}..{head}").split()
         with ownership_lock(repo):
             graph = Beads(repo).all() if args.bead else []
