@@ -1127,9 +1127,7 @@ def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def model_check(model: str | None) -> str:
-    """The spawn prompt's guard against starting on the wrong model: a host can
-    quietly substitute its own (Claude Desktop's `start_session` ignores any
-    model pricier than the caller's), so the worker checks before it claims."""
+    """Backstop for Claude Desktop silently substituting a cheaper model."""
     if not model:
         return ""
     return (
@@ -1173,22 +1171,24 @@ def spawn_action(repo: Repo, bead: dict[str, Any], epic: str, vizier: str) -> di
     role = role_of(bead)
     if role not in SPAWNED_ROLES:
         role = "executor"
-    settings = repo.config.role_settings(role, provider(), label_value(bead, "tier"))
+    host_provider = provider()
+    settings = repo.config.role_settings(role, host_provider, label_value(bead, "tier"))
+    claude_model = settings.get("model") if host_provider == "claude" else None
     action = {
         "action": "spawn",
         "bead": bead["id"],
         "role": role,
         "reservation": meta(bead, "enact_reservation"),
         "title": session_title(role, bead),
-        "prompt": spawn_prompt(role, bead, epic, vizier, settings.get("model")),
+        "prompt": spawn_prompt(role, bead, epic, vizier, claude_model),
         "settings": settings,
     }
-    if settings.get("model"):
+    if claude_model:
         action["model_required"] = MODEL_REQUIRED
     return action
 
 
-# Restated on every spawn that names a model, so it survives the vizier's
+# Restated on Claude spawns that name a model, so it survives the vizier's
 # context compaction (the 2026-11-10 tier:fable bead ran on Opus).
 MODEL_REQUIRED = (
     "settings.model is required, never a hint. Claude Desktop: start_session "

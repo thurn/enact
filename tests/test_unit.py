@@ -366,14 +366,24 @@ class GraphTest(unittest.TestCase):
             self.assertTrue((enact.ENACT_ROOT / "skills" / "enact" / "roles"
                              / f"{role}.md").is_file(), role)
 
-    def test_spawn_prompt_guards_a_required_model(self):
-        # A host may quietly start the worker on another model (2026-11-10:
-        # a tier:fable bead ran on Opus), so the prompt makes it check first.
+    def test_only_claude_workers_check_their_model(self):
         bead = {"id": "x-1", "title": "Work"}
-        prompt = enact.spawn_prompt("executor", bead, "x-0", "viz", "fable")
-        self.assertIn("must run on the `fable` model", prompt)
-        self.assertLess(prompt.index("fable"), prompt.index("enact start"))
-        self.assertNotIn("must run on", enact.spawn_prompt("executor", bead, "x-0", "viz"))
+        codex_settings = {"model": "gpt-6.1-sol", "effort": "high"}
+        repo = types.SimpleNamespace(config=enact.Config(roles={"executor": {
+            "claude": {"model": "fable"}, "codex": codex_settings}}))
+
+        with mock.patch.object(enact, "provider", return_value="claude"):
+            action = enact.spawn_action(repo, bead, "x-0", "viz")
+        self.assertIn("set_session_model", action["model_required"])
+        self.assertIn("must run on the `fable` model", action["prompt"])
+        self.assertLess(action["prompt"].index("fable"), action["prompt"].index("enact start"))
+
+        with mock.patch.object(enact, "provider", return_value="codex"):
+            action = enact.spawn_action(repo, bead, "x-0", "viz")
+        self.assertEqual(action["settings"], codex_settings)
+        self.assertNotIn("model_required", action)
+        self.assertNotIn("wrong model", action["prompt"])
+        self.assertIn("enact start", action["prompt"])
 
     def test_every_session_is_told_to_end_on_a_status_title(self):
         # Users read run state from title emojis, so each instruction source

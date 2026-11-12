@@ -929,13 +929,13 @@ blindly recreate jobs or hand-edit scheduler databases.
   `set_session_model`, confirms with `get_session` and only then sends the
   Enact prompt. The holding turn is one trivial reply on the vizier's
   model; the worker's whole bead runs on the tier's.
-- A spawn action that names a model carries `model_required`, restating the
-  steps, so they survive compaction, and the prompt tells the worker to
-  refuse before `enact start` on any other model. A refusal leaves the
-  reservation unbound for the Marshal to recover, so a vizier that skipped
-  the steps fails loudly instead of looping.
-- A model that cannot be set blocks the run rather than substituting,
-  matching the Codex adapter's rule for an explicitly required model.
+- A Claude spawn action that names a model carries `model_required` to
+  preserve these steps across compaction. The worker checks its model before
+  claiming the reservation. The vizier blocks the run if it cannot set the
+  required model.
+- The Codex adapter passes configured model and effort at launch. Codex
+  workers cannot reliably identify their own model from the prompt, so they
+  claim their reservations without a model self-check.
 
 ## Machines on different OSes (2026-11-11)
 

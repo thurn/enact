@@ -389,7 +389,7 @@ action or after nine minutes. Handle the JSON:
      <bead> in epic <epic>; work unattended and follow the role files named in
      the prompt.", plus `model`/`effort` from `settings` when present. Do not
      pass `permission_mode`, so the session inherits yours.
-   - **A required model** (`settings.model`, flagged `model_required`):
+   - **Claude Desktop with a required model** (`model_required`):
      `start_session` silently ignores a model pricier than yours, so a
      `tier:fable` bead started by an Opus vizier runs on Opus. Start the
      child with the prompt "Enact holding turn: reply only `ready` and end
@@ -404,7 +404,8 @@ action or after nine minutes. Handle the JSON:
      unavailable for <bead>"`: never substitute another model. The prompt
      tells the worker to refuse on the wrong model as a backstop.
    - Codex: use the project and spawn adapter above, including the ready ID,
-     model policy and created-chat receipt.
+     model policy and created-chat receipt. The worker starts from the
+     reservation in the prompt without trying to identify its own model.
 
    Then record the session: `enact meta <bead> enact_session=<session id>
    --reservation <token>`, using that spawn action's token for all routing
