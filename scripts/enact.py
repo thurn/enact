@@ -18,10 +18,8 @@ import functools
 import hashlib
 import json
 import os
-import plistlib
 import random
 import re
-import shlex
 import shutil
 import signal
 import socket
@@ -79,8 +77,6 @@ SWEEP_AGE = 3600
 # Hours an unclaimed slow-CI failure waits for a machine on its own OS
 # before any machine's vizier may take it.
 STEWARD_HANDOFF_HOURS = 2.0
-# Minutes between scheduled slow-CI polls (`enact ci --schedule install`).
-CI_SCHEDULE_MINUTES = 30
 
 
 class Fail(Exception):
@@ -2279,70 +2275,6 @@ def update_enact() -> str:
     return "updated" if git("rev-parse", "HEAD").stdout.strip() != before else "current"
 
 
-def ci_schedule_name(repo: Repo) -> str:
-    digest = hashlib.sha256(str(repo.main.resolve()).encode()).hexdigest()[:8]
-    slug = re.sub(r"[^A-Za-z0-9]+", "-", repo.main.name).strip("-").lower() or "project"
-    return f"enact-ci-{slug}-{digest}"
-
-
-def ci_schedule_command(repo: Repo) -> list[str]:
-    python = Path(sys.executable)
-    if WINDOWS and (python.parent / "pythonw.exe").exists():
-        python = python.parent / "pythonw.exe"  # no console window every poll
-    script = enact_checkout() / "scripts" / "enact.py"
-    return [str(python), str(script), "ci", "--detach", "--repo", str(repo.main)]
-
-
-def ci_schedule(repo: Repo, action: str, minutes: int) -> dict[str, Any]:
-    """Poll this machine's slow CI on a timer, so each OS tests staging
-    whether or not this machine has a session running. The runner only
-    fetches when staging is already tested."""
-    name, command = ci_schedule_name(repo), ci_schedule_command(repo)
-    result: dict[str, Any] = {"name": name, "os": ci_os()}
-    if sys.platform == "darwin":
-        label = f"dev.enact.{name}"
-        plist = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
-        domain = f"gui/{os.getuid()}"
-        result.update(label=label, plist=str(plist))
-        if action == "status":
-            loaded = run(["launchctl", "print", f"{domain}/{label}"], repo.main, check=False)
-            return {**result, "installed": plist.exists(), "loaded": loaded.returncode == 0}
-        run(["launchctl", "bootout", domain, str(plist)], repo.main, check=False)
-        if action == "remove":
-            plist.unlink(missing_ok=True)
-            return {**result, "installed": False}
-        env = {k: v for k, v in os.environ.items()
-               if k in ("PATH", "HOME", "LANG") or k.startswith(("ENACT_", "BERYL_"))}
-        plist.parent.mkdir(parents=True, exist_ok=True)
-        plist.write_bytes(plistlib.dumps({
-            "Label": label, "ProgramArguments": command, "WorkingDirectory": str(repo.main),
-            "StartInterval": minutes * 60, "RunAtLoad": True, "EnvironmentVariables": env,
-            "StandardOutPath": str(repo.state / "ci-schedule.log"),
-            "StandardErrorPath": str(repo.state / "ci-schedule.log"),
-        }))
-        run(["launchctl", "bootstrap", domain, str(plist)], repo.main)
-        return {**result, "installed": True, "minutes": minutes}
-    if WINDOWS:
-        task = f"Enact\\{name}"
-        result["task"] = task
-        if action == "status":
-            query = run(["schtasks", "/Query", "/TN", task], repo.main, check=False)
-            return {**result, "installed": query.returncode == 0}
-        if action == "remove":
-            run(["schtasks", "/Delete", "/F", "/TN", task], repo.main, check=False)
-            return {**result, "installed": False}
-        line = subprocess.list2cmdline(command)
-        if len(line) > 261:
-            raise Fail(f"scheduled command is longer than schtasks allows: {line}")
-        run(["schtasks", "/Create", "/F", "/SC", "MINUTE", "/MO", str(minutes),
-             "/TN", task, "/TR", line], repo.main)
-        return {**result, "installed": True, "minutes": minutes}
-    line = shlex.join(command)
-    return {**result, "supported": False,
-            "cron": f"*/{minutes} * * * * {line}",
-            "hint": "add the cron line with `crontab -e`"}
-
-
 def report_ci_failure(repo: Repo, tip: str, green: str, log_tail: str) -> str:
     beads = Beads(repo)
     sync(repo)
@@ -2444,10 +2376,8 @@ def retry_ci_promotion(repo: Repo) -> dict[str, Any] | None:
 
 
 def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
-    repo = find_repo(Path(args.repo) if args.repo else None)
+    repo = find_repo()
     cfg = repo.config
-    if args.schedule:
-        return ci_schedule(repo, args.schedule, args.minutes)
     if args.detach:
         return start_ci(repo)
     if args.status:
@@ -3116,11 +3046,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="block until SHA reaches master or a Steward bead covers it")
     p.add_argument("--timeout", type=int, default=540, help="seconds --wait blocks for")
     p.add_argument("--interval", type=int, default=30, help=argparse.SUPPRESS)
-    p.add_argument("--schedule", choices=["install", "remove", "status"],
-                   help="poll slow CI on a timer (launchd, Task Scheduler)")
-    p.add_argument("--minutes", type=int, default=CI_SCHEDULE_MINUTES,
-                   help="minutes between scheduled polls")
-    p.add_argument("--repo", help="project checkout (default: the current directory)")
     p.add_argument("--check-worker", help=argparse.SUPPRESS)
     p.add_argument("--coordinator", type=int, default=0, help=argparse.SUPPRESS)
 

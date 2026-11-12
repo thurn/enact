@@ -949,12 +949,11 @@ blindly recreate jobs or hand-edit scheduler databases.
   failing never stopped this one promoting. `watch_ci` tells the session to
   repair it if the log makes the cause plain, and otherwise to comment its
   analysis and name the bead in its final reply.
-- `enact ci --schedule install` polls slow CI every 30 minutes from launchd
-  (macOS) or Task Scheduler (Windows); elsewhere it prints a cron line. A
-  runner otherwise starts only from that machine's own pushes, viziers,
-  waits and Marshal, so a machine with no session running never tested its
-  peers' commits. A poll of a tested tip only fetches. The schedule runs the
-  stable Enact checkout, never a delivery worktree.
+- No timer runs slow CI. A machine tests staging only from its own pushes,
+  viziers, waits and Marshal, so a peer's commits reach its tests when it
+  next works, and each OS's failures are fixed as they appear. A scheduled
+  poll (`enact ci --schedule`, added and removed the same day) spent the
+  machine on suites nobody was waiting for.
 - `enact push` fast-forwards the Enact checkout to its master first (only
   on master, clean, fast-forward; `ENACT_NO_SELF_UPDATE` turns it off), so
   machines without a vizier or Marshal pulling Enact do not drift. It takes

@@ -68,9 +68,7 @@ helper.
    staging), files essential follow-up beads and closes its bead.
 4. `enact push` starts a coalescing slow-CI runner on the machine. A pass
    fast-forwards `master`; a failure files one P0 Steward bead per OS,
-   which viziers on that OS get first. With several machines,
-   `enact ci --schedule install` on each makes every one test staging on a
-   timer.
+   which viziers on that OS get first.
    Local `staging` and `master` are fast-forwarded to track the remote.
    A push outside any run, with no active vizier to pick up a Steward bead,
    prints `watch_ci`: that session waits with `enact ci --wait` and repairs

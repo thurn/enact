@@ -849,55 +849,14 @@ class StewardRoutingTest(unittest.TestCase):
         self.assertTrue(self.targeted(executor))
 
 
-class CiScheduleTest(unittest.TestCase):
-    def schedule(self, platform, action="install"):
-        tmp = Path(tempfile.mkdtemp())
-        repo = types.SimpleNamespace(main=tmp / "my project", state=tmp / "state")
-        calls = []
-
-        def fake_run(cmd, cwd, check=True, env=None):
-            calls.append(cmd)
-            return subprocess.CompletedProcess(cmd, 0, "", "")
-
-        with mock.patch.object(enact, "run", side_effect=fake_run), \
-                mock.patch.object(enact.sys, "platform", platform), \
-                mock.patch.object(enact, "WINDOWS", platform == "win32"), \
-                mock.patch.object(enact.os, "getuid", create=True, return_value=501), \
-                mock.patch.object(enact.Path, "home", return_value=tmp):
-            return enact.ci_schedule(repo, action, 30), calls, tmp
-
-    def test_macos_installs_a_launch_agent_that_detaches_the_runner(self):
-        result, calls, tmp = self.schedule("darwin")
-        plist = enact.plistlib.loads(Path(result["plist"]).read_bytes())
-        self.assertEqual(plist["StartInterval"], 1800)
-        self.assertEqual(plist["ProgramArguments"][2:],
-                         ["ci", "--detach", "--repo", str(tmp / "my project")])
-        self.assertIn("PATH", plist["EnvironmentVariables"])
-        self.assertEqual([c[:2] for c in calls],
-                         [["launchctl", "bootout"], ["launchctl", "bootstrap"]])
-        result, _, _ = self.schedule("darwin", "remove")
-        self.assertFalse(result["installed"])
-
-    def test_windows_creates_a_scheduled_task(self):
-        result, calls, _ = self.schedule("win32")
-        self.assertTrue(result["task"].startswith("Enact\\enact-ci-my-project-"))
-        create = calls[0]
-        self.assertEqual(create[:6], ["schtasks", "/Create", "/F", "/SC", "MINUTE", "/MO"])
-        self.assertIn("ci --detach --repo", create[-1])
-
-    def test_other_platforms_get_a_cron_line(self):
-        result, calls, _ = self.schedule("linux")
-        self.assertFalse(result["supported"])
-        self.assertTrue(result["cron"].startswith("*/30 * * * * "))
-        self.assertEqual(calls, [])
-
+class StableCheckoutTest(unittest.TestCase):
     def test_prompts_name_role_files_in_the_stable_checkout(self):
         self.assertEqual(enact.ROLES_DIR,
                          enact.stable_checkout(enact.ENACT_ROOT) / "skills" / "enact" / "roles")
         self.assertNotIn(".worktrees", enact.ROLES_DIR.parts)
         self.assertIn(str(enact.ROLES_DIR / "steward.md"), enact.watch_ci_notice("abc"))
 
-    def test_the_schedule_runs_the_stable_checkout_not_a_worktree(self):
+    def test_self_update_targets_the_stable_checkout_not_a_worktree(self):
         with mock.patch.object(enact, "ENACT_ROOT", Path("/x/enact/.worktrees/feature")):
             self.assertEqual(enact.enact_checkout(), Path("/x/enact"))
         with mock.patch.object(enact, "ENACT_ROOT", Path("/x/enact")):

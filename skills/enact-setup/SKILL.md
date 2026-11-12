@@ -53,9 +53,6 @@ Run from the project's main checkout.
    clone, creates `origin/staging` from the integration branch (if missing)
    and pushes the Beads database. On every further machine, cloning and
    running `enact setup` is all the project setup needed.
-   If the project runs on more than one machine, also run
-   `enact ci --schedule install` on each, so every machine tests staging
-   every 30 minutes whether or not it has a session running.
 5. **Worktree hooks.** Ask whether new worktrees need anything special
    (reusing build caches, APFS clones, warm worktree pools). If so, write
    `create`/`remove` hook scripts and add them to `[worktree]` in
