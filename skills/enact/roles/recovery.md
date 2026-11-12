@@ -30,7 +30,7 @@ an unassigned tree.
   it names one, or `send_message` to its session if it is on this machine.
   Then keep doing whatever useful work remains, or wait: the vizier spawns the
   Justiciar and it may message you. "Tests are broken" is never an emergency.
-- **Resumed after an interruption** (usage limit, crash, a Marshal nudge):
+- **Resumed after an interruption** (usage limit, crash, a user's nudge):
   check `bd show <bead>`, `enact status` and your worktree. Continue only if
   you still own the bead and its run is active; otherwise preserve all files
   and end the turn (⛔). A shared pause lets already running workers finish,

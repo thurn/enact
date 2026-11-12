@@ -842,7 +842,7 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         result = self.a.enact("release", bead, "--reason", "recovery",
                               "--expected-owner", "old", "--expected-session", "old",
                               "--inactive", "stopped", "--evidence", "read confirmed idle",
-                              session="marshal")
+                              session="observer")
         self.assertEqual(result["recovery"]["head"], head)
         self.assertEqual(result["recovery"]["path"], str(path))
         self.a.enact("next", "--epic", epic, session="replacement-vizier")
@@ -955,7 +955,7 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.assertEqual(step["bead"], first)
         self.start_worker(self.a, first, "worker")
         path = Path(self.a.enact("worktree", "create", first, session="worker")["path"])
-        # A Marshal's earlier active snapshot cannot authorize release after
+        # An earlier active snapshot cannot authorize release after
         # a different machine pauses the run.
         self.b.enact("run", "pause", epic, "--reason", "user requested stop")
         self.a.enact("release", first, "--expected-owner", "worker",
@@ -987,7 +987,6 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         status = self.a.enact("status")
         self.assertIn(epic, status["pending_deliveries"])
         self.assertEqual(status["staging"], self.remote_sha("staging"))
-        self.assertTrue(status["sweep_needed"])
         self.assertIn(epic, [r["epic"] for r in status["active_runs"]])
         self.assertFalse(status["ci"]["result"]["passed"])
         steward = status["open_stewards"][0]

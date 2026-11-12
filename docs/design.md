@@ -1,5 +1,31 @@
 # Enact design decisions
 
+## Marshal removed (2026-11-11)
+
+The hourly scheduled Marshal sweep is gone. An audit of about 75 hourly
+beryl sweeps over three days found it never nudged a worker, resumed a
+vizier, released a reservation or started CI. Its only output was
+archiving three finished chats (two more archive attempts were refused for
+live work) and marking already-archived chats on their beads, at 1-4
+minutes per run and once 18. The recorded session IDs for several sessions
+also did not resolve, so it is doubtful it could have recovered a real
+stall. Claude scheduled turns could never start sessions anyway, so on
+Claude Desktop its vizier recovery was only ever a notice.
+
+- Viziers no longer create or delete a scheduled task or automation.
+  Archiving finished chats stays in `enact next`. A vizier whose turn ends
+  waits for the user to write to it, then continues the same epic.
+- Removed from the helper: `enact lock`, `enact run recover` and its
+  attempt budgets, and `marshal_name`, `sweep_needed` and recovery history
+  in `enact status`. `enact status` stays for setup, the Justiciar and
+  `/enact-sweep`; `enact release --inactive --evidence` stays for handing
+  off a confirmed inactive child. Legacy `enact_marshal_attempt_*` keys
+  remain protected from `enact meta`.
+- `skills/enact/roles/marshal.md` is a stub: existing scheduled tasks on
+  every machine still point at it, so it tells them to delete themselves
+  and do nothing else.
+- Dated entries below that describe the Marshal record the retired design.
+
 ## Marshal status reachability (2026-11-03)
 
 `enact status` evaluates delivery for every epic, including completed runs
@@ -41,9 +67,8 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   Claude Desktop support. Identify supported tools and execution location
   explicitly rather than treating product names as capability guarantees.
 - Invoking `/enact-plan` (`$enact-plan` in Codex) authorizes creating,
-  messaging and archiving its role chats, and creating and removing its
-  recurring Marshal task. Carry that authorization into the Marshal and worker
-  prompts.
+  messaging and archiving its role chats. Carry that authorization into
+  worker prompts.
 - A run finishes only when its delivered commits have passed slow CI and
   reached `master`, including any required Steward fixes. Workers may still
   close their beads after pushing. Bead closure alone is not run completion.
@@ -56,10 +81,8 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   work, inspect it against current staging, and reuse what remains useful.
   On another machine, preserve the original work and restart from the latest
   pushed state.
-- On a capable host, the Marshal automatically resumes an unexpectedly
-  stopped vizier, with bounded retries and notification if recovery fails.
-  Respect intentional stops and pauses. Hosts that cannot resume a vizier
-  retain the manual-resume fallback.
+- An unexpectedly stopped vizier resumes when the user writes to it.
+  Respect intentional stops and pauses.
 - "Stop" pauses new work for the whole epic across machines and providers.
   Record the pause in the shared graph, let current workers finish, and
   require an explicit resume before any vizier starts more work.
@@ -134,14 +157,12 @@ and Beads writes and unmodified older helpers remain outside that protocol.
     nothing special); a plain bead is wrapped in a new epic, since follow-ups
     and `enact next` work by epic.
   - Plan document: full stoppage audit with the user, full decomposition.
-  - Task prompt: smallest graph, one executor bead, no milestones, gates or
-    Marshal; a prompt describing a large work item is treated as a plan.
+  - Task prompt: smallest graph, one executor bead, no milestones or
+    gates; a prompt describing a large work item is treated as a plan.
     Review is none, inline or a Warden bead (below).
 - Pre-flight: audit stoppage risks and resolve each with the user up front;
   refuse to start if any remain. Require a non-prompting permission mode.
-  `git pull --ff-only` in ~/enact. Create the Marshal routine if missing,
-  except for a small task-prompt run: hourly recovery is for multi-hour
-  runs, and a small run must not delete a Marshal another run relies on.
+  `git pull --ff-only` in ~/enact.
 - Inline review: a `review:inline` label requires one fresh-context
   cold-review subagent before pushing. Use a Warden bead for large or risky
   changes or when the user requests one.
@@ -189,32 +210,16 @@ and Beads writes and unmodified older helpers remain outside that protocol.
 
 - Fleet-wide, per-project lock: `refs/enact/justiciar` on origin, created with
   a create-only push; the commit records host, session, time, reason. Holder
-  is printed to anyone who tries to acquire. Deleted on exit; the Marshal
+  is printed to anyone who tries to acquire. Deleted on exit; a session
   breaks it only after a routed lookup confirms the holder archived or
   absent. Age, silence and lookup failures do not prove abandonment.
 
 ## Marshal
 
-- One per project per machine per host app: an hourly Claude Desktop scheduled
-  task or Codex automation, with a lockfile against overlapping sweeps.
-- Uses durable, bounded recovery permissions to nudge confirmed stalled
-  workers and resume stopped viziers on capable hosts. Preserves paused and
-  blocked state and unfinished work. Archives completed chats, restarts dead
-  CI and pulls ~/enact. Unsupported recovery retains a one-time notice;
-  Claude scheduled turns cannot start sessions.
-- Codex Marshals use Sol Light (`gpt-6.1-sol`, reasoning effort `low`).
-  Set this explicitly on creation and reuse so an existing automation does
-  not retain Astra High or inherit the vizier's model. Preserve other
-  automation settings; Claude keeps its supported model defaults.
-- Small task-prompt runs neither create nor delete it.
-- The vizier deletes only its identified Marshal when `enact status`
-  reports `sweep_needed: false`. Other relevant active runs between
-  assignments and pending final deliveries keep it alive.
-- Reservations record `enact_spawn_provider`, and `enact status` lists only
-  beads spawned by the caller's host app: a Claude Marshal cannot see Codex
-  threads, and a Codex run must not keep the Claude Marshal alive. Legacy
-  routing remains visible for inspection; uncertainty never authorizes
-  releasing ownership.
+Removed on 2026-11-11; see [Marshal removed](#marshal-removed-2026-11-11).
+`enact status` still lists only beads spawned by the caller's host app: a
+Claude session cannot see Codex threads. Legacy routing remains visible for
+inspection; uncertainty never authorizes releasing ownership.
 
 ## Sage
 
@@ -278,13 +283,14 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   branch, `.enact.toml`, AGENTS.md bullets.
 - Four skills: `enact-plan` (the vizier), `enact` (inline),
   `enact-setup` and `enact-sweep` (backlog sweep). Role files stay in `skills/enact/roles/` so spawn prompts
-  and Marshal tasks written before the split keep working.
+  and Marshal tasks written before the split keep working (the Marshal role
+  is now a stub that retires those tasks).
 - Titles: 🔮 Vizier, ⚒️ Executor, 🛡️ Warden, 🔥 Justiciar, 🚒 Steward,
-  🎖️ Marshal, 🧱 Mason, 📖 Sage, 📜 Archivist; ✅ on completion, ⛔ when
+  🧱 Mason, 📖 Sage, 📜 Archivist; ✅ on completion, ⛔ when
   stopped unfinished.
 - Status titles are an accessibility contract (2026-11-01): the host's
   running indicator has poor contrast, so users read state from the emoji.
-  Every session Enact starts or instructs (vizier, workers, Marshal,
+  Every session Enact starts or instructs (vizier, workers,
   Justiciar, inline runs, and ad hoc sessions following the AGENTS.md
   section) titles itself on start and ends every final turn on ✅ or ⛔,
   including early stops. Existing projects keep old AGENTS.md text, so

@@ -53,9 +53,9 @@ a live run is not.
    **older than N days** to `updated_at` if given.
 2. Find the live runs: `enact status` lists this host's runs in
    `active_runs`. A run counts as live when its `control.state` is
-   `active`. Check with the host's inspect tool that its vizier session
-   still exists. If it is gone but the run is `recoverable`, the Marshal
-   will bring it back, so it still counts as live.
+   `active` and the host's inspect tool shows its vizier session still
+   exists. A run whose vizier is gone is dead: nothing will resume it, so
+   its beads are candidates (this sweep becomes their new vizier).
 3. Read each candidate's epic chain (`bd show <epic> --json`, following
    `parent`). Skip a bead when its chain includes:
    - an epic that is live by step 2;

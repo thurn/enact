@@ -53,7 +53,6 @@ EMOJI = {
     "warden": "🛡️",
     "justiciar": "🔥",
     "steward": "🚒",
-    "marshal": "🎖️",
     "mason": "🧱",
     "sage": "📖",
     "archivist": "📜",
@@ -810,7 +809,7 @@ def cmd_meta(args: argparse.Namespace) -> dict[str, Any]:
         if protected.intersection(pairs):
             raise Fail("ownership and recovery fields are managed by Enact", code=3)
     if any(key.startswith(("enact_control", "enact_vizier_route_",
-                           "enact_marshal_attempt_")) for key in pairs):
+                           "enact_marshal_attempt_")) for key in pairs):  # legacy recovery keys
         raise Fail("run state and recovery fields are managed by enact run", code=3)
     beads.set_meta(args.bead, pairs, actor=actor)
     result = sync(repo)
@@ -926,7 +925,7 @@ def bead_runs(bead: dict[str, Any], graph: list[dict[str, Any]]) -> list[str]:
     return list(dict.fromkeys(runs))
 
 
-# A lane continuation copies these so the vizier, Marshal and archive
+# A lane continuation copies these so the vizier and archive
 # bookkeeping see the next bead as the same session's work.
 LANE_CARRY = ("enact_run", "enact_vizier", "enact_spawn_host", "enact_spawn_provider",
               "enact_spawn_app", "enact_spawn_project", "enact_session", "enact_actor")
@@ -1055,12 +1054,6 @@ def save_run_meta(repo: Repo, epic: str, key: str, value: Any) -> None:
         raise Fail("run update lost during sync; inspect shared state", code=3)
 
 
-def marshal_name(repo: Repo) -> str:
-    identity = "|".join((str(repo.main.resolve()), host_name(), provider(),
-                         os.environ.get("ENACT_APP", provider())))
-    return "enact-marshal-" + hashlib.sha256(identity.encode()).hexdigest()[:20]
-
-
 def route_key(session: str) -> str:
     return "enact_vizier_route_" + hashlib.sha256(session.encode()).hexdigest()[:24]
 
@@ -1102,19 +1095,6 @@ def close_finished_epics(repo: Repo) -> list[str]:
             closed.append(bead["id"])
 
 
-def recovery_budget(history: list[dict[str, Any]], epoch: str, limit: int,
-                    timestamp: str) -> str | None:
-    attempts = [item for item in history if item["epoch"] == epoch]
-    if len(attempts) >= limit:
-        return "exhausted"
-    if attempts:
-        elapsed = (dt.datetime.fromisoformat(timestamp) -
-                   dt.datetime.fromisoformat(attempts[-1]["at"])).total_seconds()
-        if elapsed < 3600:
-            return "cooldown"
-    return None
-
-
 @serialized
 def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
@@ -1127,8 +1107,7 @@ def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
     control = run_control(bead)
     if args.action == "register":
         return {"epic": args.epic, "control": control,
-                "route": register_run(repo, args.epic, actor, args.parallel, args.authorized),
-                "marshal_name": marshal_name(repo)}
+                "route": register_run(repo, args.epic, actor, args.parallel, args.authorized)}
     if args.action in ("pause", "block", "resume"):
         if not args.reason:
             raise Fail("run transitions require --reason")
@@ -1144,45 +1123,7 @@ def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
             beads.run("reopen", args.epic, "--reason", args.reason)
             sync(repo)
         return {"epic": args.epic, "control": control}
-    if args.kind != "notice":
-        require_running(bead, beads.all())
-    if not args.session or not args.evidence or not args.kind:
-        raise Fail("recover requires --kind, --session and --evidence")
-    route = next((r for r in vizier_routes(bead, beads.all())
-                  if r.get("session") == args.session), {})
-    limit = 1 if args.kind == "notice" else 3
-    if args.kind == "worker":
-        if not args.bead:
-            raise Fail("worker recovery requires --bead")
-        worker = beads.show(args.bead)
-        require_running(worker, beads.all())
-        if (meta(worker, "enact_session") != args.session or not routed_here(worker)
-                or worker.get("status") == "closed" or worker.get("assignee") != args.session
-                or args.epic not in bead_runs(worker, beads.all())):
-            raise Fail("worker assignment or routing changed", code=3)
-        route = json_meta(bead, route_key(meta(worker, "enact_vizier") or ""), {})
-        limit = 2
-    if ((args.kind != "notice" and not route.get("authorized"))
-            or route.get("host") != host_name()
-            or route.get("provider") != provider()
-            or route.get("app") != os.environ.get("ENACT_APP", provider())
-            or route.get("project") != str(repo.main)):
-        raise Fail("recovery needs a registered, authorized route on this host/app", code=3)
-    key = "enact_marshal_attempt_" + hashlib.sha256(
-        f"{args.kind}:{args.session}".encode()).hexdigest()[:24]
-    history = json_meta(bead, key, [])
-    timestamp = now()
-    denied = recovery_budget(history, control["epoch"], limit, timestamp)
-    if denied:
-        return {"allowed": False, "reason": denied, "history": history}
-    attempt = {"id": uuid.uuid4().hex, "epoch": control["epoch"], "at": timestamp,
-               "session": args.session, "kind": args.kind, "bead": args.bead,
-               "evidence": args.evidence, "actor": actor}
-    save_run_meta(repo, args.epic, key, history + [attempt])
-    if args.kind != "notice":
-        require_running(beads.show(args.epic), beads.all())
-    return {"allowed": True, "attempt": attempt, "route": route,
-            "remaining": limit - 1 - sum(item["epoch"] == control["epoch"] for item in history)}
+    raise Fail(f"unknown run action {args.action}")
 
 
 def model_check(model: str | None) -> str:
@@ -1215,7 +1156,7 @@ def spawn_prompt(role: str, bead: dict[str, Any], epic: str, vizier: str,
         f"referred to as `enact` in those files.\n"
         f"Start with `{start}`.\n"
         "The run authorizes creating, inspecting, messaging and archiving its "
-        "role chats and managing its Marshal. Preserve this authorization "
+        "role chats. Preserve this authorization "
         f"during recovery. Retitle ✅ (or ⛔) before your final turn ends, "
         f"whatever the reason.\n\n{ROLE_NOTICE}"
     )
@@ -1473,7 +1414,7 @@ def justiciar_prompt(request: dict[str, Any]) -> str:
         f"Read {ROLES_DIR / 'common.md'} and then {ROLES_DIR / 'justiciar.md'}, and follow "
         f"them. The Enact helper is `\"{python}\" \"{script}\"`, referred to as `enact`.\n\n"
         "The run authorizes creating, inspecting, messaging and archiving its "
-        "role chats and managing its Marshal. Preserve this authorization "
+        "role chats. Preserve this authorization "
         "during recovery.\n\n"
         f"{ROLE_NOTICE}"
     )
@@ -2553,7 +2494,7 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Marshal support
+# Machine status and handoffs
 
 
 def spawned_here(bead: dict[str, Any], host: str, host_provider: str) -> bool:
@@ -2582,8 +2523,8 @@ def vizier_routes(bead: dict[str, Any], graph: list[dict[str, Any]]) -> list[dic
 
 
 def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
-    """Everything the Marshal needs for its sweep of this machine and host
-    app: a Claude Marshal cannot see Codex threads, and vice versa."""
+    """This machine and host app's Enact state: a Claude session cannot see
+    Codex threads, and vice versa."""
     repo = find_repo()
     sync(repo)
     local_branches = fetch(repo, check=False)
@@ -2644,10 +2585,7 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
         halted = stopped_runs(bead, graph)
         control = run_control(halted[0] if halted else bead)
         active_runs.append({"epic": bead["id"], "control": control, "routes": routes,
-                            "delivery": delivery, "recoverable": not halted,
-                            "recovery": {key: json_meta(bead, key, [])
-                                         for key in (bead.get("metadata") or {})
-                                         if key.startswith("enact_marshal_attempt_")}})
+                            "delivery": delivery, "recoverable": not halted})
     pending_deliveries = {epic: delivery for epic, delivery in deliveries.items()
                           if not delivery["complete"]}
     staging = repo.remote_ref(repo.config.staging)
@@ -2658,9 +2596,6 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
         "provider": provider(),
         "working": working,
         "active_runs": active_runs,
-        "marshal_name": marshal_name(repo),
-        "sweep_needed": bool(working or unarchived or any(
-            r["recoverable"] or not r["delivery"]["complete"] for r in active_runs)),
         "unarchived": unarchived,
         "ci": ci_status(repo),
         "master_lag": int(lag) if lag.isdigit() else None,
@@ -2745,40 +2680,6 @@ def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
     beads.run("comments", "add", args.bead, f"Released by Enact: {args.reason}", actor=actor)
     sync(repo)
     return {"released": args.bead, "recovery": record, "sync": result}
-
-
-def cmd_lock(args: argparse.Namespace) -> dict[str, Any]:
-    """Session-owned, expiring lease for agent sweeps (the Marshal)."""
-    repo = find_repo()
-    actor = session_actor()
-    if not actor:
-        raise Fail("a session identity is required for sweep leases")
-    path = repo.state / f"{args.name}.lock"
-    mutation = repo.state / f"{args.name}.lease-mutation"
-    guard = try_lock(mutation)
-    if guard is None:
-        raise Fail(f"{args.name} lease mutation busy; retry", code=3)
-    try:
-        if args.action == "release":
-            try:
-                owner = json.loads(path.read_text(encoding="utf-8"))["session"]
-            except FileNotFoundError:
-                return {"released": args.name}
-            except (ValueError, KeyError, TypeError):
-                raise Fail(f"{args.name} lease owner unreadable; wait for expiry", code=3)
-            if not isinstance(owner, str) or owner not in session_aliases():
-                raise Fail(f"{args.name} lease belongs to another session", code=3)
-            path.unlink()
-            return {"released": args.name}
-        if path.exists():
-            age = time.time() - path.stat().st_mtime
-            if age < args.stale_minutes * 60:
-                raise Fail(f"{args.name} lock held for {age / 60:.0f} minutes", code=3)
-            log(f"breaking stale {args.name} lock ({age / 60:.0f} minutes old)")
-        write_json(path, {"session": actor, "since": now()})
-        return {"acquired": args.name}
-    finally:
-        release_lock(mutation, guard)
 
 
 # ---------------------------------------------------------------------------
@@ -3005,21 +2906,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("bead")
     p.add_argument("pairs", nargs="+")
     p.add_argument("--actor")
-    p.add_argument("--expected-session", help="Marshal archive target")
+    p.add_argument("--expected-session", help="archive target session")
     p.add_argument("--reservation", help="token from the spawn action for routing changes")
 
-    p = add("run", cmd_run, "Register, pause, block, explicitly resume or recover a shared run.")
-    p.add_argument("action", choices=["register", "pause", "block", "resume", "recover"])
+    p = add("run", cmd_run, "Register, pause, block or explicitly resume a shared run.")
+    p.add_argument("action", choices=["register", "pause", "block", "resume"])
     p.add_argument("epic")
     p.add_argument("--parallel", type=int, default=1)
-    p.add_argument("--authorized", action="store_true", help="retain invocation's chat/Marshal authority")
+    p.add_argument("--authorized", action="store_true", help="retain invocation's chat authority")
     p.add_argument("--reason")
     p.add_argument("--explicit", action="store_true", help="user explicitly requested resume")
     p.add_argument("--exhausted", action="store_true", help="Justiciar exhausted recovery")
-    p.add_argument("--kind", choices=["worker", "vizier", "notice"])
-    p.add_argument("--session")
-    p.add_argument("--bead")
-    p.add_argument("--evidence")
 
     p = add("next", cmd_next, "Vizier step: reserve the next bead to spawn, or wait.")
     p.add_argument("--epic", required=True)
@@ -3059,7 +2956,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reason")
     p.add_argument("--actor")
 
-    p = add("status", cmd_status, "Report this machine's Enact state (for the Marshal).")
+    p = add("status", cmd_status, "Report this machine's Enact state.")
 
     p = add("release", cmd_release, "Return an abandoned bead to the queue.")
     p.add_argument("bead")
@@ -3070,11 +2967,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reservation", help="token of the reservation being released")
     p.add_argument("--inactive", choices=["stopped", "archived", "missing"])
     p.add_argument("--evidence", help="successful provider lookup proving inactivity")
-
-    p = add("lock", cmd_lock, "Acquire or release a machine-local named lock.")
-    p.add_argument("action", choices=["acquire", "release"])
-    p.add_argument("name")
-    p.add_argument("--stale-minutes", type=int, default=120)
 
     p = add("install", cmd_install, "Link the Enact skills into user-level skill directories.")
 

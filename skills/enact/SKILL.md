@@ -30,7 +30,7 @@ an epic (default **1**), the keyword **light** for a
 ## Never
 
 - Never start a session of any kind: no `start_session`, `create_thread`,
-  Marshal, scheduled task or automation, and no Justiciar. Those belong to
+  scheduled task or automation, and no Justiciar. Those belong to
   `/enact-plan`. Never run `enact run register` or `enact next`.
 - Never file Mason, Sage or Archivist beads. Run those roles only for beads
   an epic already contains, and never in a light run.

@@ -18,7 +18,7 @@ as the orchestrator or as its subagent. Then:
 
 - The orchestrator claimed your bead and owns the session title: skip
   `enact start` and every title step below.
-- No vizier, Marshal or Justiciar exists. Never start sessions, scheduled
+- No vizier or Justiciar exists. Never start sessions, scheduled
   tasks or a Justiciar; where this file says to request one or message a
   session, stop instead and put the evidence in your summary.
 - A subagent never starts subagents; a `review:inline` review then comes

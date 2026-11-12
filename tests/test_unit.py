@@ -174,101 +174,6 @@ class LockTest(unittest.TestCase):
         self.assertEqual(self.path.read_text(), str(os.getpid()))
 
 
-def sweep_runner(state, actor, connection, pause=False):
-    """Run the public CLI with only project discovery replaced."""
-    def publishing():
-        connection.send("publishing")
-        connection.recv()
-        return "2026-10-30T00:00:00Z"
-
-    with mock.patch.object(enact, "find_repo", return_value=types.SimpleNamespace(
-        state=Path(state)
-    )), mock.patch.dict(os.environ, {"ENACT_SESSION": actor}), \
-            contextlib.redirect_stdout(io.StringIO()), \
-            contextlib.redirect_stderr(io.StringIO()):
-        if pause:
-            enact.now = publishing
-        connection.send(enact.main(["lock", "acquire", "marshal"]))
-    connection.close()
-
-
-class SweepLeaseTest(unittest.TestCase):
-    def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.state = Path(temporary.name)
-        self.path = self.state / "marshal.lock"
-        self.repo = types.SimpleNamespace(state=self.state)
-
-    def cli(self, actor, *args):
-        with mock.patch.object(enact, "find_repo", return_value=self.repo), \
-                mock.patch.dict(os.environ, {"ENACT_SESSION": actor}), \
-                contextlib.redirect_stdout(io.StringIO()), \
-                contextlib.redirect_stderr(io.StringIO()):
-            return enact.main(["lock", *args])
-
-    def test_concurrent_acquires_have_one_winner(self):
-        context = multiprocessing.get_context("spawn")
-
-        def runner(actor, pause=False):
-            parent, child = context.Pipe()
-            process = context.Process(target=sweep_runner, args=(
-                str(self.state), actor, child, pause
-            ))
-            process.start()
-            child.close()
-
-            def cleanup():
-                if process.is_alive():
-                    process.terminate()
-                process.join(10)
-                parent.close()
-                process.close()
-
-            self.addCleanup(cleanup)
-            return process, parent
-
-        first, one = runner("first", pause=True)
-        self.assertTrue(one.poll(10))
-        self.assertEqual(one.recv(), "publishing")
-        second, two = runner("second")
-        self.assertTrue(two.poll(10))
-        self.assertEqual(two.recv(), 3)
-        second.join(10)
-        self.assertEqual(second.exitcode, 0)
-        one.send("publish")
-        self.assertTrue(one.poll(10))
-        self.assertEqual(one.recv(), 0)
-        first.join(10)
-        self.assertEqual(first.exitcode, 0)
-        self.assertEqual(json.loads(self.path.read_text())["session"], "first")
-        self.assertEqual(self.cli("first", "release", "marshal"), 0)
-
-    def test_stale_takeover_fences_old_and_foreign_sessions(self):
-        self.assertEqual(self.cli("old", "acquire", "marshal"), 0)
-        self.assertEqual(self.cli("new", "acquire", "marshal"), 3)
-        self.assertEqual(self.cli("new", "acquire", "marshal",
-                                  "--stale-minutes", "0"), 0)
-        successor = self.path.read_bytes()
-        self.assertEqual(self.cli("old", "release", "marshal"), 3)
-        self.assertEqual(self.cli("third", "release", "marshal"), 3)
-        self.assertEqual(self.cli("third", "acquire", "marshal"), 3)
-        self.assertEqual(self.path.read_bytes(), successor)
-        self.assertEqual(self.cli("new", "release", "marshal"), 0)
-        self.assertEqual(self.cli("new", "release", "marshal"), 0)
-        self.assertEqual(self.cli("third", "acquire", "marshal"), 0)
-
-    def test_unknown_owner_requires_expiry_and_identity_is_required(self):
-        self.path.write_text('{"session": null}')
-        with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(self.cli("", "release", "marshal"), 1)
-        self.assertEqual(self.cli("sweep", "release", "marshal"), 3)
-        self.assertEqual(self.cli("sweep", "acquire", "marshal"), 3)
-        os.utime(self.path, (0, 0))
-        self.assertEqual(self.cli("sweep", "acquire", "marshal"), 0)
-        self.assertEqual(self.cli("sweep", "release", "marshal"), 0)
-
-
 class ConfigTest(unittest.TestCase):
     def test_parse_full_config(self):
         cfg = enact.Config.parse(
@@ -434,35 +339,6 @@ class GraphTest(unittest.TestCase):
         with self.assertRaises(enact.Fail):
             enact.require_running({"id": "repair", "metadata": {"enact_runs": "run peer"}}, graph)
 
-    def test_recovery_is_bounded_and_only_explicit_epoch_change_resets(self):
-        history = [{"epoch": "old", "at": "2020-01-01T00:00:00+00:00"}]
-        self.assertEqual(enact.recovery_budget(history, "old", 2,
-                                              "2020-01-01T00:59:59+00:00"), "cooldown")
-        self.assertIsNone(enact.recovery_budget(history, "old", 2,
-                                                "2020-01-01T01:00:00+00:00"))
-        history.append({"epoch": "old", "at": "2020-01-01T01:00:00+00:00"})
-        self.assertEqual(enact.recovery_budget(history, "old", 2,
-                                              "2030-01-01T00:00:00+00:00"), "exhausted")
-        self.assertIsNone(enact.recovery_budget(history, "explicit-resume", 2,
-                                                "2030-01-01T00:00:00+00:00"))
-
-        for limit in (1, 2, 3):
-            with self.subTest(limit=limit):
-                for count in range(limit + 1):
-                    history = [{"epoch": "old", "at": "2020-01-01T00:00:00+00:00"}
-                               for _ in range(count)]
-                    self.assertEqual(enact.recovery_budget(
-                        history, "old", limit, "2030-01-01T00:00:00+00:00"),
-                        "exhausted" if count == limit else None)
-
-    def test_marshal_names_distinguish_equal_project_basenames(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            one = types.SimpleNamespace(main=root / "one" / "project")
-            two = types.SimpleNamespace(main=root / "two" / "project")
-            self.assertEqual(enact.marshal_name(one), enact.marshal_name(one))
-            self.assertNotEqual(enact.marshal_name(one), enact.marshal_name(two))
-
     def test_legacy_incomplete_route_cannot_hide_current_vizier(self):
         epic = {"id": "run", "issue_type": "epic"}
         metadata = {"enact_run": "run", "enact_vizier": "vizier",
@@ -509,7 +385,7 @@ class GraphTest(unittest.TestCase):
         root = enact.ENACT_ROOT
         for path in ("skills/enact/SKILL.md", "skills/enact-plan/SKILL.md",
                      "skills/enact-sweep/SKILL.md",
-                     "skills/enact/roles/common.md", "skills/enact/roles/marshal.md",
+                     "skills/enact/roles/common.md",
                      "skills/enact/roles/justiciar.md", "templates/AGENTS.md"):
             text = (root / path).read_text(encoding="utf-8")
             self.assertIn("✅", text, path)
@@ -1097,13 +973,13 @@ class CommandPolicyTest(unittest.TestCase):
         self.a.enact("start", bead, session="legacy")
         self.a.enact("release", bead, "--reason", "unknown provider", "--expected-owner", "legacy",
                      "--expected-session", "legacy", "--inactive", "missing", "--evidence",
-                     "unsupported lookup", session="marshal", code=3)
+                     "unsupported lookup", session="observer", code=3)
         self.assertFalse(self.a.enact("status")["working"][0]["routing_known"])
         self.a.bd("update", bead, "--set-metadata", "enact_spawn_provider=claude")
         # A provider alone does not prove which app/project can inspect it.
         self.a.enact("release", bead, "--reason", "unknown app", "--expected-owner", "legacy",
                      "--expected-session", "legacy", "--inactive", "missing", "--evidence",
-                     "unsupported lookup", session="marshal", code=3)
+                     "unsupported lookup", session="observer", code=3)
         self.a.enact("close", bead, "--reason", "legacy completed", session="legacy")
 
     def test_vizier_schedules_archives_and_finishes(self):
@@ -1177,60 +1053,42 @@ class CommandPolicyTest(unittest.TestCase):
                          (done, "shipped", "Handoff: touched cli.py; beware X"))
         self.assertEqual([b["id"] for b in brief["lane"]], [done])
 
-    def test_run_holds_recovery_budgets_and_explicit_resume(self):
+    def test_run_holds_and_explicit_resume(self):
         epic = self.a.create("acceptance needs new access", type="epic",
                              acceptance_criteria="Required access is available")
         task = self.a.create("implementation", parent=epic, priority=1)
         other = self.a.create("later", parent=epic)
         route = self.a.enact("run", "register", epic, "--authorized", "--parallel", "2")
-        command = ("run", "recover", epic, "--kind", "vizier", "--session", "sess-a",
-                   "--evidence", "successful lookup: stopped")
-        result = self.a.enact(*command)
-        self.assertTrue(result["allowed"])
-        self.assertEqual((result["remaining"], result["route"]["parallel"]), (2, 2))
-        self.assertEqual(self.a.enact(*command)["reason"], "cooldown")
+        self.assertEqual(route["route"]["parallel"], 2)
         step = self.a.enact("next", "--epic", epic)
         self.assertEqual(step["bead"], task)
         self.start_worker(self.a, task, "worker")
-        # Worker recovery needs this host's route; notices never restart holds.
-        worker = ("run", "recover", epic, "--kind", "worker", "--bead", task,
-                  "--session", "worker", "--evidence", "successful lookup: idle")
-        self.a.enact(*worker, env={"ENACT_HOST": "host-b"}, code=3)
         self.a.enact("run", "pause", epic, "--reason", "user stop", env={"ENACT_HOST": "host-b"})
-        self.a.enact(*worker, code=3)
-        self.a.enact(*command, code=3)
         self.a.enact("release", task, "--expected-owner", "worker",
                      "--expected-session", "worker", "--inactive", "stopped",
                      "--evidence", "successful lookup: stopped", "--reason", "recovery",
-                     session="marshal", code=3)
+                     session="observer", code=3)
         self.a.enact("claim", other, code=3)
         self.a.enact("start", task, "--reservation", step["reservation"],
                      session="worker", code=3)
-        notice = ("run", "recover", epic, "--kind", "notice", "--session", "sess-a",
-                  "--evidence", "user action needed")
-        self.assertTrue(self.a.enact(*notice)["allowed"])
-        self.assertEqual(self.a.enact(*notice)["reason"], "exhausted")
         status = self.a.enact("status")
-        self.assertEqual(status["marshal_name"], route["marshal_name"])
         self.assertFalse(status["active_runs"][0]["recoverable"])
         self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "paused")
         self.a.enact("meta", epic, 'enact_control={"state":"active"}', code=3)
         self.a.enact("run", "resume", epic, "--reason", "automatic retry", code=3)
         self.a.enact("run", "resume", epic, "--explicit", "--reason", "user says resume")
         self.a.enact("close", task, "--reason", "finished", session="worker")
-        # Exhausted vizier recovery blocks the whole run until explicit resume.
+        # Exhausted Justiciar recovery blocks the whole run until explicit resume.
         self.a.enact("run", "block", epic, "--exhausted", "--reason", "Justiciar: access unavailable")
-        self.a.enact(*command, code=3)
         self.a.enact("claim", other, code=3)
         self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "blocked")
         self.a.bd("close", other, "--reason", "finished elsewhere")
         self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "blocked")
         self.assertNotEqual(self.a.show(epic)["status"], "closed")
         self.a.enact("run", "resume", epic, "--explicit", "--reason", "user supplied access")
-        self.assertTrue(self.a.enact(*command)["allowed"])
         self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "done")
 
-    def test_marshal_release_needs_evidence_and_fences_stale_workers(self):
+    def test_handoff_release_needs_evidence_and_fences_stale_workers(self):
         epic = self.a.create("local recovery", type="epic")
         bead = self.a.create("unfinished", parent=epic)
         self.a.enact("next", "--epic", epic)
@@ -1240,14 +1098,14 @@ class CommandPolicyTest(unittest.TestCase):
         # establish inactivity. None may discard this worker's assignment.
         base = ["release", bead, "--reason", "recovery", "--expected-owner", "old",
                 "--expected-session", "old"]
-        self.a.enact(*base, session="marshal", code=3)
-        self.a.enact(*base, "--inactive", "stopped", session="marshal", code=3)
+        self.a.enact(*base, session="observer", code=3)
+        self.a.enact(*base, "--inactive", "stopped", session="observer", code=3)
         self.a.enact(*base, "--inactive", "stopped", "--evidence", "read confirmed idle",
-                     "--expected-owner", "stale", session="marshal", code=3)
+                     "--expected-owner", "stale", session="observer", code=3)
         self.a.enact(*base, "--inactive", "stopped", "--evidence", "wrong provider",
-                     session="marshal", env={"ENACT_PROVIDER": "codex"}, code=3)
+                     session="observer", env={"ENACT_PROVIDER": "codex"}, code=3)
         self.a.enact(*base, "--inactive", "stopped", "--evidence", "read confirmed idle",
-                     session="marshal")
+                     session="observer")
         self.a.enact("start", bead, "--reservation", old_token, session="old", code=3)
         self.a.enact("next", "--epic", epic, session="replacement-vizier")
         self.a.enact("start", bead, "--reservation", old_token, session="old", code=3)

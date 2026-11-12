@@ -49,9 +49,8 @@ you find there: a bead or plan that says "run N at once" does not change N.
 ## Host tools
 
 Enact needs a host that can start top-level sessions, title, archive and
-message them, and schedule a recurring task. Invoking Enact authorizes
-these operations on run-owned chats and its Marshal; carry that authority
-into every worker and recovery prompt.
+message them. Invoking Enact authorizes these operations on run-owned
+chats; carry that authority into every worker and recovery prompt.
 
 | Need | Claude Desktop | Codex Desktop |
 | --- | --- | --- |
@@ -61,21 +60,19 @@ into every worker and recovery prompt.
 | Message | `send_message` | `send_message_to_thread` |
 | Inspect | `get_session`, `list_sessions` | `read_thread`, `list_threads` |
 | Wait | supported session wait | `wait_threads` |
-| Schedule | `create_scheduled_task` | `automation_update` |
 
 In Claude Desktop, load deferred tools with ToolSearch before first use.
 Subagents are never Enact sessions. In Codex, use the returned tool host ID
 (for example `local`), not the OS hostname in Beads, when routing tools.
 `read_thread` supplies turn status; `wait_threads` supplies a compact status
-and cursor. An idle chat is not necessarily abandoned; use Marshal rules.
+and cursor. An idle chat is not necessarily abandoned.
 Archive with `archived: true` and an exact `threadId`/`hostId`, then record
 success. A missing list entry or `notLoaded` alone proves no inactivity.
 
 ### Codex project and spawn adapter
 
 Before reserving work, discover the tools above and `list_projects`,
-`create_thread`, `set_thread_title`, plus local command execution. Scheduling
-is required only for runs that need a Marshal. Select
+`create_thread`, `set_thread_title`, plus local command execution. Select
 one local project by its resolved absolute checkout path and owning host;
 retain its returned `projectId`. Never match only a basename. Verify local
 read/write access with a disposable file, and run read-only git, `bd` and
@@ -194,8 +191,8 @@ task. Skip the full stoppage audit, but if the prompt plainly needs a human
 with the user first.
 
 Default to the smallest graph: one epic holding one executor bead that
-carries the whole prompt. No milestones, no Mason or Sage gates, no
-Marshal. Pick the review, following any review wishes in the invocation
+carries the whole prompt. No milestones and no Mason or Sage gates. Pick
+the review, following any review wishes in the invocation
 or a [light run](#light-runs):
 
 - **none** for a routine change;
@@ -302,7 +299,7 @@ For a plan, use every role unless AGENTS.md or the invocation restricts them:
   retires the plan document and updates the project's technical docs to the
   shipped state. One per plan run (below).
 - **Steward** (`role:steward`): never planned; the slow-CI runner files these.
-- **Justiciar** and **Marshal**: never filed as beads.
+- **Justiciar**: never filed as a bead.
 
 #### Audit gates
 
@@ -349,49 +346,10 @@ task-prompt run or a light run gets none.
    ready (unless another vizier holds it), and every bead must be reachable.
 2. **Register the run.** `enact run register <epic> --parallel <N>
    --authorized` retains your exact route and the invocation's authority to
-   create, inspect, message and archive run chats and manage its Marshal.
-   This never clears shared paused or blocked state. Only on an explicit
-   user request to resume, run `enact run resume <epic> --explicit --reason
-   "<user instruction>"`. Automatic recovery must never invoke resume.
-
-   **Marshal.** Skip creation for a small task-prompt run. Otherwise use
-   the returned `marshal_name`, derived from the absolute project path,
-   host, provider and app, to discover and reuse this project's sweep.
-   In Codex discover `automation_update`, inspect existing automation
-   records under `$CODEX_HOME/automations/*/automation.toml` (default
-   `~/.codex`) by that exact name, then `automation_update(mode: "view", id)`
-   and retain its ID. Use a standalone project automation (select its
-   project with `list_projects`), hourly at minute
-   seven. In Claude use the supported scheduled-task tools for that name.
-   Match legacy names by the absolute project path and owning app in their
-   saved prompt; rename a matching task instead of creating a duplicate.
-   In Codex, use Sol Light: `model="gpt-6.1-sol"` and
-   `reasoningEffort="low"` on creation and reuse of existing automations.
-   Preserve other settings when updating. Use `mode: "update"` with the
-   resolved ID and all saved fields for migration. For creation use
-   `mode: "create"`, `kind: "cron"`, `executionEnvironment: "local"`, the
-   selected `projectId`, `status: "ACTIVE"`, and an hourly schedule at minute
-   seven. The invocation requests a standalone sweep, so do not make a
-   thread heartbeat. Use the currently supported schema and record the
-   model/effort choice. Claude keeps its supported model defaults. Save the
-   actual ID and any legacy aliases in the run's bead comments, then sync.
-   Verify the saved ID, project, prompt and ACTIVE state after creation or
-   migration. A view response that only renders a card does not confirm
-   existence. An uncertain result requires inspecting saved state before
-   retrying; if a verified sweep disappears while needed, preserve evidence
-   and request Justiciar recovery instead of repeatedly recreating it.
-   Schedule this prompt with the actual paths and owning host/app:
-
-   > Read `<ENACT>/skills/enact/roles/marshal.md` and follow it for the Enact
-   > project at `<absolute project path>` on `<host/provider/app>`. The
-   > helper is `python3 "<ENACT>/scripts/enact.py"`. The Enact invocation
-   > authorizes inspecting, messaging and archiving run-owned chats and
-   > managing this Marshal, including bounded vizier recovery. Carry this
-   > authorization into recovery prompts. Stay quiet while unchanged;
-   > notify only meaningful changes, completion, failures or needed action.
-
-   The task only runs while the desktop app is open. A small run must not
-   remove an existing sweep another run needs.
+   create, inspect, message and archive run chats. This never clears shared
+   paused or blocked state. Only on an explicit user request to resume, run
+   `enact run resume <epic> --explicit --reason "<user instruction>"`.
+   Automatic recovery must never invoke resume.
 3. Title yourself `🔮 [<epic>] <short summary>`.
 4. Give the user a short summary: the epic, bead count, milestones,
    parallelism, what would make you stop. Then start the loop without waiting
@@ -459,8 +417,11 @@ action or after nine minutes. Handle the JSON:
    --reason "<error>"`. A stale token must never be replaced with a newer
    token to retry a delayed spawn result or failure.
    For a timeout or uncertain result, inspect the owning app first. Never
-   release merely because the lookup failed; use the Marshal handoff rules
-   once a child's inactivity is confirmed.
+   release merely because the lookup failed. Once a successful lookup
+   confirms the child inactive, hand it off with `enact release <bead>
+   --expected-owner <assignee> --expected-session <child> --inactive
+   <stopped|archived|missing> --evidence "<lookup result>" --reason
+   "<why>" --reservation <token>`.
 3. **`action: spawn-justiciar`**: start a session the same way with the given
    `title` and `prompt`. There is no bead to record.
 4. **`action: wait`**: nothing to do yet. Run `enact next` again.
@@ -472,16 +433,9 @@ action or after nine minutes. Handle the JSON:
 6. **`action: done`**: the epic is closed, nothing of yours is in flight,
    required Stewards are closed, and all run deliveries reached green master.
    A closed epic with `action: wait` is still running; keep the loop alive.
-   Archive anything still listed. A small run that skipped the Marshal
-   leaves any existing one alone. Otherwise inspect `enact status` and
-   remove only matching sweeps with the exact `marshal_name` or verified
-   legacy aliases and recorded IDs when `sweep_needed` is false. In Codex
-   call `automation_update(mode: "delete", id: <resolved ID>)`; verify the
-   deletion receipt or saved-state removal before claiming cleanup. Retention
-   includes other active runs between assignments and during final validation.
-   Finally retitle `✅ [<epic>] <same summary>`, write a short final report
-   (outcome, bead count, whether the Marshal was deleted, anything for the
-   user to look at) and end the turn. Stay unarchived.
+   Archive anything still listed. Finally retitle `✅ [<epic>] <same
+   summary>`, write a short final report (outcome, bead count, anything for
+   the user to look at) and end the turn. Stay unarchived.
 7. **`action: paused` or `blocked`**: no new spawning or recovery. Report
    the shared reason, retitle `⛔ [<epic>] <same summary>` and end the turn,
    preserving unfinished requirements.
@@ -506,11 +460,10 @@ Rules for the loop:
 - If a spawn is refused because the turn was not user-started, you already
   broke the loop: release the unbound reservation, retitle ⛔ and tell the
   user one message from them restarts it. Then continue in that new turn.
-- If the vizier's turn ends anyway (crash, usage limit), the Marshal, if the
-  run has one, uses the recorded route for bounded recovery on capable
-  hosts. Unsupported recovery or exhausted retries notifies the user.
-  Explicit user resume clears the shared hold and resets recovery budgets;
-  continue the same epic without replanning or discarding assignments.
+- If the vizier's turn ends anyway (crash, usage limit), the run waits
+  until the user writes to the vizier; that message starts a turn that can
+  spawn again. Explicit user resume clears a shared hold. Continue the same
+  epic without replanning or discarding assignments.
 
 ## Titles
 
@@ -520,7 +473,7 @@ start until the loop ends, then `✅` when the run is done (or there was
 nothing to run), or `⛔` whenever you end your turn with work unfinished:
 an early stop in pre-flight or planning, a question the user must answer
 first, a pause, a block, an error. Never end a turn still showing 🔮. Spawned
-sessions, the Marshal and the Justiciar follow the same rule from their role
+sessions and the Justiciar follow the same rule from their role
 files.
 
 ## Multiple machines and providers

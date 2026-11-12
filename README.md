@@ -44,13 +44,11 @@ helper.
 | Sage | 📖 | bead (milestone gate) | Process and tooling audit, files beads |
 | Archivist | 📜 | bead (end of a plan run) | Retires the plan, updates docs to the shipped state |
 | Justiciar | 🔥 | `enact justiciar request` | Emergency authority, one per fleet |
-| Marshal | 🎖️ | hourly scheduled task | Nudges stalled sessions, recovers work |
 
 ## How a run works
 
 1. `/enact-plan <input> [parallelism]` makes the session the vizier. It checks
-   the permission mode, plans according to the input and, unless the run is
-   a small task prompt, creates the hourly Marshal task:
+   the permission mode and plans according to the input:
    - a **bead** runs as is (a plain bead is wrapped in an epic of its own);
    - a **plan document** is audited for anything that would need a human,
      those points are resolved with you, and it is filed as a full graph (an
@@ -76,7 +74,7 @@ helper.
 
 ## Inline runs
 
-`/enact <input> [parallelism]` never starts another session, Marshal or
+`/enact <input> [parallelism]` never starts another session or a
 Justiciar. A plain bead or task prompt (filed as one executor bead) is
 implemented by the session itself; a large or risky change then gets a
 Warden subagent. An epic runs each ready bead in a role subagent, one at a
@@ -136,15 +134,13 @@ Dolt mode, and the `dolt` CLI (used to resolve Beads merge conflicts).
 | `sync` | Commit, merge (remote wins on conflict) and push Beads |
 | `ci [--detach\|--status\|--wait SHA]` | Coalescing slow-CI runner; watch one delivery |
 | `justiciar status\|request\|acquire\|release\|break` | Fleet-wide emergency lock |
-| `status`, `lock acquire\|release NAME` | Marshal support |
+| `status` | This machine's runs, workers, CI and deliveries |
 | `install`, `setup` | Machine and project setup |
 
 ## Status
 
 The Claude Desktop flow was exercised end to end. Bounded Codex Desktop
 smokes verified local chat creation, identity, access, continuation and
-archiving, paused automation creation/update/deletion, and actual scheduled
-Marshal delivery after recovery. See
-[design notes](docs/design.md#codex-desktop-smoke-receipts) for receipts and
-limits. Other operating systems and indefinite scheduling persistence are
-unverified; final run cleanup follows green delivery.
+archiving. See [design notes](docs/design.md#codex-desktop-smoke-receipts)
+for receipts and limits. Other operating systems are unverified; final run
+cleanup follows green delivery.
