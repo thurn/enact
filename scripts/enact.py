@@ -1836,6 +1836,10 @@ def finish_delivery(repo: Repo, receipt: Path, data: dict[str, Any],
     caller starts CI and retires it (`cmd_push`, after removing its worktree).
     """
     result: dict[str, Any] = {"staging": data["head"], "commits": data["commits"]}
+    if not receipt.exists():
+        # Pushes no longer hold the lock while they check, so two local
+        # sessions can both find one receipt; the first to lock it finishes it.
+        return result
     if data.get("bead"):
         beads = Beads(repo)
         # Remote-wins merges can discard a metadata write. Re-read and union,
@@ -1876,17 +1880,25 @@ def recover_deliveries(repo: Repo) -> list[dict[str, Any]]:
     return recovered
 
 
-@serialized
 def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
+    """Rebase, run the fast check and publish to staging.
+
+    The ownership lock covers only the Beads bookkeeping: the first ownership
+    check, and the final check, push and delivery record. The rebase and the
+    fast check run outside it, so other pushes, claims and syncs on this host
+    proceed while a check runs; a push that loses the race to staging is
+    rejected by the remote and re-integrates, as before.
+    """
     repo = find_repo()
     enact_update = update_enact()
-    sync(repo)
-    assigned = worktree_bead(repo, repo.top)
-    if assigned and args.bead and args.bead != assigned["id"]:
-        raise Fail("--bead differs from this worktree's assignment", code=3)
-    args.bead = args.bead or (assigned["id"] if assigned else None)
-    if args.bead:
-        require_owner(Beads(repo).show(args.bead), require_actor(None))
+    with ownership_lock(repo):
+        sync(repo)
+        assigned = worktree_bead(repo, repo.top)
+        if assigned and args.bead and args.bead != assigned["id"]:
+            raise Fail("--bead differs from this worktree's assignment", code=3)
+        args.bead = args.bead or (assigned["id"] if assigned else None)
+        if args.bead:
+            require_owner(Beads(repo).show(args.bead), require_actor(None))
     cfg = repo.config
     if repo.git("status", "--porcelain", "--untracked-files=no"):
         raise Fail("working tree has uncommitted changes; commit them first", code=2)
@@ -1908,21 +1920,25 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
             if run_shell(cfg.fast, repo.top) != 0:
                 raise Fail("fast checks failed; fix them and run `enact push` again", code=2)
         commits = repo.git("rev-list", "--reverse", f"{before}..{head}").split()
-        graph = Beads(repo).all() if args.bead else []
-        bead = next((b for b in graph if b["id"] == args.bead), {})
-        if args.bead and not bead:
-            raise Fail(f"bead {args.bead} not found")
-        data = {"bead": args.bead, "head": head, "commits": commits,
-                "history": list(dict.fromkeys((meta(bead, "enact_commits") or "").split() + commits)),
-                "runs": bead_runs(bead, graph), "ci": bool(cfg.slow and not args.no_ci)}
-        receipt = delivery_receipts(repo) / f"{head}.json"
-        # Write before the remote mutation, so a lost push response is recoverable.
-        write_json(receipt, data)
-        if args.bead:
-            sync(repo)
-            require_owner(Beads(repo).show(args.bead), require_actor(None))
-        if repo.git_ok("push", "-q", cfg.remote, f"HEAD:refs/heads/{cfg.staging}"):
-            result = {"pushed": True, **finish_delivery(repo, receipt, data, start=False)}
+        with ownership_lock(repo):
+            graph = Beads(repo).all() if args.bead else []
+            bead = next((b for b in graph if b["id"] == args.bead), {})
+            if args.bead and not bead:
+                raise Fail(f"bead {args.bead} not found")
+            data = {"bead": args.bead, "head": head, "commits": commits,
+                    "history": list(dict.fromkeys(
+                        (meta(bead, "enact_commits") or "").split() + commits)),
+                    "runs": bead_runs(bead, graph), "ci": bool(cfg.slow and not args.no_ci)}
+            receipt = delivery_receipts(repo) / f"{head}.json"
+            # Write before the remote mutation, so a lost push response is recoverable.
+            write_json(receipt, data)
+            if args.bead:
+                sync(repo)
+                require_owner(Beads(repo).show(args.bead), require_actor(None))
+            pushed = repo.git_ok("push", "-q", cfg.remote, f"HEAD:refs/heads/{cfg.staging}")
+            if pushed:
+                result = {"pushed": True, **finish_delivery(repo, receipt, data, start=False)}
+        if pushed:
             pending_ci = receipt if data["ci"] else None
             if recovered:
                 result["recovered"] = recovered

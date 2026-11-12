@@ -601,6 +601,20 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.a.enact("push", "--no-ci", cwd=wt, code=2)
         self.assertEqual(self.remote_sha("staging"), before)
 
+    def test_fast_check_runs_outside_the_ownership_lock(self):
+        # A push once held the ownership lock through its fast check, so every
+        # claim, close and sync on the host waited out other sessions' checks
+        # and failed "ownership operation busy" after three minutes.
+        sync = shlex.join([Path(sys.executable).as_posix(), "-c",
+                           "import subprocess, sys; sys.exit(subprocess.run("
+                           f"[sys.executable, {str(SCRIPT)!r}, 'sync'], timeout=60).returncode)"])
+        wt = Path(self.a.enact("worktree", "create", "unlocked")["path"])
+        self.configure_git(wt)
+        self.a.commit_file(".enact.toml", ENACT_TOML.replace(
+            '"python3 check.py fast"', json.dumps(sync)), cwd=wt)
+        result = self.a.enact("push", "--no-ci", cwd=wt)
+        self.assertTrue(result["pushed"])
+
     def test_worktree_create_hook_replaces_git(self):
         hook = (
             "python3 -c \"import os,subprocess; subprocess.check_call(['git','worktree','add',"
