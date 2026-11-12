@@ -242,6 +242,20 @@ class RunBoundedTest(unittest.TestCase):
                 os.kill(grandchild, 0)
 
 
+class RunMissingTest(unittest.TestCase):
+    def test_missing_tool_names_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(enact.Fail) as caught:
+                enact.run(["enact-no-such-tool"], Path(tmp))
+        self.assertIn("enact-no-such-tool is not installed", str(caught.exception))
+
+    def test_missing_directory_points_to_setup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(enact.Fail) as caught:
+                enact.run([sys.executable, "-c", "pass"], Path(tmp) / "absent")
+        self.assertIn("enact setup", str(caught.exception))
+
+
 class ShellTest(unittest.TestCase):
     # A POSIX command with the quoting the projects' hooks use: $(...), "$VAR", '...' and &&.
     COMMAND = """f=$(mktemp) && printf '%s|%s' "$ENACT_X" 'a "b" c' > "$f" && cat "$f"; rm -f "$f\""""

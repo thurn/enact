@@ -111,16 +111,25 @@ def run(
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     full_env = {**os.environ, **(env or {})}
-    proc = subprocess.run(
-        cmd,
-        cwd=cwd,
-        env=full_env,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        stdin=subprocess.DEVNULL,
-    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=cwd,
+            env=full_env,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        # A fresh clone has no local Beads database until `enact setup`
+        # bootstraps it from the remote; a fresh machine may lack the tool.
+        if not cwd.is_dir():
+            raise Fail(f"{cwd} does not exist; on a fresh clone, run "
+                       "`enact setup` to bootstrap the Beads database") from None
+        raise Fail(f"{cmd[0]} is not installed or not on PATH; "
+                   "see the README's requirements") from None
     if check and proc.returncode != 0:
         raise Fail(
             f"{' '.join(cmd)} failed ({proc.returncode}): "
@@ -378,7 +387,11 @@ class Beads:
     def run(self, *args: str, actor: str | None = None) -> str:
         proc = self.raw(*args, actor=actor)
         if proc.returncode != 0:
-            raise Fail(f"bd {' '.join(args)} failed: {(proc.stderr or proc.stdout).strip()}")
+            output = (proc.stderr or proc.stdout).strip()
+            if "schema version mismatch" in output:
+                # Another machine's newer bd migrated the shared database.
+                output += "\nupgrade bd to the newest Beads release"
+            raise Fail(f"bd {' '.join(args)} failed: {output}")
         return proc.stdout
 
     def json(self, *args: str, actor: str | None = None) -> Any:
