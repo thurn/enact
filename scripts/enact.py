@@ -1974,14 +1974,18 @@ def reap_processes(path: Path, grace: float = 3.0) -> list[dict[str, Any]]:
 
     A fuzz run started in a bead's worktree once kept a core busy for hours
     after the bead closed and the tree was deleted. Never ends this process
-    or its ancestors, whose working directory may be the tree itself.
+    or its ancestors, whose working directory may be the tree itself, nor
+    anything in this process's group: `enact push --bead X | jq` runs the
+    reader in the same group, and ending it breaks the pipe the result is
+    written to. A leftover background run from the bead has its own group.
     """
     if WINDOWS:
         log(f"not ending processes in {path}: unsupported on Windows")
         return []
     spared = process_ancestors()
+    own_group = os.getpgid(0)
     victims = {pid: command for pid, command in processes_inside(path).items()
-               if pid not in spared}
+               if pid not in spared and process_group(pid) != own_group}
     for pid in victims:
         with contextlib.suppress(OSError):
             os.kill(pid, signal.SIGTERM)
@@ -1997,6 +2001,14 @@ def reap_processes(path: Path, grace: float = 3.0) -> list[dict[str, Any]]:
     for pid, command in victims.items():
         log(f"ended process {pid} ({command}) using worktree {path}")
     return [{"pid": pid, "command": command} for pid, command in victims.items()]
+
+
+def process_group(pid: int) -> int | None:
+    """The process group of `pid`, or None when it has already exited."""
+    try:
+        return os.getpgid(pid)
+    except OSError:
+        return None
 
 
 def process_exited(pid: int) -> bool:

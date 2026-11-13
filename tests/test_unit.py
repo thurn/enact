@@ -282,12 +282,12 @@ class ReapProcessesTest(unittest.TestCase):
             tree, elsewhere = Path(tmp, "tree").resolve(), Path(tmp, "other").resolve()
             tree.mkdir()
             elsewhere.mkdir()
-            inside = subprocess.Popen(["sleep", "60"], cwd=tree)
+            inside = subprocess.Popen(["sleep", "60"], cwd=tree, start_new_session=True)
             ignores_term = subprocess.Popen(
                 [sys.executable, "-c",
                  "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN);"
                  "print('ready', flush=True); time.sleep(60)"],
-                cwd=tree, stdout=subprocess.PIPE, text=True)
+                cwd=tree, stdout=subprocess.PIPE, text=True, start_new_session=True)
             ignores_term.stdout.readline()  # the handler is installed
             outside = subprocess.Popen(["sleep", "60"], cwd=elsewhere)
             try:
@@ -301,6 +301,23 @@ class ReapProcessesTest(unittest.TestCase):
                     process.kill()
                     process.wait()
                 ignores_term.stdout.close()
+
+    def test_processes_in_the_callers_group_are_spared(self):
+        # `enact push | jq` puts the reader in the push's group; it must survive.
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Path(tmp, "tree").resolve()
+            tree.mkdir()
+            sibling = subprocess.Popen(["sleep", "60"], cwd=tree)  # same group as the test
+            other_group = subprocess.Popen(["sleep", "60"], cwd=tree, start_new_session=True)
+            try:
+                ended = enact.reap_processes(tree, grace=1)
+                self.assertEqual([e["pid"] for e in ended], [other_group.pid])
+                self.assertIsNotNone(other_group.wait(timeout=10))
+                self.assertIsNone(sibling.poll())
+            finally:
+                for process in (sibling, other_group):
+                    process.kill()
+                    process.wait()
 
     def test_this_process_is_spared_even_when_its_cwd_is_the_tree(self):
         with tempfile.TemporaryDirectory() as tmp:
