@@ -50,10 +50,7 @@ you find there: a bead or plan that says "run N at once" does not change N.
 
 Enact needs a host that can start top-level sessions, title, archive and
 message them. Invoking Enact authorizes these operations on run-owned
-chats, and also turning off Remote Control on them (below); carry that
-authority into every worker and recovery prompt. Run-owned chats are the
-pool members and chats the run's sessions start, never the user's own
-sessions or your own.
+chats; carry that authority into every worker and recovery prompt.
 
 | Need | Claude Desktop | Codex Desktop |
 | --- | --- | --- |
@@ -61,7 +58,6 @@ sessions or your own.
 | Reuse session | `clear_session`, `set_session_model` | none |
 | Title self | `set_session_title` (`self`) | `set_thread_title` |
 | Archive | `archive_session` | `set_thread_archived` |
-| Remote Control off | `set_remote_control` (`enabled: false`) | none |
 | Message | `send_message` | `send_message_to_thread` |
 | Inspect | `get_session`, `list_sessions` | `read_thread`, `list_threads` |
 | Wait | background `enact next` | `wait_threads` |
@@ -122,13 +118,13 @@ every bead to an idle member: `clear_session` empties it,
 `set_session_model` picks the bead's model, `send_message` delivers the
 prompt. After pre-flight you never call `start_session`.
 
-A session with Remote Control connected cannot be cleared or archived: the
-host refuses with "still has live work", the same words it uses for a
-running background task, and the refusal lasts while the member sits idle.
-New sessions connect automatically when the user's "Connect new sessions to
-Remote Control" setting is on. So turn Remote Control off on each member
-once it has replied `ready`, and again whenever a clear or archive of a
-run-owned chat is refused for live work, then retry once.
+Do these one call at a time, never in one batch, and change the model only
+after the clear succeeds. A model change on a session that still holds its
+conversation waits for that session's next turn, and until then the host
+refuses to clear it ("still has live work") even though it sits idle. A
+member stuck that way recovers once it runs a turn: `send_message` it
+"Reply only `ok` and end your turn.", wait for that turn to end, and clear
+again. Changing only the effort does not cause this.
 
 Between actions you end your turn. `enact next` runs as a background
 command and its exit wakes you, whoever started the turn: the user, a
@@ -408,9 +404,7 @@ task-prompt run or a light run gets none.
    messages." and a `background` saying it is an Enact pool member for
    epic `<epic>`. Do not pass `permission_mode`, so members inherit yours.
    Record them all: `enact pool add <id>...`. If the limit leaves fewer
-   than `parallel + 1`, run with what you have. Once each member has
-   replied `ready`, turn its Remote Control off (`set_remote_control`,
-   `enabled: false`); the invocation authorizes it.
+   than `parallel + 1`, run with what you have.
 4. Title yourself `🔮 [<epic>] <short summary>`.
 5. Give the user a short summary: the epic, bead count, milestones,
    parallelism, pool size (Claude Desktop), and what would make you stop.
@@ -443,22 +437,23 @@ action or when the wait runs out. Handle the JSON:
 
 1. **`archive`** (any action may carry it): for each entry, archive the
    session ID with the host's archive tool, then
-   `enact meta <bead> enact_archived=true`. If the host refuses for live
-   work, turn the session's Remote Control off and retry once; if it is
-   still refused, skip it; it will be listed again. If it is
+   `enact meta <bead> enact_archived=true`. If the host refuses because the
+   session is still working, skip it; it will be listed again. If it is
    already archived, still record it. Pool members are listed only once the
    run is done.
 2. **`action: spawn`**:
    - **Claude Desktop**: hand the bead to pool member `session`, following
-     `pool_notice`: `clear_session` it; `set_session_model` to
+     `pool_notice`, one call at a time: `clear_session` it; only once that
+     succeeds, `set_session_model` to
      `settings.model`, or to your own model when there is none (a
      `settings.model` is required, never a hint: confirm it with
      `get_session` before sending); `set_session_effort` likewise; then
      `send_message` with `prompt`, verbatim. Retitling is the worker's job.
-     If clear is refused for live work, turn the member's Remote Control
-     off and retry once. If clear or send is still refused because the
-     member is busy, pinned or open on screen, `enact pool rest
-     <session>`; if it is archived or missing,
+     If clear or send is refused because the member is busy, pinned or open
+     on screen, `enact pool rest <session>` without touching its model; an
+     idle member refused for live work also gets the one-turn recovery
+     above, so it is clearable by the time it is offered again. If it is
+     archived or missing,
      `enact pool drop <session>`. Then release the reservation (below). If
      the required model cannot be set, release with the reason and
      `enact run block <epic> --reason "<model> unavailable for <bead>"`:
