@@ -1297,7 +1297,7 @@ instead of adopting it needs the plan's context.
   when it is not finished, paused or blocked, has routes and all of them
   are on this host, and none has a fresh lease. A run with any route on
   another host is left alone, because that host's leases cannot be read
-  here. A closed run whose delivery is complete is also skipped.
+  here. A closed run is pruned like an open one.
 - A stale run whose delivery is complete becomes `finished`. One with
   pending commits or Steward beads becomes `paused` with a reason naming
   the expired lease (and a closed epic is reopened, as `run pause` does),

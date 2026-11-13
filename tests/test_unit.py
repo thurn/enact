@@ -842,8 +842,11 @@ class VizierLeaseTest(unittest.TestCase):
         for state in ("finished", "paused"):
             held = {"enact_control": json.dumps({"state": state, "epoch": "1"})}
             self.assertEqual(self.prune(self.epic(metadata=held), complete=False)[0], [])
-        # A closed run that delivered everything has nothing left to retire.
-        self.assertEqual(self.prune(self.epic(status="closed"), complete=True)[0], [])
+
+    def test_prune_finishes_a_closed_run_without_reopening_it(self):
+        pruned, _, beads = self.prune(self.epic(status="closed"), complete=True)
+        self.assertEqual(pruned[0]["state"], "finished")
+        beads.run.assert_not_called()
 
     def steward(self, assignee=None, minutes_idle=120, host="jarvis", parent=None):
         updated = enact.dt.datetime.now(enact.dt.timezone.utc) - enact.dt.timedelta(

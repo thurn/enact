@@ -1449,8 +1449,6 @@ def stale_runs(repo: Repo, graph: list[dict[str, Any]],
         if not routes or any(r.get("host") != host_name() for r in routes):
             continue
         delivery = (deliveries or {}).get(bead["id"]) or run_delivery(repo, graph, bead["id"])
-        if bead.get("status") == "closed" and delivery["complete"]:
-            continue
         if not any(route_alive(repo, bead["id"], r) for r in routes):
             stale.append({"bead": bead, "delivery": delivery})
     return stale
