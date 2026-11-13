@@ -754,6 +754,19 @@ class StewardRoutingTest(unittest.TestCase):
         self.assertTrue(self.targeted(executor))
 
 
+class StrandedPinTest(unittest.TestCase):
+    def test_a_pin_is_stranded_only_when_no_registered_vizier_serves_it(self):
+        epic = {"id": "e", "metadata": {
+            "enact_vizier_route_a": json.dumps({"host": "jarvis", "provider": "claude"})}}
+        def pinned(**want):
+            return {"id": "b", "metadata": {f"enact_{k}": v for k, v in want.items()}}
+        self.assertFalse(enact.stranded(pinned(), epic))
+        self.assertFalse(enact.stranded(pinned(host="jarvis"), epic))
+        self.assertFalse(enact.stranded(pinned(provider="claude"), epic))
+        self.assertTrue(enact.stranded(pinned(host="cygnus"), epic))
+        self.assertTrue(enact.stranded(pinned(host="jarvis", provider="codex"), epic))
+        self.assertTrue(enact.stranded(pinned(host="jarvis"), {"id": "e", "metadata": {}}))
+
 class StableCheckoutTest(unittest.TestCase):
     def test_prompts_name_role_files_in_the_stable_checkout(self):
         self.assertEqual(enact.ROLES_DIR,

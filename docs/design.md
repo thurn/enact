@@ -1042,3 +1042,33 @@ blindly recreate jobs or hand-edit scheduler databases.
   with a model override but expose no operation equivalent to Claude's
   `clear_session`. Fresh chats give each assignment its own context and
   history.
+
+## Speculative defaults instead of questions (2026-11-13)
+
+- A Beryl run stalled four times on questions the vizier put to the user:
+  a reported-only benchmark pinned to a Windows host with no vizier, which
+  held the epic's final beads; ten pilot beads failing on one shared test
+  fault; a single-chain graph that wanted restructuring for parallelism;
+  and a performance budget measured on a loaded machine that kept filing
+  follow-ups. The user's rule: orchestration completes work speculatively
+  by relaxing blocking constraints, so none of these should reach them.
+- Once the loop starts nobody asks the user. Whoever holds the choice (a
+  worker, a Warden, the Justiciar on a deadlock) applies the least-blocking
+  default from `common.md` "Speculative defaults" and records it on the bead
+  and the run epic. The vizier still never reads beads; its only graph
+  action stays a Justiciar request.
+- The stoppage audit asks the user only about human-only steps (access,
+  credentials, payments, irreversible outward actions, outside people).
+  Agent-decidable points become recorded defaults in the run epic.
+- Planners avoid serializing edges: edges go on the bead that needs a
+  result rather than on its epic, reported-only beads get no dependents,
+  pins are reserved for beads that cannot run elsewhere and gate nothing,
+  and decomposition beads sit under the run epic with no dependencies,
+  since the milestone epic keeps the beads they file gated.
+- `enact next` flags a pin nobody serves: when nothing else can proceed and
+  every ready bead it skipped is pinned to a host or provider with no vizier
+  route registered on the run, it returns `deadlock` with a `stranded` list
+  instead of waiting for the six-hour stale check. Running viziers already
+  handle `deadlock` by requesting a Justiciar, so the change is compatible.
+  Registration is the liveness proxy: a registered vizier that died still
+  falls back to the stale check.

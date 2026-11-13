@@ -74,5 +74,8 @@ then file the milestone's beads under its milestone epic, following the
 vizier's planning rules in `../../enact-plan/SKILL.md` (relative to this file):
 standalone descriptions, verifiable acceptance criteria, role labels, real
 dependencies only, Warden beads for substantial work, and a Mason/Sage gate
-epic if the plan calls for one. Never file a bead that needs a human. Sync,
-then close your bead. You make no code changes, so you need no worktree.
+epic if the plan calls for one. You may run before earlier milestones
+finish: the milestone epic keeps your beads gated, and an edge on a specific
+earlier bead covers a result you need. Never file a bead that needs a human,
+a host pin or an edge on a whole epic where one bead would do. Sync, then
+close your bead. You make no code changes, so you need no worktree.

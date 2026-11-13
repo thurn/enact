@@ -485,6 +485,19 @@ def targeted_here(bead: dict[str, Any]) -> bool:
     )
 
 
+def stranded(bead: dict[str, Any], epic: dict[str, Any]) -> bool:
+    """A bead pinned to a host or provider that no vizier registered on the
+    run serves. Nothing will pick it up, so it must not hold the run."""
+    want_host, want_provider = meta(bead, "enact_host"), meta(bead, "enact_provider")
+    if not want_host and not want_provider:
+        return False
+    routes = [json_meta(epic, key, {}) for key in (epic.get("metadata") or {})
+              if key.startswith("enact_vizier_route_")]
+    return not any((not want_host or route.get("host") == want_host)
+                   and (not want_provider or route.get("provider") == want_provider)
+                   for route in routes)
+
+
 def dolt_db_dir(repo: Repo) -> Path:
     metadata = json.loads((repo.main / ".beads" / "metadata.json").read_text(encoding="utf-8"))
     if metadata.get("dolt_mode", "embedded") != "embedded":
@@ -1498,8 +1511,12 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
         if held:
             control = run_control(held[0])
             return {**result, "action": control["state"], "control": control}
-    if open_scope and not working and not elsewhere and not inflight:
-        return {**result, "action": "deadlock", "open": [b["id"] for b in open_scope]}
+    # A pin nobody serves cannot make progress: the Justiciar unpins it or
+    # moves it out of the epic rather than letting the run wait on it.
+    stuck = [b["id"] for b in elsewhere if stranded(b, by_id[epic])]
+    if open_scope and not working and len(stuck) == len(elsewhere) and not inflight:
+        action = {**result, "action": "deadlock", "open": [b["id"] for b in open_scope]}
+        return {**action, "stranded": stuck} if stuck else action
     stale = stale_hours(open_scope)
     if open_scope and not inflight and stale is not None and stale >= 6:
         return {**result, "action": "deadlock", "reason": f"no change for {stale:.1f}h"}

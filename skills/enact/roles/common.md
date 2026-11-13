@@ -170,6 +170,34 @@ everything before you close your own bead, then run `enact sync`.
 5. End your turn with a short summary: what changed, surprises, follow-ups
    filed. Do not archive yourself; the vizier reuses or archives you.
 
+## Speculative defaults
+
+Enact completes work speculatively: no session, vizier or Justiciar ever
+asks the user to unblock the graph. When a choice is yours to make, take
+the least-blocking default, apply it, and record the choice and its reason
+on the bead and, when it changes the run, on the run epic. Defaults:
+
+- **A bead pinned** (`enact_host`, `enact_provider`) to a host or provider
+  no vizier serves: unpin it if it can run here; otherwise move it out of
+  the epic (`bd update <bead> --parent ""`), left open for that host, and
+  drop edges so nothing in the epic waits on it.
+- **A reported-only or non-gating bead** (benchmark, measurement,
+  exploration) blocking closure or later work: remove its dependents' edges
+  so it leaves the critical path; it still runs when it can.
+- **A planning or decomposition bead held only by an epic-level edge** can
+  start early, since the beads it files stay gated: reparent it to the run
+  epic. An epic-level edge that only orders planning is removed.
+- **Several beads failing for one cause** (a shared test fault, a broken
+  helper): file one fix bead, make each affected bead depend on it, release
+  or close yours with a pointer, and keep going.
+- **A performance figure measured on a loaded machine**: report it, never
+  gate on it or file follow-ups chasing it, unless the acceptance criteria
+  name a deterministic measure (`warden.md`, "Tests that survive load").
+
+Change only what the default needs; never take over another worker's
+assignment. Only missing access, credentials or an irreversible outward
+action go to the Justiciar's exhausted recovery (`recovery.md`).
+
 ## When things go wrong
 
 - **Ordinary difficulty is not a blocker.** Failing tests, confusing code,

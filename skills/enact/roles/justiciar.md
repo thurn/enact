@@ -56,7 +56,11 @@ beads and their dependencies (`bd show`, `bd dep tree`). Typical causes: a
 prerequisite outside the epic that nobody will do, a cancelled prerequisite,
 a dependency cycle, or a bead stuck `in_progress` with no live session.
 Repair the graph so work can flow, for example by bringing the prerequisite
-into the epic, removing a stale edge or releasing the bead.
+into the epic, removing a stale edge or releasing the bead. A reason naming
+`stranded` beads means pins no vizier on the run serves. Apply the
+speculative defaults in `common.md` (pins, non-gating beads, epic-level
+edges, shared failures) and record each on the bead and the run epic. A
+graph decision is never a reason to block the run or ask the user.
 
 ## Exhausted recovery
 

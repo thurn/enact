@@ -126,6 +126,8 @@ never start a second `enact next` while one runs (the helper refuses).
 ## Phase 1: pre-flight
 
 The user is present now and will not be later. Do all interactive work here.
+Once the loop starts nobody asks the user anything; an agent's choice gets
+a recorded default (`common.md`, "Speculative defaults").
 
 1. **Title and update Enact.** Title yourself `🔮 <short summary>` (see
    [Titles](#titles)), then `git -C "$ENACT" pull --ff-only` (ignore failure
@@ -208,14 +210,18 @@ filing anything, list every stoppage risk in the plan:
 - anything irreversible or outward-facing the user has not authorized.
 - bars judged on samples (seeded games, LLM reviewers, benchmarks) that
   demand perfection on a handful of cases ("5 games, zero mistakes"): agents
-  tune to the samples and never converge. Agree held-out inputs chosen after
+  tune to the samples and never converge. Set held-out inputs chosen after
   the last change, a pass rate (e.g. 7 of 10), and a fallback after a fixed
   number of failed rounds.
 
-Resolve each risk with the user now: get the decision, record a default, or
-cut the step from scope. Ask one question at a time with your recommendation.
-If a risk cannot be resolved, refuse to start and say why. Never file a bead
-that needs a human later; express acceptance as checks an agent can run.
+Ask the user only about what an agent cannot do or may not decide:
+credentials and access, payments, irreversible or outward-facing actions,
+people outside the run. Ask one question at a time with your recommendation.
+Settle everything else yourself: pick the least-blocking default, write it
+and its reason into the run epic's decisions, and move on. If a human-only
+risk cannot be resolved, cut it from scope or refuse to start and say why.
+Never file a bead that needs a human later; express acceptance as checks an
+agent can run.
 
 ### Build the graph
 
@@ -241,7 +247,12 @@ Read enough of the codebase to decompose well. Then file the graph with raw
   it touches, so work on the same module is one bead, or a lane.
 - **Dependencies** only where real (`bd dep add <dependent> <prerequisite>`).
   Unrelated work stays parallel. Two beads that would edit the same code
-  non-additively get an ordering edge.
+  non-additively get an ordering edge. Put an edge on the bead that needs
+  a result, not on its epic, which serializes everything under it. A
+  reported-only or benchmark bead gets no dependents, so it never blocks.
+- **Pin** (`enact_host`, `enact_provider`) only a bead that cannot run
+  anywhere else and that nothing depends on; otherwise name the preferred
+  machine in its description.
 - **Lanes**: label related beads of one role that touch
   the same code `lane:<name>`, usually two to four executor beads. One
   session works a lane in priority order, delivering and closing each bead
@@ -266,8 +277,11 @@ Read enough of the codebase to decompose well. Then file the graph with raw
 
 Decompose a plan fully up front by default. For a large or uncertain plan you
 may instead file concrete beads for the first milestone plus one executor
-bead per later milestone: "Decompose milestone N into beads", parented under
-that milestone epic and gated on the previous milestone.
+bead per later milestone: "Decompose milestone N into beads", a child of the
+run epic with no dependencies, so it plans speculatively while earlier work
+runs. It files its beads under milestone N's epic, which stays gated on the
+previous milestone; it adds edges on specific earlier beads where its plan
+needs their result.
 
 #### Roles
 
@@ -434,8 +448,9 @@ action or when the wait runs out. Handle the JSON:
 6. **`action: deadlock`**: open beads remain but nothing can ever become
    ready. Run `enact justiciar request --reason "Deadlock in epic <epic>:
    <open beads>"` (exit 3 means one is already requested or active), then
-   continue the loop. Your next `enact next` call spawns it. This is the one
-   case where you act on your own judgment.
+   continue the loop, naming any `stranded` beads (pinned where no vizier
+   on the run serves) in the reason. Your next `enact next` call spawns it.
+   This is the one case where you act on your own judgment.
 7. **`action: done`**: the epic is closed, nothing of yours is in flight,
    required Stewards are closed, and all run deliveries reached green master.
    A closed epic with `action: wait` is still running; keep the loop alive.
@@ -455,6 +470,9 @@ Rules for the loop:
   summarize progress or narrate waits. One short line per action is enough.
 - Do not answer `side-sessions-event` notices or session reports except by
   continuing the loop. The beads graph is the only signal.
+- Never ask the user to unblock the run (drop a bead, restructure the
+  graph, fix a shared failure, judge a result): workers and the Justiciar
+  apply recorded defaults.
 - If the user writes to you mid-run, answer briefly, then resume the loop.
   Reuse any pending `enact next` process. Apply changed parallelism to the
   next call.
