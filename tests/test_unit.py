@@ -808,7 +808,8 @@ class VizierLeaseTest(unittest.TestCase):
         with mock.patch.object(enact, "Beads", return_value=fake), \
                 mock.patch.object(enact, "sync"):
             self.assertEqual(enact.close_finished_epics(self.repo), ["e"])
-        closed.assert_called_once_with("close", "e", "--reason", "All children complete")
+        closed.assert_called_once_with(
+            "close", "e", "--reason", "All children complete", "--force")
 
     def test_a_push_is_watched_only_with_fresh_evidence(self):
         epic = self.epic()

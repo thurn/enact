@@ -1372,7 +1372,9 @@ def close_finished_epics(repo: Repo) -> list[str]:
                 sync(repo)
             return closed
         for bead in eligible:
-            beads.run("close", bead["id"], "--reason", "All children complete")
+            # bd refuses to close an epic with deferred children unless forced;
+            # the filter above already proved every child is closed or deferred.
+            beads.run("close", bead["id"], "--reason", "All children complete", "--force")
             bead["status"] = "closed"
             closed.append(bead["id"])
 
