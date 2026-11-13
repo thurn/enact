@@ -1374,7 +1374,13 @@ def close_finished_epics(repo: Repo) -> list[str]:
         for bead in eligible:
             # bd refuses to close an epic with deferred children unless forced;
             # the filter above already proved every child is closed or deferred.
-            beads.run("close", bead["id"], "--reason", "All children complete", "--force")
+            try:
+                beads.run("close", bead["id"], "--reason", "All children complete", "--force")
+            except Fail as failure:
+                # One stubborn epic must not abort every caller (`enact next`).
+                log(f"could not close {bead['id']}: {failure}")
+                graph = [b for b in graph if b["id"] != bead["id"]]
+                continue
             bead["status"] = "closed"
             closed.append(bead["id"])
 

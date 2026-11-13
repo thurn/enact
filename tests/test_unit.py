@@ -811,6 +811,21 @@ class VizierLeaseTest(unittest.TestCase):
         closed.assert_called_once_with(
             "close", "e", "--reason", "All children complete", "--force")
 
+    def test_a_failed_epic_close_is_skipped_not_fatal(self):
+        graph = [{"id": "e", "issue_type": "epic", "status": "open"},
+                 {"id": "c", "parent": "e", "status": "closed"},
+                 {"id": "f", "issue_type": "epic", "status": "open"},
+                 {"id": "d", "parent": "f", "status": "closed"}]
+
+        def run(_verb, bead, *_rest):
+            if bead == "e":
+                raise enact.Fail("bd close refused")
+
+        fake = mock.Mock(run=mock.Mock(side_effect=run), all=mock.Mock(return_value=graph))
+        with mock.patch.object(enact, "Beads", return_value=fake), \
+                mock.patch.object(enact, "sync"):
+            self.assertEqual(enact.close_finished_epics(self.repo), ["f"])
+
     def test_a_push_is_watched_only_with_fresh_evidence(self):
         epic = self.epic()
         worker = {"id": "b", "parent": "e", "metadata": {}}
