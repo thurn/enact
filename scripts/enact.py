@@ -262,6 +262,10 @@ class Config:
     # A hung slow check must fail, not hold master back forever (a stuck exec once held it
     # 42 minutes): the runner kills it after this many seconds.
     slow_timeout: int = DEFAULT_SLOW_TIMEOUT
+    # The least time, in seconds, between the end of one slow-CI run and the start of the next.
+    # Under a high commit rate the runner would otherwise be busy all the time and compete with
+    # the sessions' builds; with a gap, commits that arrive meanwhile join the next run's batch.
+    slow_min_gap: int = 0
     worktree_root: str = DEFAULT_WORKTREE_ROOT
     worktree_create: str | None = None
     worktree_remove: str | None = None
@@ -283,6 +287,7 @@ class Config:
             fast=checks.get("fast") or None,
             slow=checks.get("slow") or None,
             slow_timeout=int(checks.get("slow_timeout") or DEFAULT_SLOW_TIMEOUT),
+            slow_min_gap=max(int(checks.get("slow_min_gap") or 0), 0),
             worktree_root=worktree.get("root", DEFAULT_WORKTREE_ROOT),
             worktree_create=worktree.get("create") or None,
             worktree_remove=worktree.get("remove") or None,
@@ -2776,6 +2781,8 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
                         break
                     # Legacy last-tested files have no outcome. Recheck an
                     # unpromoted tip once rather than stranding an old run.
+                if ci_wait_for_gap(repo):
+                    continue  # new commits may have arrived while waiting: retest the newest tip
                 result = ci_supervise_check(repo, tip)
                 results.append(result)
         finally:
@@ -2784,6 +2791,31 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
         tip = repo.git("rev-parse", repo.remote_ref(cfg.staging), cwd=repo.main)
         if tip == (last_file.read_text().strip() if last_file.exists() else ""):
             return {"ran": results}
+
+
+def ci_gap_remaining(finished: float | None, now_time: float, gap: int) -> float:
+    """Seconds still to wait before the next slow-CI run may start, given when the last one
+    finished (wall-clock seconds, None if never) and the configured minimum gap."""
+    if finished is None or gap <= 0:
+        return 0.0
+    return min(max(finished + gap - now_time, 0.0), float(gap))
+
+
+def ci_wait_for_gap(repo: Repo) -> bool:
+    """Sleep out `[checks] slow_min_gap` since the last run ended, holding the runner lock so
+    no second runner starts. Returns True if it waited, so the caller refetches `staging` and
+    tests whatever the tip is by then."""
+    finished_file = repo.state / "ci-finished"
+    try:
+        finished: float | None = float(finished_file.read_text().strip())
+    except (OSError, ValueError):
+        finished = None
+    remaining = ci_gap_remaining(finished, time.time(), repo.config.slow_min_gap)
+    if remaining <= 0:
+        return False
+    log(f"slow CI waits {round(remaining)} s (slow_min_gap) so commits batch into one run")
+    time.sleep(remaining)
+    return True
 
 
 def ci_supervise_check(repo: Repo, tip: str) -> dict[str, Any]:
@@ -2827,6 +2859,7 @@ def ci_check_worker(repo: Repo, tip: str, coordinator: int) -> dict[str, Any]:
         (repo.state / "ci-last").write_text(tip)
         return result
     finally:
+        (repo.state / "ci-finished").write_text(str(time.time()))
         # Restore before exiting, so legacy contenders never see a dead
         # keeper while the live coordinator still owns the OS guard.
         # If the coordinator died, our stale PID is recoverable after exit.

@@ -103,6 +103,12 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   `[checks] slow_timeout` seconds (default 3600) and reports a failure, so a
   hang (a stuck exec, a server never stopped) files a Steward bead instead of
   holding `master` back indefinitely. Budgets stay the project's to enforce.
+- `[checks] slow_min_gap` (seconds, default 0) is the least time between the end
+  of one slow-CI run and the start of the next. The runner waits it out while
+  holding its lock, then refetches `staging`, so at a high commit rate the
+  commits that arrive meanwhile share one run instead of causing more runs. A
+  project caps the CPU a run may hold in its own check command; Enact only
+  bounds how often runs start.
 
 ## Git flow
 

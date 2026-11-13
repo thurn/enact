@@ -103,6 +103,7 @@ master_branch = "master"
 fast = "scripts/check-fast"
 slow = "scripts/check"
 # slow_timeout = 3600   # seconds before the runner kills a hung slow check
+# slow_min_gap = 600    # least seconds between one slow run ending and the next starting
 [worktree]
 root = ".worktrees"   # inside the checkout; gitignored
 # create = "scripts/enact-worktree create"   # full replacement hooks

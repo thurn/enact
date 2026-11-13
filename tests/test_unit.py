@@ -219,6 +219,20 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(enact.Config.parse("[checks]\nslow_timeout = 900\n").slow_timeout, 900)
 
 
+class CiGapTest(unittest.TestCase):
+    def test_config_default_and_setting(self):
+        self.assertEqual(enact.Config.parse("").slow_min_gap, 0)
+        self.assertEqual(enact.Config.parse("[checks]\nslow_min_gap = 600\n").slow_min_gap, 600)
+
+    def test_remaining_wait(self):
+        self.assertEqual(enact.ci_gap_remaining(None, 1000.0, 600), 0.0)  # never ran
+        self.assertEqual(enact.ci_gap_remaining(900.0, 1000.0, 0), 0.0)  # no gap configured
+        self.assertEqual(enact.ci_gap_remaining(900.0, 1000.0, 600), 500.0)
+        self.assertEqual(enact.ci_gap_remaining(100.0, 1000.0, 600), 0.0)  # gap already passed
+        # A clock that moved backwards never waits longer than the gap.
+        self.assertEqual(enact.ci_gap_remaining(5000.0, 1000.0, 600), 600.0)
+
+
 class RunBoundedTest(unittest.TestCase):
     def test_output_and_exit_code(self):
         with tempfile.TemporaryDirectory() as tmp:
