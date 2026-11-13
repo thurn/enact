@@ -1193,3 +1193,21 @@ check twice or more. `[push] queue = true` replaces that with a queue per host.
   release it; other hosts ignore it.
 - Justiciars on different machines may work at once. They coordinate shared
   state (remote, Dolt, `master`) through incident beads.
+
+## Adopting existing beads (2026-11-13)
+
+A plan session moved a bead out of another open epic into its own run and
+blocked it on a deep bead there, leaving the first epic's remaining bead
+waiting on work far outside it: `enact next` reported a deadlock on a run
+nobody had touched. The session had read the bead with output cut short, so
+it never saw the parent or the dependent, and its graph view predated the
+other epic claiming the bead.
+
+The plan skill now treats existing beads as owned by whoever filed them:
+read the full bead (parent and dependents) right before moving or wiring
+it, ask the user before taking a bead from another open epic or blocking a
+bead another epic waits on, and check at the end of planning that no other
+epic now waits on the run. This stays in the skill rather than the helper:
+moves and edges are raw `bd`, and the judgement of when to reference a bead
+instead of adopting it needs the plan's context.
+

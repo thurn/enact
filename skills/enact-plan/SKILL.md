@@ -249,6 +249,13 @@ Read enough of the codebase to decompose well. Then file the graph with raw
   non-additively get an ordering edge. Put an edge on the bead that needs
   a result, not on its epic, which serializes everything under it. A
   reported-only or benchmark bead gets no dependents, so it never blocks.
+- **Existing beads** belong to whoever filed them. Before moving one into
+  this run (`--parent`) or adding an edge to or from it, read its full
+  `bd show <bead> --json` (never truncated): its `parent` and every
+  dependent. Ask the user before moving a bead out of another open epic or
+  blocking a bead another epic waits on; otherwise reference it from the
+  context packet instead. Plan and graph views go stale while other
+  sessions file, so re-read right before the change.
 - **Pin** (`enact_host`, `enact_provider`) only a bead that cannot run
   anywhere else and that nothing depends on; otherwise name the preferred
   machine in its description.
@@ -372,6 +379,8 @@ task-prompt run or a light run gets none.
 1. If you filed or moved beads, run `enact sync`, then check the graph with
    `bd list --parent <epic>` and `bd ready --parent <epic>`: something must be
    ready (unless another vizier holds it), and every bead must be reachable.
+   For each bead you moved in, check that no open bead under another epic
+   now waits on this run's beads unless the user agreed.
 2. **Register the run.** `enact run register <epic> --parallel <N>
    --authorized` retains your exact route and the invocation's authority to
    create, inspect, message and archive run chats. This never clears shared
