@@ -492,6 +492,12 @@ action or when the wait runs out. Handle the JSON:
    `pool_archive`, then run `enact pool drop --all`. Finally retitle
    `✅ [<epic>] <same summary>`, write a short final report (outcome, bead
    count, anything for the user to look at) and end the turn. Stay unarchived.
+   Run `enact run finish <epic> --reason "<outcome>"` as the last command
+   before the final report, so this machine stops treating the run as live.
+   Deferred children count as complete, so an epic whose only open children
+   are deferred closes and reaches `done`; if it stays open for another
+   reason, run `enact run finish` anyway once its work is delivered.
+   `action: finished` means a run was already finished: report it as `done`.
 8. **`action: paused` or `blocked`**: no new spawning or recovery. Report
    the shared reason, retitle `⛔ [<epic>] <same summary>` and end the turn,
    preserving unfinished requirements.

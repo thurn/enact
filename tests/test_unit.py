@@ -774,6 +774,42 @@ class VizierLeaseTest(unittest.TestCase):
             enact.next_step(self.repo, args, "v")
         self.assertFalse(self.active(self.epic()))
 
+    def test_next_on_a_finished_run_stops_the_loop_and_drops_the_lease(self):
+        args = types.SimpleNamespace(epic="e", parallel=1, wait=60, interval=1)
+        with mock.patch.object(enact, "sync"), \
+                mock.patch.object(enact, "schedule",
+                                  return_value={"action": "finished", "archive": []}):
+            result = enact.next_step(self.repo, args, "v")
+        self.assertEqual(result["action"], "finished")
+        self.assertFalse(self.active(self.epic()))
+
+    def test_a_finished_run_is_not_active(self):
+        self.lease(0)
+        finished = {"enact_control": json.dumps({"state": "finished", "epoch": "1"})}
+        self.assertFalse(self.active(self.epic(metadata=finished)))
+        self.assertTrue(enact.run_finished(self.epic(metadata=finished)))
+        self.assertFalse(enact.run_finished(self.epic()))
+        # Finished is not halted: a late Steward repair may still be assigned.
+        self.assertEqual(enact.stopped_runs(self.epic(metadata=finished), []), [])
+
+    def test_deferred_beads_count_as_done(self):
+        self.assertTrue(enact.work_done({"status": "deferred"}))
+        self.assertTrue(enact.work_done({"status": "closed"}))
+        self.assertFalse(enact.work_done({"status": "open"}))
+        self.assertFalse(enact.work_done({"status": "in_progress"}))
+
+    def test_an_epic_with_only_deferred_children_left_closes(self):
+        epic = {"id": "e", "issue_type": "epic", "status": "open"}
+        children = [{"id": "c1", "parent": "e", "status": "closed"},
+                    {"id": "c2", "parent": "e", "status": "deferred"}]
+        graph = [epic, *children]
+        closed = mock.Mock()
+        fake = mock.Mock(run=closed, all=mock.Mock(return_value=graph))
+        with mock.patch.object(enact, "Beads", return_value=fake), \
+                mock.patch.object(enact, "sync"):
+            self.assertEqual(enact.close_finished_epics(self.repo), ["e"])
+        closed.assert_called_once_with("close", "e", "--reason", "All children complete")
+
     def test_a_push_is_watched_only_with_fresh_evidence(self):
         epic = self.epic()
         worker = {"id": "b", "parent": "e", "metadata": {}}

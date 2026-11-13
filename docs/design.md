@@ -1257,3 +1257,21 @@ instead of adopting it needs the plan's context.
   always unowned, even while some vizier here loops: that vizier stops when
   its own run is delivered, so it is no promise.
 
+
+## Runs finish explicitly (2026-11-13)
+
+- A run counted as active until its epic closed and every commit reached
+  master. Beryl's by-gdn3 was fully delivered but stayed open because two
+  children were deferred, so its run looked live indefinitely.
+- `enact run finish <epic> --reason ...` sets the run's `enact_control` to
+  `finished`. `run_live` (so `vizier_active`, `runs_watched` and
+  `bead_watched`) and `enact status`'s `active_runs` ignore a finished run,
+  and `enact next` on one returns `action: finished` and drops the lease.
+  Finishing a paused or blocked run is refused; `run resume --explicit`
+  reactivates a finished run. `stopped_runs` is unchanged: finished runs
+  are not halted, so late Steward repairs of their commits stay allowed.
+- A deferred child counts as done (`work_done`) when deciding whether an
+  epic is complete: `close_finished_epics` closes an epic whose children
+  are all closed or deferred, and `schedule` ignores deferred beads when it
+  looks for open work or a deadlock.
+- The vizier's skill text runs `enact run finish` as its last command.

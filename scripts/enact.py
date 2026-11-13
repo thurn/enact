@@ -1222,6 +1222,17 @@ def run_control(bead: dict[str, Any]) -> dict[str, Any]:
     return json_meta(bead, "enact_control", {"state": "active", "epoch": "legacy"})
 
 
+def run_finished(bead: dict[str, Any]) -> bool:
+    """The vizier declared the run over with `enact run finish`."""
+    return run_control(bead)["state"] == "finished"
+
+
+def work_done(bead: dict[str, Any]) -> bool:
+    """A deferred bead was set aside on purpose; it no longer holds a run
+    or its epic open."""
+    return bead.get("status") in ("closed", "deferred")
+
+
 def stopped_runs(bead: dict[str, Any], graph: list[dict[str, Any]],
                  extra: str | None = None) -> list[dict[str, Any]]:
     by_id = {b["id"]: b for b in graph}
@@ -1307,7 +1318,7 @@ def route_alive(repo: Repo, epic: str, route: dict[str, Any]) -> bool:
 
 def run_live(repo: Repo, epic: dict[str, Any], graph: list[dict[str, Any]]) -> bool:
     """A vizier on this machine is looping on this run, which is not held."""
-    return not stopped_runs(epic, graph) and any(
+    return not stopped_runs(epic, graph) and not run_finished(epic) and any(
         route_alive(repo, epic["id"], route) for route in run_routes(epic))
 
 
@@ -1355,7 +1366,7 @@ def close_finished_epics(repo: Repo) -> list[str]:
         eligible = [b for b in graph if b.get("issue_type") == "epic"
                     and b.get("status") != "closed" and not stopped_runs(b, graph)
                     and (children := [c for c in graph if c.get("parent") == b["id"]])
-                    and all(c.get("status") == "closed" for c in children)]
+                    and all(work_done(c) for c in children)]
         if not eligible:
             if closed:
                 sync(repo)
@@ -1379,6 +1390,16 @@ def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
     if args.action == "register":
         return {"epic": args.epic, "control": control,
                 "route": register_run(repo, args.epic, actor, args.parallel, args.authorized)}
+    if args.action == "finish":
+        if not args.reason:
+            raise Fail("run transitions require --reason")
+        if control["state"] in ("paused", "blocked"):
+            raise Fail("a paused or blocked run needs an explicit resume before it can finish",
+                       code=3)
+        control = {"state": "finished", "epoch": control["epoch"],
+                   "reason": args.reason, "actor": actor, "at": now()}
+        save_run_meta(repo, args.epic, "enact_control", control)
+        return {"epic": args.epic, "control": control}
     if args.action in ("pause", "block", "resume"):
         if not args.reason:
             raise Fail("run transitions require --reason")
@@ -1550,6 +1571,10 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
         control = run_control(halted[0])
         return {**result, "action": control["state"], "control": control}
 
+    if run_finished(by_id[epic]):
+        control = run_control(by_id[epic])
+        return {**result, "action": "finished", "control": control}
+
     request = justiciar_state(repo)
     idle = idle_members(pool, graph, request) if pooled else []
     if request and request.get("state") == "requested" and request.get("host") == host_name():
@@ -1624,7 +1649,7 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
         # The graph predates the winning claim; it cannot prove a deadlock.
         return {**result, "action": "wait", "reason": "claims changed"}
 
-    open_scope = [by_id[i] for i in scope if by_id[i].get("status") != "closed"]
+    open_scope = [by_id[i] for i in scope if not work_done(by_id[i])]
     working = [b for b in open_scope if b.get("status") == "in_progress"]
     elsewhere = [b for b in ready if b["id"] in scope and not targeted_here(b)]
     if not working and not inflight:
@@ -1691,7 +1716,7 @@ def next_step(repo: Repo, args: argparse.Namespace, vizier: str) -> dict[str, An
         result = schedule(repo, args.epic, args.parallel, vizier)
         pending = {item["bead"] for item in result["archive"]}
         timed_out = time.monotonic() >= deadline
-        if result["action"] in ("done", "paused", "blocked"):
+        if result["action"] in ("done", "paused", "blocked", "finished"):
             # The vizier stops looping, so nothing here repairs slow CI for it.
             drop_lease(repo, vizier)
         if result["action"] != "wait" or pending - reported or timed_out:
@@ -3454,7 +3479,7 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
         if not routes:
             continue
         delivery = deliveries[bead["id"]]
-        if bead.get("status") == "closed" and delivery["complete"]:
+        if run_finished(bead) or (bead.get("status") == "closed" and delivery["complete"]):
             continue
         halted = stopped_runs(bead, graph)
         control = run_control(halted[0] if halted else bead)
@@ -3784,8 +3809,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--expected-session", help="archive target session")
     p.add_argument("--reservation", help="token from the spawn action for routing changes")
 
-    p = add("run", cmd_run, "Register, pause, block or explicitly resume a shared run.")
-    p.add_argument("action", choices=["register", "pause", "block", "resume"])
+    p = add("run", cmd_run, "Register, finish, pause, block or explicitly resume a shared run.")
+    p.add_argument("action", choices=["register", "finish", "pause", "block", "resume"])
     p.add_argument("epic")
     p.add_argument("--parallel", type=int, default=1)
     p.add_argument("--authorized", action="store_true", help="retain invocation's chat authority")
