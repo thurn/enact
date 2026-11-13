@@ -774,6 +774,24 @@ class VizierLeaseTest(unittest.TestCase):
             enact.next_step(self.repo, args, "v")
         self.assertFalse(self.active(self.epic()))
 
+    def test_a_push_is_watched_only_with_fresh_evidence(self):
+        epic = self.epic()
+        worker = {"id": "b", "parent": "e", "metadata": {}}
+        spawned = {"id": "c", "metadata": {"enact_vizier": "v", "enact_run": "e"}}
+        watched = functools.partial(enact.bead_watched, self.repo, [epic, worker, spawned])
+        # An ad hoc push, or a bead whose vizier stopped renewing, is not.
+        self.assertFalse(watched({}))
+        self.assertFalse(watched(worker))
+        self.assertFalse(watched(spawned))
+        self.lease(enact.VIZIER_LEASE_SECONDS + 1)
+        self.assertFalse(watched(worker))
+        self.lease(0)
+        self.assertTrue(watched(worker))
+        # The spawning vizier's own lease counts even without its route.
+        self.assertTrue(enact.bead_watched(self.repo, [], spawned))
+        self.assertTrue(enact.runs_watched(self.repo, [epic], ["other", "e"]))
+        self.assertFalse(enact.runs_watched(self.repo, [epic], []))
+
     def test_a_local_pin_is_served_only_by_a_live_vizier(self):
         pinned = {"id": "b", "metadata": {"enact_host": "jarvis"}}
         self.assertTrue(enact.stranded(self.repo, pinned, self.epic()))

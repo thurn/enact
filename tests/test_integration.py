@@ -858,18 +858,23 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
     def test_push_owns_slow_ci_once_the_only_vizier_lease_expires(self):
         epic = self.a.create("watched run", type="epic")
         self.a.enact("next", "--epic", epic, session="vizier")  # registers and renews
-        # The vizier stopped renewing: age its lease past its time to live.
         lease = self.a.path / ".git" / "enact" / "vizier-vizier.json"
-        data = json.loads(lease.read_text())
-        data["at"] -= 3600
-        lease.write_text(json.dumps(data))
-        path = Path(self.a.enact("worktree", "create", "expired")["path"])
-        self.configure_git(path)
-        self.a.commit_file("expired.txt", "expired", cwd=path)
-        pushed = self.a.enact("push", cwd=path)
-        self.assertIn(f"enact ci --wait {pushed['staging']}", pushed["watch_ci"])
-        # The next scenario reuses this path: let the runner finish first.
-        self.wait_for_ci(self.a)
+        pushes = []
+        for name in ("fresh", "expired"):
+            bead = self.a.create(name, parent=epic)
+            self.a.enact("claim", bead)
+            path = Path(self.a.enact("worktree", "create", bead)["path"])
+            self.configure_git(path)
+            self.a.commit_file(f"{name}.txt", name, cwd=path)
+            pushes.append(self.a.enact("push", "--bead", bead, cwd=path))
+            # The next push reuses checkout a: let this runner finish first.
+            self.wait_for_ci(self.a)
+            # The vizier stopped renewing: age its lease past its time to live.
+            data = json.loads(lease.read_text())
+            data["at"] -= 3600
+            lease.write_text(json.dumps(data))
+        self.assertNotIn("watch_ci", pushes[0])
+        self.assertIn(f"enact ci --wait {pushes[1]['staging']}", pushes[1]["watch_ci"])
 
     def test_passing_ci_retries_a_failed_promotion(self):
         path = Path(self.a.enact("worktree", "create", "promotion")["path"])
@@ -964,6 +969,12 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         # The tail interleaves stdout and stderr, so it ends at the failure.
         self.assertIn("slow check failed", stewards[0]["description"])
         self.assertTrue(stewards[0]["metadata"]["enact_ci_host"])
+        # No vizier holds a lease here, so the failure is flagged as unowned
+        # until someone claims it.
+        self.assertTrue(stewards[0]["metadata"]["enact_unowned"])
+        self.assertIn("nobody is repairing it", stewards[0]["description"])
+        self.a.enact("claim", stewards[0]["id"])
+        self.assertNotIn("enact_unowned", self.a.show(stewards[0]["id"])["metadata"])
         self.assertGreaterEqual(len(self.a.bd("comments", stewards[0]["id"]) or []), 1)
         self.assertNotEqual(self.remote_sha("master"), self.remote_sha("staging"))
 

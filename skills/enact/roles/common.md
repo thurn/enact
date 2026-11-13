@@ -96,10 +96,13 @@ later step, so explore deliberately:
   session's scratchpad or the system temp directory, never into the
   worktree root or the main checkout. Untracked files in your worktree stop
   `enact push` from deleting it; it then reports `kept_worktree`.
-- Slow CI runs after your push without you. Do not wait for it. A failure
-  becomes a Steward bead linked to affected runs. The vizier keeps the run
-  alive until all delivered commits, including repairs, reach green master;
-  closing your bead does not declare the run complete.
+- Slow CI runs after your push without you. Do not wait for it, unless
+  push printed `watch_ci`: then your vizier has stopped renewing its lease,
+  nobody else will repair a failure, and you follow the notice before
+  finishing. A failure becomes a Steward bead linked to affected runs. The
+  vizier keeps the run alive until all delivered commits, including
+  repairs, reach green master; closing your bead does not declare the run
+  complete.
 - Staging may be red because of someone else's change. That alone is not
   your problem. Do not stop for it; fast checks still gate your push.
 

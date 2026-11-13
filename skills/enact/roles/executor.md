@@ -62,7 +62,8 @@ One review round is enough; do not loop.
 - Do not run cold-review subagents unless your bead is labeled
   `review:inline`. Otherwise independent review is a separate Warden bead
   when the vizier planned one.
-- Do not wait for slow CI or for review.
+- Do not wait for slow CI (unless push printed `watch_ci`, `common.md`)
+  or for review.
 - Do not change other beads' scope or dependencies, except to add an edge for
   a follow-up you filed.
 

@@ -1239,4 +1239,21 @@ instead of adopting it needs the plan's context.
   on other hosts still count, since their leases cannot be read here;
   treating them as dead would make every bead pinned to another machine
   look stranded.
+- `enact push` prints `watch_ci` unless it has fresh evidence that a vizier
+  will repair the push's slow-CI failures: the vizier that spawned the bead
+  still renews its lease on that run, or one of the bead's runs is live. An
+  ad hoc push, with no bead, always prints it. Assuming nobody is watching
+  is the cheap mistake: a needless watch costs one session some waiting,
+  while a missing one stalled Beryl's master for hours. A worker whose run
+  is paused or blocked still gets no notice, since a held run starts no
+  repairs; claiming the Steward would fail anyway.
+- `common.md` and `executor.md` now tell workers to follow `watch_ci` when
+  push prints it, because it then means their vizier has stopped.
+- When slow CI files or updates a Steward and no live run here covers its
+  `enact_runs`, the bead gets `enact_unowned=true` and a note in its
+  description (or the new failure comment), so a session or scheduled
+  routine looking for unrepaired failures finds it without reasoning about
+  runs. `claim()` unsets the flag. A failure with no recorded runs is
+  always unowned, even while some vizier here loops: that vizier stops when
+  its own run is delivered, so it is no promise.
 

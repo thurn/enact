@@ -811,6 +811,8 @@ def claim(repo: Repo, bead_id: str, actor: str, extra_meta: dict[str, str]) -> b
     args = ["update", bead_id, "--claim"]
     for key, value in extra_meta.items():
         args += ["--set-metadata", f"{key}={value}"]
+    if meta(bead, "enact_unowned"):
+        args += ["--unset-metadata", "enact_unowned"]  # someone is repairing it now
     beads.run(*args, actor=actor)
     sync(repo)
     saved = beads.show(bead_id)
@@ -1292,12 +1294,39 @@ def lease_age(repo: Repo, vizier: str, epic: str) -> float | None:
         return None
 
 
+def lease_fresh(repo: Repo, vizier: str, epic: str) -> bool:
+    age = lease_age(repo, vizier, epic)
+    return age is not None and age < VIZIER_LEASE_SECONDS
+
+
 def route_alive(repo: Repo, epic: str, route: dict[str, Any]) -> bool:
     """The route's vizier runs on this machine and renewed its lease recently."""
-    if route.get("host") != host_name() or not route.get("session"):
-        return False
-    age = lease_age(repo, route["session"], epic)
-    return age is not None and age < VIZIER_LEASE_SECONDS
+    return (route.get("host") == host_name() and bool(route.get("session"))
+            and lease_fresh(repo, route["session"], epic))
+
+
+def run_live(repo: Repo, epic: dict[str, Any], graph: list[dict[str, Any]]) -> bool:
+    """A vizier on this machine is looping on this run, which is not held."""
+    return not stopped_runs(epic, graph) and any(
+        route_alive(repo, epic["id"], route) for route in run_routes(epic))
+
+
+def runs_watched(repo: Repo, graph: list[dict[str, Any]], runs: list[str]) -> bool:
+    """A live vizier here will repair a slow-CI failure in these runs' commits."""
+    by_id = {b["id"]: b for b in graph}
+    return any(run in by_id and run_live(repo, by_id[run], graph) for run in runs)
+
+
+def bead_watched(repo: Repo, graph: list[dict[str, Any]], bead: dict[str, Any]) -> bool:
+    """Fresh evidence that a vizier will repair slow CI for this bead's push:
+    the vizier that spawned it still renews its lease on that run, or some
+    run the bead belongs to is live. Without that evidence the pushing
+    session watches slow CI itself: a needless watch costs it some waiting,
+    while a missing one left Beryl's master stuck for hours."""
+    vizier, run = meta(bead, "enact_vizier"), meta(bead, "enact_run")
+    if vizier and run and lease_fresh(repo, vizier, run):
+        return True
+    return bool(bead) and runs_watched(repo, graph, bead_runs(bead, graph))
 
 
 def register_run(repo: Repo, epic: str, vizier: str, parallel: int,
@@ -2736,9 +2765,10 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
         recovered += recover_deliveries(repo)
     else:
         raise Fail(f"could not push to {cfg.staging} after repeated attempts")
-    # A vizier's worker leaves repair to its run, even while that run is held.
-    if (pending_ci and not meta(bead, "enact_vizier")
-            and not vizier_active(repo, Beads(repo).all())):
+    graph = Beads(repo).all() if pending_ci else []
+    # A held run's worker finishes what is in flight but starts no repair.
+    if (pending_ci and not (bead and stopped_runs(bead, graph))
+            and not bead_watched(repo, graph, bead)):
         result["watch_ci"] = watch_ci_notice(result["staging"])
     elif result.get("pushed") and not args.bead:
         result["title"] = TITLE_NOTICE
@@ -2898,8 +2928,7 @@ def vizier_active(repo: Repo, graph: list[dict[str, Any]]) -> bool:
     vizier renewed its lease recently. Whether the epic is open or its
     delivery complete does not matter; a route alone proves nothing, since
     routes outlive the viziers that wrote them."""
-    return any(bead.get("issue_type") == "epic" and not stopped_runs(bead, graph)
-               and any(route_alive(repo, bead["id"], route) for route in run_routes(bead))
+    return any(bead.get("issue_type") == "epic" and run_live(repo, bead, graph)
                for bead in graph)
 
 
@@ -3022,6 +3051,13 @@ def update_enact() -> str:
     return "updated" if git("rev-parse", "HEAD").stdout.strip() != before else "current"
 
 
+UNOWNED_NOTE = (
+    "\n\nNo vizier on this machine has a fresh lease on a run this failure "
+    "affects, so nobody is repairing it (`enact_unowned=true`). Claim it with "
+    "`enact claim <bead>` and repair it as a Steward; claiming clears the flag."
+)
+
+
 def report_ci_failure(repo: Repo, tip: str, green: str, log_tail: str) -> str:
     beads = Beads(repo)
     sync(repo)
@@ -3046,24 +3082,29 @@ def report_ci_failure(repo: Repo, tip: str, green: str, log_tail: str) -> str:
     )
     if open_stewards:
         bead_id = open_stewards[0]["id"]
-        beads.run("comments", "add", bead_id, body)
         # Preserve inferred legacy associations before replacing the old range.
         runs += [b["id"] for b in graph if b.get("issue_type") == "epic"
                  and bead_id in run_delivery(repo, graph, b["id"])["stewards"]]
         runs = list(dict.fromkeys((meta(open_stewards[0], "enact_runs") or "").split() + runs))
-        beads.set_meta(bead_id, {"enact_runs": " ".join(runs),
-                                 "enact_ci_range": f"{green}..{tip}"})
+        changes = {"enact_runs": " ".join(runs), "enact_ci_range": f"{green}..{tip}"}
+        if not open_stewards[0].get("assignee") and not runs_watched(repo, graph, runs):
+            body += UNOWNED_NOTE
+            changes["enact_unowned"] = "true"
+        beads.run("comments", "add", bead_id, body)
+        beads.set_meta(bead_id, changes)
     else:
+        unowned = not runs_watched(repo, graph, runs)
         created = beads.json(
             "create",
             "--title", f"Fix slow CI failure on {os_name}",
-            "--description", body,
+            "--description", body + (UNOWNED_NOTE if unowned else ""),
             "--acceptance", f"`{repo.config.slow}` passes on {os_name} at the staging tip.",
             "--priority", "0",
             "--labels", "role:steward",
             "--metadata", json.dumps({"enact_ci_os": os_name, "enact_ci_host": host_name(),
                                      "enact_ci_range": f"{green}..{tip}",
-                                     "enact_runs": " ".join(runs)}),
+                                     "enact_runs": " ".join(runs),
+                                     **({"enact_unowned": "true"} if unowned else {})}),
         )
         bead_id = created["id"]
     sync(repo)
