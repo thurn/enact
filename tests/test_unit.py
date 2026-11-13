@@ -886,6 +886,53 @@ class FetchTest(unittest.TestCase):
                 self.assertEqual(enact.fetch(repo, check=False), {})
 
 
+class OwnershipLockWaitTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.repo = enact.Repo(root, root, root / ".git", enact.Config())
+        self.repo.state.mkdir(parents=True, exist_ok=True)
+        self.path = self.repo.state / "ownership.lock"
+
+    def hold(self):
+        """Hold the lock the way another process would, with its holder record."""
+        guard = enact.try_lock(self.path)
+        self.assertIsNotNone(guard)
+        self.path.with_name("ownership.lock.holder").write_text(json.dumps(
+            {"pid": 4242, "command": "enact sync", "since": time.time() - 200}))
+        return guard
+
+    def test_a_waiter_that_gives_up_names_the_holder(self):
+        guard = self.hold()
+        self.addCleanup(enact.release_lock, self.path, guard)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(enact.Fail) as raised:
+            with enact.ownership_lock(self.repo, wait=0.2):
+                pass
+        self.assertEqual(raised.exception.code, 3)
+        for text in (str(raised.exception), stderr.getvalue()):
+            self.assertIn("pid 4242 (enact sync)", text)
+
+    def test_a_patient_waiter_outlasts_a_short_wait(self):
+        guard = self.hold()
+        # The holder lets go only after a short wait has already given up.
+        release = threading.Timer(0.5, enact.release_lock, (self.path, guard))
+        release.start()
+        self.addCleanup(release.join)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(enact.Fail):
+            with enact.ownership_lock(self.repo, wait=0.1):
+                pass
+        with enact.ownership_lock(self.repo, wait=60):
+            self.assertTrue(self.path.exists())
+
+    def test_the_holder_record_is_removed_on_release(self):
+        with enact.ownership_lock(self.repo):
+            self.assertIn(str(os.getpid()), self.path.with_name(
+                "ownership.lock.holder").read_text())
+        self.assertFalse(self.path.with_name("ownership.lock.holder").exists())
+
+
 class BeadsReadTest(unittest.TestCase):
     def test_writes_sync_and_unlock_refresh_cached_reads(self):
         with tempfile.TemporaryDirectory() as directory:

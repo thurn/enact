@@ -600,17 +600,52 @@ _ownership_locks: set[Path] = set()
 _beads_reads: dict[Path, dict[tuple[str, ...], str]] = {}
 
 
+OWNERSHIP_WAIT = 180
+# After a fast check has passed, losing the checked work costs far more than waiting.
+OWNERSHIP_WAIT_CHECKED = 3600
+
+
+def lock_holder(path: Path) -> str:
+    """Describe who holds the lock at `path` from its `.holder` record, for a waiter's log."""
+    try:
+        info = json.loads(path.with_name(path.name + ".holder").read_text())
+        held = int(time.time() - info["since"])
+        return f"pid {info['pid']} ({info['command']}), held for {held} s"
+    except (OSError, ValueError, KeyError, TypeError):
+        return "unknown holder"
+
+
 @contextlib.contextmanager
-def ownership_lock(repo: Repo):
+def ownership_lock(repo: Repo, wait: float = OWNERSHIP_WAIT):
+    """Take the clone's ownership lock, waiting up to `wait` seconds.
+
+    Callers that already passed a fast check use `OWNERSHIP_WAIT_CHECKED`. A holder record
+    next to the lock names the process, so a waiter that gives up can say who kept it.
+    """
     path = repo.state / "ownership.lock"
     if path in _ownership_locks:
         yield
         return
-    deadline = time.monotonic() + 180
+    start = time.monotonic()
+    deadline = start + wait
+    next_report = start + 60
     while (guard := try_lock(path)) is None:
-        if time.monotonic() >= deadline:
-            raise Fail("ownership operation busy; retry", code=3)
+        now = time.monotonic()
+        if now >= deadline:
+            holder = lock_holder(path)
+            log(f"gave up waiting for the ownership lock after {int(now - start)} s; "
+                f"held by {holder}")
+            raise Fail(f"ownership operation busy (held by {holder}); retry", code=3)
+        if now >= next_report:
+            log(f"still waiting for the ownership lock, held by {lock_holder(path)}")
+            next_report = now + 60
         time.sleep(0.1)
+    holder_path = path.with_name(path.name + ".holder")
+    try:
+        write_json(holder_path, {"pid": os.getpid(), "command": " ".join(sys.argv[:4]),
+                                 "since": time.time()})
+    except OSError:
+        pass
     _ownership_locks.add(path)
     _beads_reads[repo.common] = {}
     try:
@@ -618,6 +653,7 @@ def ownership_lock(repo: Repo):
     finally:
         _ownership_locks.remove(path)
         _beads_reads.pop(repo.common, None)
+        holder_path.unlink(missing_ok=True)
         release_lock(path, guard)
 
 
@@ -2449,7 +2485,7 @@ def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], stats: dict[str,
             land(repo, tree, [e for e in entries if e["id"] not in aside], stats)
             land(repo, tree, [e for e in entries if e["id"] in aside], stats)
             return
-        with ownership_lock(repo):
+        with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED):
             graph: list[dict[str, Any]] = []
             if any(e["bead"] for e in picked):
                 sync(repo)
@@ -2590,7 +2626,7 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
                 raise Fail(verdict["error"], code=verdict["code"])
             data = verdict["delivery"]
             receipt = Path(verdict["receipt"])
-            with ownership_lock(repo):
+            with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED):
                 result = {"pushed": True, **finish_delivery(repo, receipt, data, start=False)}
             result["queue"] = {k: verdict[k] for k in ("batch", "checks") if k in verdict}
             # The tree now holds what landed: the queue may have replayed its commits.
@@ -2605,7 +2641,7 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
                 raise Fail("fast checks failed; fix them and run `enact push` again", code=2)
             checked = head
         commits = repo.git("rev-list", "--reverse", f"{before}..{head}").split()
-        with ownership_lock(repo):
+        with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED if checked else OWNERSHIP_WAIT):
             graph = Beads(repo).all() if args.bead else []
             bead = next((b for b in graph if b["id"] == args.bead), {})
             if args.bead and not bead:
