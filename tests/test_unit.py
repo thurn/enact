@@ -903,6 +903,50 @@ class FetchTest(unittest.TestCase):
                 self.assertEqual(enact.fetch(repo, check=False), {})
 
 
+class JusticiarPerMachineTest(unittest.TestCase):
+    def setUp(self):
+        holder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(holder.cleanup)
+        tmp = Path(holder.name)
+        git = lambda *a, cwd=tmp: subprocess.run(["git", *a], cwd=cwd, check=True,
+                                                  capture_output=True)
+        git("init", "-q", "--bare", "remote.git")
+        git("clone", "-q", str(tmp / "remote.git"), "work")
+        self.work = tmp / "work"
+        for key, value in (("user.name", "t"), ("user.email", "t@example.com")):
+            git("config", key, value, cwd=self.work)
+
+    def justiciar(self, host, action, actor="sess", code=None):
+        args = types.SimpleNamespace(action=action, reason="r", actor=actor)
+        env = {"ENACT_HOST": host}
+        with mock.patch.dict(os.environ, env), contextlib.chdir(self.work):
+            if code is None:
+                return enact.cmd_justiciar(args)
+            with self.assertRaises(enact.Fail):
+                enact.cmd_justiciar(args)
+
+    def test_each_machine_holds_its_own_lock(self):
+        self.justiciar("host-a", "acquire", "sess-a")
+        self.justiciar("host-a", "acquire", "sess-x", code=3)
+        held = self.justiciar("host-b", "acquire", "sess-b")["acquired"]
+        self.assertEqual((held["host"], held["ref"]),
+                         ("host-b", "refs/enact/justiciars/host-b"))
+        self.justiciar("host-a", "release", "sess-a")
+        self.assertIsNone(self.justiciar("host-a", "status")["justiciar"])
+        self.assertEqual(self.justiciar("host-b", "status")["justiciar"]["session"], "sess-b")
+
+    def test_legacy_lock_binds_only_its_host(self):
+        repo = enact.find_repo(self.work)
+        payload = {"state": "active", "host": "host-a", "session": "old"}
+        sha = enact.justiciar_commit(repo, payload)
+        self.assertTrue(enact.justiciar_push(repo, sha, "", enact.LEGACY_JUSTICIAR_REF))
+        self.justiciar("host-b", "acquire", "sess-b")
+        self.justiciar("host-a", "acquire", "sess-a", code=3)
+        self.assertEqual(self.justiciar("host-a", "release", "old")["released"]["ref"],
+                         enact.LEGACY_JUSTICIAR_REF)
+        self.justiciar("host-a", "acquire", "sess-a")
+
+
 class OwnershipLockWaitTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()

@@ -214,9 +214,10 @@ and Beads writes and unmodified older helpers remain outside that protocol.
 
 ## Justiciar
 
-- Fleet-wide, per-project lock: `refs/enact/justiciar` on origin, created with
-  a create-only push; the commit records host, session, time, reason. Holder
-  is printed to anyone who tries to acquire. Deleted on exit; a session
+- One lock per machine and project: `refs/enact/justiciars/<host>` on origin,
+  created with a create-only push; the commit records host, session, time,
+  reason (see [One Justiciar per machine](#one-justiciar-per-machine-2026-11-13)).
+  Holder is printed to anyone who tries to acquire. Deleted on exit; a session
   breaks it only after a routed lookup confirms the holder archived or
   absent. Age, silence and lookup failures do not prove abandonment.
 
@@ -1175,3 +1176,20 @@ check twice or more. `[push] queue = true` replaces that with a queue per host.
   direct path: the integrator replays commits one by one and cannot replay a
   merge.
 - Off by default, so projects opt in.
+
+## One Justiciar per machine (2026-11-13)
+
+- The Justiciar lock was fleet-wide (`refs/enact/justiciar`). A hold from
+  one machine (often a Codex run left behind) blocked emergencies on every
+  other machine, and only that machine's session could message the holder.
+  Emergencies are usually local (disk, tools, a deadlocked epic this host's
+  vizier drives), and a vizier only ever spawns its own host's Justiciar.
+- Now each machine has its own lock, `refs/enact/justiciars/<host>`, still on
+  origin so holders stay visible and acquisition stays atomic. The ref lives
+  under a new namespace because git cannot hold both `refs/enact/justiciar`
+  and refs below it.
+- Compatibility: a legacy `refs/enact/justiciar` lock counts as its own
+  host's lock, so a Justiciar already holding it can still transition and
+  release it; other hosts ignore it.
+- Justiciars on different machines may work at once. They coordinate shared
+  state (remote, Dolt, `master`) through incident beads.

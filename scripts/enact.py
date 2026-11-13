@@ -46,7 +46,8 @@ ENACT_ROOT = Path(__file__).resolve().parent.parent
 # Prompts name role files by path, and a session reads them after the
 # delivering worktree is gone, so they point at the stable checkout.
 ROLES_DIR = stable_checkout(ENACT_ROOT) / "skills" / "enact" / "roles"
-JUSTICIAR_REF = "refs/enact/justiciar"
+JUSTICIAR_PREFIX = "refs/enact/justiciars/"  # one lock per machine
+LEGACY_JUSTICIAR_REF = "refs/enact/justiciar"  # the old fleet-wide lock
 EMOJI = {
     "vizier": "🔮",
     "executor": "⚒️",
@@ -1649,23 +1650,38 @@ def cmd_wait(args: argparse.Namespace) -> dict[str, Any]:
         time.sleep(min(args.interval, max(deadline - time.monotonic(), 1)))
 
 # ---------------------------------------------------------------------------
-# Justiciar lock (a ref on the remote, independent of Beads)
+# Justiciar lock (one ref per machine on the remote, independent of Beads)
 
 
-def justiciar_state(repo: Repo) -> dict[str, Any] | None:
-    remote = repo.config.remote
-    listing = repo.git("ls-remote", remote, JUSTICIAR_REF, check=False)
-    if not listing:
-        return None
-    sha = listing.split()[0]
-    repo.git("fetch", "-q", remote, f"+{JUSTICIAR_REF}:{JUSTICIAR_REF}", check=False)
-    body = repo.git("log", "-1", "--format=%B", sha, check=False)
-    try:
-        state = json.loads(body)
-    except json.JSONDecodeError:
-        state = {"state": "unknown", "raw": body}
-    state["sha"] = sha
-    return state
+def justiciar_ref(host: str | None = None) -> str:
+    return JUSTICIAR_PREFIX + (host or host_name())
+
+
+def justiciar_state(repo: Repo, host: str | None = None) -> dict[str, Any] | None:
+    """This machine's lock, or the legacy fleet-wide lock when this machine holds it."""
+    host = host or host_name()
+    remote, ref = repo.config.remote, justiciar_ref(host)
+    listing = repo.git("ls-remote", remote, ref, LEGACY_JUSTICIAR_REF, check=False)
+    found = {}
+    for line in listing.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            found[parts[1]] = parts[0]
+    for candidate in (ref, LEGACY_JUSTICIAR_REF):
+        sha = found.get(candidate)
+        if not sha:
+            continue
+        repo.git("fetch", "-q", remote, f"+{candidate}:{candidate}", check=False)
+        body = repo.git("log", "-1", "--format=%B", sha, check=False)
+        try:
+            state = json.loads(body)
+        except json.JSONDecodeError:
+            state = {"state": "unknown", "raw": body}
+        if candidate == LEGACY_JUSTICIAR_REF and state.get("host") != host:
+            continue  # another machine's Justiciar no longer blocks this one
+        state["sha"], state["ref"] = sha, candidate
+        return state
+    return None
 
 
 def justiciar_commit(repo: Repo, payload: dict[str, Any]) -> str:
@@ -1677,16 +1693,18 @@ def justiciar_commit(repo: Repo, payload: dict[str, Any]) -> str:
     return repo.git("commit-tree", empty_tree, "-m", message)
 
 
-def justiciar_push(repo: Repo, sha: str, expect: str) -> bool:
-    lease = f"--force-with-lease={JUSTICIAR_REF}:{expect}"
-    target = f"{sha}:{JUSTICIAR_REF}" if sha else f":{JUSTICIAR_REF}"
+def justiciar_push(repo: Repo, sha: str, expect: str, ref: str | None = None) -> bool:
+    ref = ref or justiciar_ref()
+    lease = f"--force-with-lease={ref}:{expect}"
+    target = f"{sha}:{ref}" if sha else f":{ref}"
     return repo.git_ok("push", "-q", lease, repo.config.remote, target)
 
 
 def justiciar_transition(repo: Repo, current: dict[str, Any], changes: dict[str, Any]) -> bool:
-    payload = {k: v for k, v in current.items() if k != "sha"}
+    payload = {k: v for k, v in current.items() if k not in ("sha", "ref")}
     payload.update(changes, updated=now())
-    return justiciar_push(repo, justiciar_commit(repo, payload), current["sha"])
+    return justiciar_push(repo, justiciar_commit(repo, payload), current["sha"],
+                          current.get("ref"))
 
 
 def justiciar_prompt(request: dict[str, Any]) -> str:
@@ -1712,7 +1730,7 @@ def cmd_justiciar(args: argparse.Namespace) -> dict[str, Any]:
         return {"justiciar": current}
     if args.action == "request":
         if current:
-            raise Fail("a justiciar is already requested or active", code=3, holder=current)
+            raise Fail("a justiciar is already requested or active on this machine", code=3, holder=current)
         payload = {
             "state": "requested",
             "host": host_name(),
@@ -1728,7 +1746,7 @@ def cmd_justiciar(args: argparse.Namespace) -> dict[str, Any]:
     if args.action == "acquire":
         actor = require_actor(args.actor)
         if current and current.get("state") == "active" and current.get("session") != actor:
-            raise Fail("another justiciar is active", code=3, holder=current)
+            raise Fail("another justiciar is active on this machine", code=3, holder=current)
         if current:
             ok = justiciar_transition(repo, current, {"state": "active", "session": actor})
         else:
@@ -1745,7 +1763,7 @@ def cmd_justiciar(args: argparse.Namespace) -> dict[str, Any]:
         actor = args.actor or session_actor()
         if args.action == "release" and current.get("session") not in (None, actor):
             raise Fail("the lock belongs to another session; use `break`", code=3, holder=current)
-        if not justiciar_push(repo, "", current["sha"]):
+        if not justiciar_push(repo, "", current["sha"], current.get("ref")):
             raise Fail("lock changed while releasing", code=3, holder=justiciar_state(repo))
         return {"released": current}
     raise Fail(f"unknown action {args.action}")
@@ -3738,7 +3756,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("action", choices=["create", "remove", "prune"])
     p.add_argument("name", nargs="?")
 
-    p = add("justiciar", cmd_justiciar, "Manage the fleet-wide justiciar lock.")
+    p = add("justiciar", cmd_justiciar, "Manage this machine's justiciar lock.")
     p.add_argument("action", choices=["status", "request", "acquire", "release", "break"])
     p.add_argument("--reason")
     p.add_argument("--actor")

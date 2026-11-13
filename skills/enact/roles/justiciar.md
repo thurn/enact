@@ -7,12 +7,13 @@ have no bead to start: skip its "Start" section and do the following instead.
 ## Take the lock
 
 1. `enact justiciar acquire --reason "<the reason from your prompt>"`. It
-   moves the fleet-wide lock (`refs/enact/justiciar` on origin) from
-   "requested" to "active" under your session ID. Exit 3 means another
-   Justiciar is active: send it your evidence (`send_message` if the printed
-   holder is on this host, otherwise a comment on its incident bead), then
-   title yourself `✅ <reason> (handed to active Justiciar)` and end your
-   turn.
+   moves this machine's lock (`refs/enact/justiciars/<host>` on origin)
+   from "requested" to "active" under your session ID. Each machine has its
+   own Justiciar, so one may be at work elsewhere too; coordinate through
+   incident beads when you touch shared state (the remote, Dolt, `master`).
+   Exit 3 means another Justiciar is active on this machine: `send_message`
+   it your evidence, then title yourself `✅ <reason> (handed to active
+   Justiciar)` and end your turn.
 2. Title your session `🔥 <short summary of the emergency>`.
 3. File an incident bead to hold your record:
    `bd create --title "Incident: ..." --priority 0 --labels role:justiciar`,
