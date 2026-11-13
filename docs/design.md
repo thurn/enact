@@ -969,7 +969,7 @@ blindly recreate jobs or hand-edit scheduler databases.
   `STEWARD_HANDOFF_HOURS` (2) unclaimed, any machine's vizier may take it:
   the cause is often plain from the log, and an open Steward holds its runs.
   An explicit `enact_host` still wins, and Stewards without CI metadata
-  route as before.
+  route as before. (Superseded on 2026-11-13: see "Vizier leases".)
 - `ci --wait` adds `other_os_stewards` to every result when another OS's
   open Steward covers the SHA. Its state is unchanged, since another OS
   failing never stopped this one promoting. `watch_ci` tells the session to
@@ -1210,4 +1210,33 @@ bead another epic waits on, and check at the end of planning that no other
 epic now waits on the run. This stays in the skill rather than the helper:
 moves and edges are raw `bd`, and the judgement of when to reference a bead
 instead of adopting it needs the plan's context.
+
+## Vizier leases (2026-11-13)
+
+- Beryl's `master` sat for three hours while slow CI failed and nobody
+  repaired it. `enact push` leaves slow CI to a vizier when `vizier_active`
+  is true, and that only asked whether some epic carried a route
+  (`enact_vizier_route_*`, written once by `run register`) and was open or
+  had incomplete delivery. Routes outlive their viziers, and delivery can
+  stay incomplete for good once Steward ranges fold into a run, so it was
+  true with no vizier running anywhere.
+- A vizier now renews a lease, `.git/enact/vizier-<session>.json` holding
+  its epic and time, on every poll of `enact next`, and drops it when the
+  run ends (`done`) or is paused or blocked. A route is alive when it was
+  registered on this host and its vizier's lease names that epic and is
+  younger than `VIZIER_LEASE_SECONDS` (20 minutes). `next` polls every
+  minute while it waits, so the time to live only has to cover the gaps
+  while a vizier acts on a step. A route with no lease, such as one from
+  before leases existed, is not alive.
+- `vizier_active` is: some run that is not paused or blocked has a live
+  route. Routes on other hosts are ignored, and the epic's status and
+  delivery no longer matter. Liveness is local because each machine
+  repairs only its own slow-CI failures: a Steward with `enact_ci_host`
+  goes only to that host's viziers, and the two-hour handover to any
+  machine is gone. Stewards without a host still route by `enact_ci_os`,
+  or anywhere when they have neither.
+- `stranded()` counts a route on this host only while it is alive. Routes
+  on other hosts still count, since their leases cannot be read here;
+  treating them as dead would make every bead pinned to another machine
+  look stranded.
 

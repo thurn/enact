@@ -75,9 +75,10 @@ WINDOWS = os.name == "nt"
 # Seconds a directory git does not track must sit untouched before the
 # worktree sweep deletes it, so it never races a tree being created.
 SWEEP_AGE = 3600
-# Hours an unclaimed slow-CI failure waits for a machine on its own OS
-# before any machine's vizier may take it.
-STEWARD_HANDOFF_HOURS = 2.0
+# Seconds a vizier's lease stays fresh after its last `enact next` step.
+# `next` renews it on every poll (`--interval`, a minute by default), so this
+# only has to cover the gaps while the vizier acts on a step between calls.
+VIZIER_LEASE_SECONDS = 20 * 60
 
 
 class Fail(Exception):
@@ -474,28 +475,15 @@ def spawn_order(bead: dict[str, Any]) -> tuple[Any, ...]:
     return role_of(bead) != "steward", bead.get("priority", 2), number
 
 
-def bead_age_hours(bead: dict[str, Any]) -> float | None:
-    try:
-        created = dt.datetime.fromisoformat(str(bead.get("created_at")).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if created.tzinfo is None:
-        created = created.replace(tzinfo=dt.timezone.utc)
-    return (dt.datetime.now(dt.timezone.utc) - created).total_seconds() / 3600
-
-
 def steward_targeted_here(bead: dict[str, Any]) -> bool:
-    """A slow-CI failure goes first to a machine that can reproduce it: the
-    failing host, or another machine on the same OS. Once it has waited
-    STEWARD_HANDOFF_HOURS unclaimed, any machine may take it, since a fix is
-    often plain from the log and an open Steward holds its runs."""
+    """Each machine's viziers repair only that machine's slow-CI failures. A
+    failure elsewhere is left to its own machine's vizier, or to the session
+    there that pushed and got `watch_ci`."""
     failed_host, failed_os = meta(bead, "enact_ci_host"), meta(bead, "enact_ci_os")
-    if not failed_host and not failed_os:
-        return True  # legacy or hand-filed Steward
-    if failed_host == host_name() or failed_os == ci_os():
-        return True
-    age = bead_age_hours(bead)
-    return age is None or age >= STEWARD_HANDOFF_HOURS
+    if failed_host:
+        return failed_host == host_name()
+    # Stewards filed before CI recorded its host, or filed by hand.
+    return not failed_os or failed_os == ci_os()
 
 
 def targeted_here(bead: dict[str, Any]) -> bool:
@@ -508,14 +496,16 @@ def targeted_here(bead: dict[str, Any]) -> bool:
     )
 
 
-def stranded(bead: dict[str, Any], epic: dict[str, Any]) -> bool:
+def stranded(repo: Repo, bead: dict[str, Any], epic: dict[str, Any]) -> bool:
     """A bead pinned to a host or provider that no vizier registered on the
-    run serves. Nothing will pick it up, so it must not hold the run."""
+    run serves. Nothing will pick it up, so it must not hold the run. A route
+    on this machine serves only while its vizier's lease is fresh; another
+    machine's leases cannot be read here, so its routes still count."""
     want_host, want_provider = meta(bead, "enact_host"), meta(bead, "enact_provider")
     if not want_host and not want_provider:
         return False
-    routes = [json_meta(epic, key, {}) for key in (epic.get("metadata") or {})
-              if key.startswith("enact_vizier_route_")]
+    routes = [route for route in run_routes(epic)
+              if route.get("host") != host_name() or route_alive(repo, epic["id"], route)]
     return not any((not want_host or route.get("host") == want_host)
                    and (not want_provider or route.get("provider") == want_provider)
                    for route in routes)
@@ -1267,6 +1257,49 @@ def route_key(session: str) -> str:
     return "enact_vizier_route_" + hashlib.sha256(session.encode()).hexdigest()[:24]
 
 
+def run_routes(epic: dict[str, Any]) -> list[dict[str, Any]]:
+    return [json_meta(epic, key, {}) for key in (epic.get("metadata") or {})
+            if key.startswith("enact_vizier_route_")]
+
+
+def lease_path(repo: Repo, vizier: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", vizier)
+    return repo.state / f"vizier-{safe}.json"
+
+
+def renew_lease(repo: Repo, vizier: str, epic: str) -> None:
+    """A vizier's heartbeat. A route on the epic says a vizier once ran the
+    run; only a fresh lease says one is still looping and will repair this
+    machine's slow-CI failures. Leases are local files because each machine
+    repairs only its own failures."""
+    write_json(lease_path(repo, vizier), {"session": vizier, "epic": epic,
+                                          "host": host_name(), "at": time.time()})
+
+
+def drop_lease(repo: Repo, vizier: str) -> None:
+    lease_path(repo, vizier).unlink(missing_ok=True)
+
+
+def lease_age(repo: Repo, vizier: str, epic: str) -> float | None:
+    """Seconds since the vizier last renewed its lease on this epic, or None
+    when it holds none here (another epic, or a vizier older than leases)."""
+    try:
+        lease = json.loads(lease_path(repo, vizier).read_text(encoding="utf-8"))
+        if lease.get("epic") != epic:
+            return None
+        return max(time.time() - float(lease["at"]), 0.0)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def route_alive(repo: Repo, epic: str, route: dict[str, Any]) -> bool:
+    """The route's vizier runs on this machine and renewed its lease recently."""
+    if route.get("host") != host_name() or not route.get("session"):
+        return False
+    age = lease_age(repo, route["session"], epic)
+    return age is not None and age < VIZIER_LEASE_SECONDS
+
+
 def register_run(repo: Repo, epic: str, vizier: str, parallel: int,
                  authorized: bool = False) -> dict[str, Any]:
     bead = Beads(repo).show(epic)
@@ -1572,7 +1605,7 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
             return {**result, "action": control["state"], "control": control}
     # A pin nobody serves cannot make progress: the Justiciar unpins it or
     # moves it out of the epic rather than letting the run wait on it.
-    stuck = [b["id"] for b in elsewhere if stranded(b, by_id[epic])]
+    stuck = [b["id"] for b in elsewhere if stranded(repo, b, by_id[epic])]
     if open_scope and not working and len(stuck) == len(elsewhere) and not inflight:
         action = {**result, "action": "deadlock", "open": [b["id"] for b in open_scope]}
         return {**action, "stranded": stuck} if stuck else action
@@ -1624,10 +1657,14 @@ def next_step(repo: Repo, args: argparse.Namespace, vizier: str) -> dict[str, An
     except (OSError, ValueError):
         reported = set()
     while True:
+        renew_lease(repo, vizier, args.epic)
         sync(repo)
         result = schedule(repo, args.epic, args.parallel, vizier)
         pending = {item["bead"] for item in result["archive"]}
         timed_out = time.monotonic() >= deadline
+        if result["action"] in ("done", "paused", "blocked"):
+            # The vizier stops looping, so nothing here repairs slow CI for it.
+            drop_lease(repo, vizier)
         if result["action"] != "wait" or pending - reported or timed_out:
             reported_file.write_text(json.dumps(sorted(pending)))
             return result
@@ -2856,15 +2893,14 @@ def ci_status(repo: Repo) -> dict[str, Any]:
 
 
 def vizier_active(repo: Repo, graph: list[dict[str, Any]]) -> bool:
-    """A vizier loop on any machine will pick up an unparented Steward bead:
-    some registered run is unfinished and not paused or blocked."""
-    for bead in graph:
-        if (bead.get("issue_type") != "epic" or stopped_runs(bead, graph) or not any(
-                key.startswith("enact_vizier_route_") for key in bead.get("metadata") or {})):
-            continue
-        if bead.get("status") != "closed" or not run_delivery(repo, graph, bead["id"])["complete"]:
-            return True
-    return False
+    """A vizier loop on this machine will pick up a Steward bead this machine
+    files: some run that is not paused or blocked has a route here whose
+    vizier renewed its lease recently. Whether the epic is open or its
+    delivery complete does not matter; a route alone proves nothing, since
+    routes outlive the viziers that wrote them."""
+    return any(bead.get("issue_type") == "epic" and not stopped_runs(bead, graph)
+               and any(route_alive(repo, bead["id"], route) for route in run_routes(bead))
+               for bead in graph)
 
 
 def watch_ci_notice(sha: str) -> str:
@@ -3306,8 +3342,7 @@ def spawned_here(bead: dict[str, Any], host: str, host_provider: str) -> bool:
 
 
 def vizier_routes(bead: dict[str, Any], graph: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    routes = [json_meta(bead, key, {}) for key in (bead.get("metadata") or {})
-              if key.startswith("enact_vizier_route_")]
+    routes = run_routes(bead)
     # Old runs can be inspected safely, but recovery needs registration
     # carrying authorization. Include closed assignments for final CI.
     for worker in graph:

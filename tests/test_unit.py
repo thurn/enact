@@ -2,6 +2,7 @@
 
 import importlib.util
 import contextlib
+import functools
 import io
 import json
 import multiprocessing
@@ -716,23 +717,71 @@ class ParallelSuiteTest(unittest.TestCase):
         self.assertTrue(all("fixture failure" in error for _, error in result.errors))
 
 
-class CiWatchTest(unittest.TestCase):
-    ROUTE = {"enact_vizier_route_abc": {"session": "v"}}
+class VizierLeaseTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = types.SimpleNamespace(state=Path(tmp.name))
+        for name, value in (("host_name", "jarvis"), ("provider", "claude")):
+            patcher = mock.patch.object(enact, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
-    def test_only_an_unfinished_unheld_registered_run_counts_as_a_vizier(self):
-        complete = {"complete": True}
-        with mock.patch.object(enact, "run_delivery", return_value=complete):
-            self.assertFalse(enact.vizier_active(None, [{"id": "e", "issue_type": "epic"}]))
-            self.assertTrue(enact.vizier_active(None, [
-                {"id": "e", "issue_type": "epic", "metadata": self.ROUTE}]))
-            self.assertFalse(enact.vizier_active(None, [
-                {"id": "e", "issue_type": "epic", "status": "closed", "metadata": self.ROUTE}]))
-            held = {**self.ROUTE, "enact_control": {"state": "paused", "epoch": "1"}}
-            self.assertFalse(enact.vizier_active(None, [
-                {"id": "e", "issue_type": "epic", "metadata": held}]))
-        with mock.patch.object(enact, "run_delivery", return_value={"complete": False}):
-            self.assertTrue(enact.vizier_active(None, [
-                {"id": "e", "issue_type": "epic", "status": "closed", "metadata": self.ROUTE}]))
+    def epic(self, host="jarvis", status="open", metadata=None):
+        route = {"session": "v", "host": host, "provider": "claude"}
+        return {"id": "e", "issue_type": "epic", "status": status,
+                "metadata": {"enact_vizier_route_abc": json.dumps(route), **(metadata or {})}}
+
+    def lease(self, seconds_ago, epic="e"):
+        enact.renew_lease(self.repo, "v", epic)
+        path = enact.lease_path(self.repo, "v")
+        lease = json.loads(path.read_text())
+        lease["at"] -= seconds_ago
+        path.write_text(json.dumps(lease))
+
+    def active(self, *graph):
+        return enact.vizier_active(self.repo, list(graph))
+
+    def test_a_fresh_lease_makes_the_run_active_whatever_its_delivery(self):
+        self.lease(60)
+        self.assertTrue(self.active(self.epic()))
+        # A closed epic still counts while its vizier loops on delivery.
+        self.assertTrue(self.active(self.epic(status="closed")))
+        held = {"enact_control": json.dumps({"state": "paused", "epoch": "1"})}
+        self.assertFalse(self.active(self.epic(metadata=held)))
+
+    def test_an_expired_or_missing_lease_leaves_nobody_watching(self):
+        self.assertFalse(self.active(self.epic()))  # a vizier older than leases
+        self.lease(enact.VIZIER_LEASE_SECONDS + 1)
+        self.assertFalse(self.active(self.epic()))
+        # A lease renewed for another run says nothing about this one.
+        self.lease(0, epic="other")
+        self.assertFalse(self.active(self.epic()))
+        self.assertFalse(self.active({"id": "e", "issue_type": "epic"}))
+
+    def test_a_route_registered_on_another_host_is_ignored(self):
+        self.lease(0)
+        self.assertFalse(self.active(self.epic(host="cygnus")))
+
+    def test_a_finished_run_drops_its_lease(self):
+        args = types.SimpleNamespace(epic="e", parallel=1, wait=0, interval=1)
+        with mock.patch.object(enact, "sync"), \
+                mock.patch.object(enact, "schedule",
+                                  return_value={"action": "wait", "archive": []}) as step:
+            enact.next_step(self.repo, args, "v")
+            self.assertTrue(self.active(self.epic()))
+            step.return_value = {"action": "done", "archive": []}
+            enact.next_step(self.repo, args, "v")
+        self.assertFalse(self.active(self.epic()))
+
+    def test_a_local_pin_is_served_only_by_a_live_vizier(self):
+        pinned = {"id": "b", "metadata": {"enact_host": "jarvis"}}
+        self.assertTrue(enact.stranded(self.repo, pinned, self.epic()))
+        self.lease(0)
+        self.assertFalse(enact.stranded(self.repo, pinned, self.epic()))
+
+
+class CiWatchTest(unittest.TestCase):
 
     def wait(self, graph, ancestors, status=None):
         """ancestors: (sha, ref) pairs that are ancestors."""
@@ -817,19 +866,21 @@ class StewardRoutingTest(unittest.TestCase):
         return {"id": "s", "labels": ["role:steward"], "created_at": created.isoformat(),
                 "metadata": {f"enact_ci_{k}": v for k, v in ci.items()}}
 
+    def test_a_failure_stays_with_the_machine_that_filed_it(self):
+        fresh = self.steward(0.1, os="windows", host="cygnus")
+        self.assertTrue(self.targeted(fresh, "cygnus", "windows"))
+        self.assertFalse(self.targeted(fresh, "other-pc", "windows"))
+        self.assertFalse(self.targeted(fresh))
+        self.assertFalse(self.targeted(self.steward(9, os="windows", host="cygnus")))
+        # Stewards from before CI recorded its host still route by OS.
+        self.assertTrue(self.targeted(self.steward(0.1, os="windows"), "other-pc", "windows"))
+        self.assertFalse(self.targeted(self.steward(0.1, os="windows")))
+
     def targeted(self, bead, host="jarvis", os_name="macos"):
         with mock.patch.object(enact, "host_name", return_value=host), \
                 mock.patch.object(enact, "ci_os", return_value=os_name), \
                 mock.patch.object(enact, "provider", return_value="claude"):
             return enact.targeted_here(bead)
-
-    def test_a_failure_goes_to_its_os_first_then_to_any_machine(self):
-        fresh = self.steward(0.1, os="windows", host="cygnus")
-        self.assertTrue(self.targeted(fresh, "cygnus", "windows"))
-        self.assertTrue(self.targeted(fresh, "other-pc", "windows"))
-        self.assertFalse(self.targeted(fresh))
-        stale = self.steward(enact.STEWARD_HANDOFF_HOURS + 0.1, os="windows", host="cygnus")
-        self.assertTrue(self.targeted(stale))
 
     def test_explicit_targets_and_legacy_stewards_keep_their_routing(self):
         self.assertTrue(self.targeted(self.steward(0)))
@@ -847,12 +898,15 @@ class StrandedPinTest(unittest.TestCase):
             "enact_vizier_route_a": json.dumps({"host": "jarvis", "provider": "claude"})}}
         def pinned(**want):
             return {"id": "b", "metadata": {f"enact_{k}": v for k, v in want.items()}}
-        self.assertFalse(enact.stranded(pinned(), epic))
-        self.assertFalse(enact.stranded(pinned(host="jarvis"), epic))
-        self.assertFalse(enact.stranded(pinned(provider="claude"), epic))
-        self.assertTrue(enact.stranded(pinned(host="cygnus"), epic))
-        self.assertTrue(enact.stranded(pinned(host="jarvis", provider="codex"), epic))
-        self.assertTrue(enact.stranded(pinned(host="jarvis"), {"id": "e", "metadata": {}}))
+        # Seen from another machine, which cannot read jarvis's leases.
+        with mock.patch.object(enact, "host_name", return_value="cygnus"):
+            stranded = functools.partial(enact.stranded, None)
+            self.assertFalse(stranded(pinned(), epic))
+            self.assertFalse(stranded(pinned(host="jarvis"), epic))
+            self.assertFalse(stranded(pinned(provider="claude"), epic))
+            self.assertTrue(stranded(pinned(host="cygnus"), epic))
+            self.assertTrue(stranded(pinned(host="jarvis", provider="codex"), epic))
+            self.assertTrue(stranded(pinned(host="jarvis"), {"id": "e", "metadata": {}}))
 
 class StableCheckoutTest(unittest.TestCase):
     def test_prompts_name_role_files_in_the_stable_checkout(self):
