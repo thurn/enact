@@ -265,6 +265,9 @@ class Config:
     worktree_root: str = DEFAULT_WORKTREE_ROOT
     worktree_create: str | None = None
     worktree_remove: str | None = None
+    # How many fixed `slot-NN` directories bead worktrees are drawn from; 0 gives each bead
+    # a new directory, as before.
+    worktree_slots: int = 0
     roles: dict[str, Any] = field(default_factory=dict)
     tiers: dict[str, Any] = field(default_factory=dict)
 
@@ -283,6 +286,7 @@ class Config:
             worktree_root=worktree.get("root", DEFAULT_WORKTREE_ROOT),
             worktree_create=worktree.get("create") or None,
             worktree_remove=worktree.get("remove") or None,
+            worktree_slots=int(worktree.get("slots") or 0),
             roles=data.get("roles", {}),
             tiers=data.get("tiers", {}),
         )
@@ -1808,6 +1812,61 @@ def create_worktree(repo: Repo, name: str, branch: str | None, base: str) -> Pat
     return path
 
 
+def is_slot(repo: Repo, path: Path) -> bool:
+    """Whether `path` is one of the fixed slot directories that bead worktrees reuse."""
+    return (repo.config.worktree_slots > 0 and re.fullmatch(r"slot-\d+", path.name) is not None
+            and path.resolve().parent == repo.worktree_root().resolve())
+
+
+def claim_slot(repo: Repo, branch: str, base: str) -> Path | None:
+    """Check `branch` out in a free slot, or return None when every slot is busy.
+
+    A cargo build's fingerprints include the worktree's path, so a bead that starts in a
+    directory built before skips recompiling the workspace crates (measured on Beryl:
+    115 s instead of 224 s for a build plus test build). A free slot is a registered worktree
+    on a detached HEAD. Its ignored files (`rust/target`, `node_modules`) are kept; tracked
+    changes and untracked files are discarded, since a released slot holds no work.
+    """
+    parked = {Path(entry["worktree"]).resolve() for entry in worktree_entries(repo)
+              if "detached" in entry}
+    for number in range(1, repo.config.worktree_slots + 1):
+        path = repo.worktree_root() / f"slot-{number:02d}"
+        if path.resolve() in parked:
+            repo.git("reset", "-q", "--hard", cwd=path)
+            repo.git("clean", "-q", "-fd", cwd=path)
+        elif not path.exists():
+            create_worktree(repo, path.name, None, base)
+        else:
+            continue
+        if repo.git_ok("rev-parse", "--verify", f"refs/heads/{branch}"):
+            repo.git("checkout", "-q", branch, cwd=path)
+        else:
+            repo.git("checkout", "-q", "-b", branch, base, cwd=path)
+        return path
+    return None
+
+
+def release_slot(repo: Repo, path: Path, branch: str | None) -> bool:
+    """Return a slot to the pool: detach it at staging and drop its branch, keeping the
+    build directories. False means git refused, and the caller deletes the tree instead."""
+    staging = repo.remote_ref(repo.config.staging)
+    for step in (("reset", "-q", "--hard"), ("clean", "-q", "-fd"),
+                 ("checkout", "-q", "--detach", staging)):
+        done = run(["git", *step], path, check=False)
+        if done.returncode != 0:
+            log(f"slot {path} not released ({' '.join(step)}): {done.stderr.strip()}")
+            return False
+    if branch:
+        repo.git("branch", "-D", branch, cwd=repo.main, check=False)
+    return True
+
+
+def owns_slot(bead: dict[str, Any], path: Path, branch: str) -> bool:
+    """Whether `bead` is the one working in slot `path` now. The bead of a previous
+    occupant still records the same path, so the slot's branch decides."""
+    return meta(bead, "enact_worktree") == str(path) and meta(bead, "enact_branch") == branch
+
+
 def process_ancestors() -> set[int]:
     """This process and every process above it, which reaping must spare."""
     spared = {os.getpid()}
@@ -1897,6 +1956,8 @@ def process_exited(pid: int) -> bool:
 def remove_worktree(repo: Repo, path: Path, branch: str | None) -> list[dict[str, Any]]:
     """Delete a worktree and its branch; return the processes ended inside it."""
     ended = reap_processes(path) if path.exists() else []
+    if path.exists() and is_slot(repo, path) and release_slot(repo, path, branch):
+        return ended
     if repo.config.worktree_remove:
         env = worktree_env(repo, path, branch or "", "")
         if run_shell(repo.config.worktree_remove, repo.main, env) != 0:
@@ -1974,12 +2035,15 @@ def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
             # A runner killed inside `git worktree add` leaves git's lock.
             repo.git("worktree", "unlock", str(path), cwd=repo.main, check=False)
             remove(path, None)
+        elif is_slot(repo, path) and "detached" in entry:
+            kept[str(path)] = "idle slot"
         elif not branch.startswith("enact/"):
             kept[str(path)] = "not an Enact branch"
         elif "locked" in entry:
             kept[str(path)] = "locked"
         elif not (bead := next((b for b in graph or [] if b["id"] == path.name or
-                                meta(b, "enact_worktree") == str(path)), None)):
+                                (owns_slot(b, path, branch) if is_slot(repo, path)
+                                 else meta(b, "enact_worktree") == str(path))), None)):
             kept[str(path)] = "no bead" if graph is not None else "Beads unavailable"
         elif bead.get("status") != "closed":
             kept[str(path)] = f"bead {bead['id']} is {bead.get('status')}"
@@ -2019,10 +2083,14 @@ def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
 def worktree_bead(repo: Repo, path: Path) -> dict[str, Any] | None:
     # Includes legacy worktrees named after a bead, created before pointers
     # were recorded. Never let omitting --bead bypass ownership checks.
+    slot = is_slot(repo, path)
+    slot_branch = repo.git("rev-parse", "--abbrev-ref", "HEAD", cwd=path, check=False) \
+        if slot and path.is_dir() else ""
     for bead in Beads(repo).all():
         if path == repo.worktree_root() / bead["id"] or (
                 meta(bead, "enact_worktree_host") == host_name() and
-                meta(bead, "enact_worktree") == str(path)) or any(
+                (owns_slot(bead, path, slot_branch) if slot
+                 else meta(bead, "enact_worktree") == str(path))) or any(
                     r.get("host") == host_name() and r.get("path") == str(path)
                     for r in recovery_records(bead)):
             return bead
@@ -2055,6 +2123,11 @@ def bead_worktree(args: argparse.Namespace) -> dict[str, Any]:
     bead = worktree_bead(repo, path)
     actor = require_actor(None) if bead else None
     if bead:
+        # A bead working in a slot has no directory named after it.
+        recorded = Path(meta(bead, "enact_worktree") or "/")
+        if (meta(bead, "enact_worktree_host") == host_name() and is_slot(repo, recorded)
+                and recorded.is_dir() and owns_slot(bead, recorded, branch)):
+            path = recorded
         # Retain direct CLI use for never-assigned beads by claiming first.
         if (not bead.get("assignee") and not recovery_records(bead) and
                 not meta(bead, "enact_reservation") and args.action == "create"):
@@ -2088,7 +2161,8 @@ def bead_worktree(args: argparse.Namespace) -> dict[str, Any]:
                                   check=False)
             if saved_head:
                 base, reused = saved_head, True
-            path = create_worktree(repo, args.name, branch, base)
+            slot = claim_slot(repo, branch, base) if bead else None
+            path = slot or create_worktree(repo, args.name, branch, base)
         if bead:
             Beads(repo).set_meta(bead["id"], {
                 "enact_worktree": str(path), "enact_branch": branch,

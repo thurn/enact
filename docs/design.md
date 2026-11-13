@@ -264,6 +264,19 @@ inspection; uncertainty never authorizes releasing ownership.
   full-replacement `create`/`remove` hooks (env: `ENACT_WORKTREE_PATH`,
   `ENACT_BRANCH`, `ENACT_BASE_SHA`, `ENACT_REPO`), optional
   `[roles.<role>]` model/effort per host.
+- Worktree slots (2026-11-13): `[worktree] slots = N` gives bead worktrees N
+  fixed directories, `slot-01` to `slot-NN`, instead of a new directory per
+  bead. Cargo's fingerprints include the worktree path, so a reused path
+  skips recompiling the workspace crates; on Beryl a build plus a test build
+  took 115 s in a reused path against 224 s in a new one. `worktree create`
+  hands a bead the first slot parked on a detached HEAD, resets it and checks
+  the bead's branch out; ignored files stay. Releasing (push, `worktree
+  remove`, the sweep) detaches the slot at staging, deletes the branch and
+  keeps the directory, without running the `remove` hook. The bead's
+  `enact_worktree` pointer names the slot, and a slot belongs to the bead
+  whose `enact_branch` is checked out in it. Default 0 keeps the old
+  behavior. Slots never shrink the build directory, so a project that enables
+  them must prune it itself.
 - The check and hook commands are POSIX shell on every OS (2026-10-30). On
   Windows they run in Git for Windows' `bin/bash.exe` (found next to the
   `git` on PATH, else under `%ProgramFiles%\Git`; `ENACT_BASH` overrides),

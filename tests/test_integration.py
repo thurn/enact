@@ -597,6 +597,42 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
                          first["commits"] + [head])
         self.assertEqual(list((self.a.path / ".git/enact/deliveries").glob("*.json")), [])
 
+    def test_a_bead_reuses_a_slot_with_its_build_directory_intact(self):
+        config = self.a.path / ".enact.toml"
+        config.write_text(config.read_text() + "[worktree]\nslots = 2\n")
+        # Worktrees read the configuration they were checked out with.
+        self.a.git("commit", "-q", "-am", "use slots")
+        self.a.git("push", "-q", "origin", "HEAD:master", "HEAD:staging")
+        first_bead, second_bead = self.a.create("first"), self.a.create("second")
+        path = Path(self.a.enact("worktree", "create", first_bead)["path"])
+        self.assertEqual(path.name, "slot-01")
+        # Ignored build output, which a new directory would have to rebuild.
+        (path / ".gitignore").write_text("target/\n")
+        (path / "target").mkdir()
+        (path / "target" / "built").write_text("object")
+        self.a.commit_file("one", "1", cwd=path)
+        self.a.git("add", ".gitignore", cwd=path)
+        self.a.git("commit", "-q", "-m", "ignore target", cwd=path)
+        pushed = self.a.enact("push", "--bead", first_bead, "--no-ci", cwd=path)
+        self.assertTrue(pushed["pushed"])
+        # The slot stays, detached at staging, and no branch is left behind.
+        self.assertTrue(path.is_dir())
+        self.assertEqual(self.a.git("rev-parse", "--abbrev-ref", "HEAD", cwd=path), "HEAD")
+        self.assertEqual(self.a.git("branch", "--list", f"enact/{first_bead}"), "")
+        # A second bead running at the same time gets the other slot.
+        other = self.a.enact("worktree", "create", second_bead)
+        self.assertEqual(Path(other["path"]).name, "slot-01")
+        again = self.a.enact("worktree", "create", self.a.create("third"))
+        self.assertEqual(Path(again["path"]).name, "slot-02")
+        self.assertEqual((path / "target" / "built").read_text(), "object")
+        self.assertEqual(self.a.git("rev-parse", "HEAD", cwd=path), pushed["staging"])
+        # Explicit removal returns a slot too, and the swept pool keeps idle slots.
+        self.a.enact("worktree", "remove", second_bead)
+        self.assertTrue(path.is_dir())
+        self.assertEqual(self.a.git("rev-parse", "--abbrev-ref", "HEAD", cwd=path), "HEAD")
+        swept = self.a.enact("worktree", "prune")
+        self.assertEqual(swept["kept"][str(path)], "idle slot")
+
     def test_self_delivery_keeps_ci_entry_point_after_removing_worktree(self):
         path = Path(self.a.enact("worktree", "create", "self")["path"])
         self.a.commit_file("enact.py", SCRIPT.read_text(), cwd=path)
