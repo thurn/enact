@@ -1131,3 +1131,47 @@ now end every process whose working directory or executable is inside the tree
 calling process or its ancestors. The processes found by `lsof` (or `/proc`)
 are reported as `ended_processes` in the JSON of `worktree remove`, `push` and
 the sweep. On Windows reaping is skipped and logged.
+
+## Merge queue (2026-11-13)
+
+Beryl's fast check takes 95 s at the median and 240 s at the 90th
+percentile. With optimistic pushes, a push whose check another push beat to
+staging rebases and checks again, so at 30 commits an hour most pushes would
+check twice or more. `[push] queue = true` replaces that with a queue per host.
+
+- `enact push` verifies ownership, rebases in its own tree as before (a
+  conflict there is exit 2, as before), then writes an entry to
+  `<git common dir>/enact/queue` and waits for a verdict file.
+- No daemon. Whichever waiting push holds `queue.lock` (the CI runner's OS
+  lock) is the integrator. It runs batches until its own entry has a verdict,
+  then releases the lock, and another waiting push takes over. If it dies,
+  the OS frees the lock and the next waiter runs the entries still without a
+  verdict. Entries whose push process died are dropped, since nobody is left
+  to finish their delivery. An integrator that died after pushing left
+  delivery receipts tagged with the entry's id, and the next integrator turns
+  those into `landed` verdicts instead of replaying the commits.
+- Batch: up to `[push] batch` entries (default 8), oldest first, replayed in
+  order onto `origin/staging` in a persistent detached worktree,
+  `<root>/.merge-queue`, whose build directories stay warm. The first entry
+  whose base is the staging tip fast-forwards and keeps its SHAs; later ones
+  are cherry-picked. An entry that does not apply gets a `conflict` verdict
+  and its push re-integrates in its own tree, where the conflict surfaces as
+  exit 2 the way it always did.
+- No fill wait. Batches form on their own while the previous batch's check
+  runs, which is when pushes pile up; a wait would only delay a lone push.
+- A failing check splits the batch: entries whose changed files the output
+  names (else the later half) are set aside, the rest are checked and land
+  together, then the set-aside entries are checked on their own. One bad
+  branch in five costs three checks. A lone failing entry gets the check's
+  output back, and its push prints it and exits 2.
+- The integrator re-checks ownership under the ownership lock and writes each
+  entry's delivery receipt before pushing. The waiting push then does the
+  bead bookkeeping, worktree removal and slow-CI start exactly as before;
+  results gain `queue: {batch, checks}`.
+- The check reads `.enact.toml` from the combined tree and is killed after
+  `[push] timeout` seconds (default 1800), since a hung check would hold
+  every push on the host.
+- A branch that merged a diverged master, and `--skip-checks`, take the old
+  direct path: the integrator replays commits one by one and cannot replay a
+  merge.
+- Off by default, so projects opt in.

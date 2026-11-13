@@ -714,6 +714,68 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         # What passed first was the worktree's commit on the old staging tip.
         self.assertEqual(runs[1], first)
 
+    def test_merge_queue_lands_a_batch_with_one_check_and_returns_the_failure(self):
+        # Six pushes queue while the test holds the integrator's lock. Two add the same file
+        # differently, so one of them conflicts; one adds a file the check rejects. The
+        # other four must land in one push after one passing check, and the check runs
+        # three times in all: the whole batch, the batch without the named file, that file.
+        runs = self.tmp / "checks.txt"
+        check = self.tmp / "queue_check.py"
+        check.write_text(
+            "import pathlib, sys\n"
+            f"with open({str(runs)!r}, 'a') as log: log.write('run\\n')\n"
+            "if pathlib.Path('bad.txt').exists():\n"
+            "    print('bad.txt is not allowed')\n"
+            "    sys.exit(1)\n")
+        fast = shlex.join([Path(sys.executable).as_posix(), check.as_posix()])
+        self.a.commit_file(".enact.toml", ENACT_TOML.replace(
+            '"python3 check.py fast"', json.dumps(fast)) + "[push]\nqueue = true\n")
+        self.a.git("push", "-q", "origin", "HEAD:staging")
+        files = {"c1": ("shared.txt", "one"), "c2": ("shared.txt", "two"), "ok3": ("three", "3"),
+                 "ok4": ("four", "4"), "bad5": ("bad.txt", "5"), "ok6": ("six", "6")}
+        trees = {}
+        for name, (path, text) in files.items():
+            trees[name] = Path(self.a.enact("worktree", "create", name)["path"])
+            self.a.commit_file(path, text, cwd=trees[name])
+        spec = importlib.util.spec_from_file_location("enact_queue_test", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        state = self.a.path / ".git" / "enact"
+        (state / "queue").mkdir(parents=True, exist_ok=True)
+        guard = module.try_lock(state / "queue.lock")
+        self.assertIsNotNone(guard)
+        pushes = {name: subprocess.Popen(
+            [sys.executable, str(SCRIPT), "push", "--no-ci", "--keep"], cwd=tree, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, **self.a.env()}) for name, tree in trees.items()}
+        try:
+            deadline = time.time() + 120
+            while len([p for p in (state / "queue").glob("*.json")
+                       if not p.name.endswith(".verdict.json")]) < len(pushes):
+                self.assertLess(time.time(), deadline, "pushes did not all queue")
+                time.sleep(0.2)
+        finally:
+            module.release_lock(state / "queue.lock", guard)
+        done = {name: (proc.wait(timeout=300), *proc.communicate())
+                for name, proc in pushes.items()}
+        landed = {name: json.loads(out) for name, (code, out, _) in done.items() if code == 0}
+        self.assertEqual(len(landed), 4, done)
+        # One push of four branches, after the failed whole batch and one passing check.
+        self.assertEqual([r["queue"] for r in landed.values()], [{"batch": 4, "checks": 2}] * 4)
+        self.assertEqual(done["bad5"][0], 2)
+        self.assertIn("bad.txt is not allowed", done["bad5"][2])
+        loser = ({"c1", "c2"} - set(landed)).pop()
+        self.assertEqual(done[loser][0], 2)
+        self.assertIn("conflicts", done[loser][2])
+        self.assertEqual(runs.read_text().splitlines(), ["run"] * 3)
+        tree = sh(["git", "ls-tree", "--name-only", "staging"], self.origin).split()
+        self.assertTrue({"shared.txt", "three", "four", "six"} <= set(tree))
+        self.assertNotIn("bad.txt", tree)
+        # Each landed tree holds what landed, and the queue left no entries behind.
+        for name in landed:
+            sh(["git", "merge-base", "--is-ancestor", "HEAD", "origin/staging"], trees[name])
+        self.assertEqual(list((state / "queue").iterdir()), [])
+
     def test_worktree_create_hook_replaces_git(self):
         hook = (
             "python3 -c \"import os,subprocess; subprocess.check_call(['git','worktree','add',"

@@ -217,6 +217,25 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(mapped.role_settings("executor", "codex", "opus"), {"model": "sol"})
         self.assertEqual(cfg.slow_timeout, enact.DEFAULT_SLOW_TIMEOUT)
         self.assertEqual(enact.Config.parse("[checks]\nslow_timeout = 900\n").slow_timeout, 900)
+        self.assertFalse(cfg.push_queue)
+        queue = enact.Config.parse("[push]\nqueue = true\nbatch = 3\n")
+        self.assertEqual((queue.push_queue, queue.push_batch), (True, 3))
+
+
+class SetAsideTest(unittest.TestCase):
+    """Which branches a failed merge-queue batch checks apart from the rest."""
+
+    entries = [{"id": str(i), "files": [f"src/f{i}.py"]} for i in range(5)]
+
+    def ids(self, output):
+        return [e["id"] for e in enact.set_aside(self.entries, output)]
+
+    def test_the_branches_whose_files_the_output_names(self):
+        self.assertEqual(self.ids("src/f3.py: 900 lines, limit 800"), ["3"])
+
+    def test_the_later_half_when_the_output_names_none_or_all(self):
+        self.assertEqual(self.ids("a test failed"), ["2", "3", "4"])
+        self.assertEqual(self.ids(" ".join(f"src/f{i}.py" for i in range(5))), ["2", "3", "4"])
 
 
 class CiGapTest(unittest.TestCase):

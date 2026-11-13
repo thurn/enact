@@ -250,6 +250,10 @@ BUILTIN_TIERS: dict[str, dict[str, dict[str, str]]] = {
 }
 # Far above the ~5 minute slow-check budget, so only a hang reaches it.
 DEFAULT_SLOW_TIMEOUT = 3600
+# The merge queue's largest batch and its fast check's deadline. A hung check would hold every
+# push on the host, so unlike a lone push's check it is killed.
+DEFAULT_PUSH_BATCH = 8
+DEFAULT_PUSH_TIMEOUT = 1800
 
 
 @dataclass(frozen=True)
@@ -272,6 +276,11 @@ class Config:
     # How many fixed `slot-NN` directories bead worktrees are drawn from; 0 gives each bead
     # a new directory, as before.
     worktree_slots: int = 0
+    # `[push] queue = true` lands pushes through the host's merge queue (`run_queue`): one
+    # fast check for a batch of up to `batch` branches. Off keeps one check per push.
+    push_queue: bool = False
+    push_batch: int = DEFAULT_PUSH_BATCH
+    push_timeout: int = DEFAULT_PUSH_TIMEOUT
     roles: dict[str, Any] = field(default_factory=dict)
     tiers: dict[str, Any] = field(default_factory=dict)
 
@@ -280,6 +289,7 @@ class Config:
         data = tomllib.loads(text)
         checks = data.get("checks", {})
         worktree = data.get("worktree", {})
+        push = data.get("push", {})
         return Config(
             remote=data.get("remote", "origin"),
             staging=data.get("staging_branch", "staging"),
@@ -292,6 +302,9 @@ class Config:
             worktree_create=worktree.get("create") or None,
             worktree_remove=worktree.get("remove") or None,
             worktree_slots=int(worktree.get("slots") or 0),
+            push_queue=bool(push.get("queue", False)),
+            push_batch=max(1, int(push.get("batch") or DEFAULT_PUSH_BATCH)),
+            push_timeout=int(push.get("timeout") or DEFAULT_PUSH_TIMEOUT),
             roles=data.get("roles", {}),
             tiers=data.get("tiers", {}),
         )
@@ -2277,6 +2290,247 @@ def recover_deliveries(repo: Repo) -> list[dict[str, Any]]:
     return recovered
 
 
+# ---------------------------------------------------------------------------
+# Merge queue
+#
+# With `[push] queue = true`, `enact push` rebases in its own tree as before, then adds its
+# branch to the host's queue (files in `<git common dir>/enact/queue`) and waits for a
+# verdict. Whichever waiting push holds `queue.lock` is the integrator: it rebases a batch of
+# queued branches in order onto staging in a tree of its own, runs the fast check once on the
+# result and pushes it. There is no daemon: when the integrator exits or dies, the OS frees
+# the lock and the next waiting push takes over the entries still without a verdict.
+
+QUEUE_POLL_SECONDS = 1.0
+# Hidden, so no bead's worktree can take the name.
+QUEUE_TREE = ".merge-queue"
+
+
+def queue_dir(repo: Repo) -> Path:
+    path = repo.state / "queue"
+    path.mkdir(exist_ok=True)
+    return path
+
+
+def verdict_path(repo: Repo, entry_id: str) -> Path:
+    return queue_dir(repo) / f"{entry_id}.verdict.json"
+
+
+def drop_entry(repo: Repo, entry_id: str) -> None:
+    (queue_dir(repo) / f"{entry_id}.json").unlink(missing_ok=True)
+    verdict_path(repo, entry_id).unlink(missing_ok=True)
+
+
+def queued(repo: Repo) -> list[dict[str, Any]]:
+    """Entries still waiting for a verdict, oldest first. An entry whose push process has
+    died is dropped: nobody is left to finish its delivery or to fix a failure."""
+    entries = []
+    for path in queue_dir(repo).glob("*.json"):
+        if path.name.endswith(".verdict.json"):
+            # A verdict for an entry dropped while its batch ran has no reader.
+            if not path.with_name(path.name.removesuffix(".verdict.json") + ".json").exists():
+                path.unlink(missing_ok=True)
+            continue
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            continue
+        if not pid_alive(entry["pid"]):
+            drop_entry(repo, entry["id"])
+        elif not verdict_path(repo, entry["id"]).exists():
+            entries.append(entry)
+    return sorted(entries, key=lambda e: (e["enqueued"], e["id"]))
+
+
+def decide(repo: Repo, entry: dict[str, Any], verdict: dict[str, Any]) -> None:
+    write_json(verdict_path(repo, entry["id"]), verdict)
+
+
+def set_aside(entries: list[dict[str, Any]], output: str) -> list[dict[str, Any]]:
+    """The entries to check apart from the rest after their batch failed its fast check:
+    those whose changed files the check's output names, or, when it names none or all of
+    them, the later half."""
+    named = [e for e in entries if any(name in output for name in e["files"])]
+    if 0 < len(named) < len(entries):
+        return named
+    return entries[len(entries) // 2:]
+
+
+def queue_tree(repo: Repo) -> Path:
+    """The integrator's worktree. It is kept between batches, on a detached HEAD, so its
+    build directories stay warm; the sweep keeps it as a tree not on an Enact branch."""
+    path = repo.worktree_root() / QUEUE_TREE
+    registered = {Path(e["worktree"]).resolve() for e in worktree_entries(repo)}
+    if path.resolve() not in registered:
+        if path.exists():
+            rmtree(path)  # a leftover git no longer tracks
+        repo.git("worktree", "prune", cwd=repo.main)
+        create_worktree(repo, QUEUE_TREE, None, repo.remote_ref(repo.config.staging))
+    return path
+
+
+def settle_landed(repo: Repo, entries: list[dict[str, Any]]) -> set[str]:
+    """Give a landed verdict to each entry whose push reached staging under an integrator
+    that died before recording the verdicts; its delivery receipt says so."""
+    ids = {e["id"]: e for e in entries}
+    settled = set()
+    for receipt in delivery_receipts(repo).glob("*.json"):
+        try:
+            data = json.loads(receipt.read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            continue
+        entry = ids.get(data.get("queue", ""))
+        if entry and repo.git_ok("merge-base", "--is-ancestor", data["head"],
+                                 repo.remote_ref(repo.config.staging)):
+            decide(repo, entry, {"status": "landed", "receipt": str(receipt), "delivery": data,
+                                 "staging": data["head"]})
+            settled.add(entry["id"])
+    return settled
+
+
+def run_queue(repo: Repo, own: str) -> None:
+    """Land queued branches, a batch at a time, until entry `own` has a verdict. The caller
+    holds `queue.lock`."""
+    tree = queue_tree(repo)
+    stats = {"checks": 0}
+    while not verdict_path(repo, own).exists():
+        fetch(repo)
+        entries = queued(repo)
+        if own not in {e["id"] for e in entries}:
+            break  # replaced by a newer push from the same tree
+        settled = settle_landed(repo, entries)
+        batch = [e for e in entries if e["id"] not in settled][:repo.config.push_batch]
+        if batch:
+            land(repo, tree, batch, stats)
+
+
+def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], stats: dict[str, int]) -> None:
+    """Rebase `entries` in order onto staging in `tree`, run the fast check once on the result
+    and push it.
+
+    An entry that no longer applies gets a `conflict` verdict and its push re-integrates in
+    its own tree. A failing check splits the batch (`set_aside`): the rest land without the
+    set-aside entries, which are then checked on their own. One bad branch among five whose
+    files the check names costs three checks, and the other four land in one push.
+    """
+    cfg = repo.config
+    staging = repo.remote_ref(cfg.staging)
+    for attempt in range(6):
+        entries = [e for e in entries if not verdict_path(repo, e["id"]).exists()]
+        fetch(repo)
+        repo.git("reset", "-q", "--hard", staging, cwd=tree)
+        repo.git("clean", "-q", "-fd", cwd=tree)
+        picked = []
+        for entry in entries:
+            before = repo.git("rev-parse", "HEAD", cwd=tree)
+            if entry["base"] == before:  # keeps the branch's own commits
+                applied = repo.git_ok("merge", "-q", "--ff-only", entry["head"], cwd=tree)
+            else:
+                applied = repo.git_ok("cherry-pick", "--allow-empty",
+                                      f"{entry['base']}..{entry['head']}", cwd=tree)
+            if not applied:
+                repo.git_ok("cherry-pick", "--abort", cwd=tree)
+                repo.git("reset", "-q", "--hard", before, cwd=tree)
+                decide(repo, entry, {"status": "conflict"})
+                continue
+            picked.append({**entry, "head": repo.git("rev-parse", "HEAD", cwd=tree),
+                           "commits": repo.git("rev-list", "--reverse", f"{before}..HEAD",
+                                               cwd=tree).split()})
+        if not picked:
+            return
+        fast = find_repo(tree).config.fast
+        log(f"merge queue: checking {len(picked)} branch(es) on {staging}")
+        code, output = run_bounded(fast, tree, cfg.push_timeout) if fast else (0, "")
+        stats["checks"] += 1
+        if code:
+            if len(picked) == 1:
+                decide(repo, picked[0], {"status": "failed", "output": output[-20000:]})
+                return
+            aside = {e["id"] for e in set_aside(picked, output)}
+            land(repo, tree, [e for e in entries if e["id"] not in aside], stats)
+            land(repo, tree, [e for e in entries if e["id"] in aside], stats)
+            return
+        with ownership_lock(repo):
+            graph: list[dict[str, Any]] = []
+            if any(e["bead"] for e in picked):
+                sync(repo)
+                graph = Beads(repo).all()
+            lost = False
+            for entry in picked:
+                if not entry["bead"]:
+                    continue
+                bead = next((b for b in graph if b["id"] == entry["bead"]), None)
+                try:
+                    if not bead:
+                        raise Fail(f"bead {entry['bead']} not found")
+                    require_owner(bead, entry["owner"])
+                except Fail as error:
+                    decide(repo, entry, {"status": "error", "error": str(error),
+                                         "code": error.code})
+                    lost = True
+            if lost:
+                continue  # rebuild the batch without the entries that lost ownership
+            receipts = []
+            for entry in picked:
+                bead = next((b for b in graph if b["id"] == entry["bead"]), {})
+                data = {"bead": entry["bead"], "head": entry["head"], "commits": entry["commits"],
+                        "history": list(dict.fromkeys(
+                            (meta(bead, "enact_commits") or "").split() + entry["commits"])),
+                        "runs": bead_runs(bead, graph) if bead else [], "ci": entry["ci"],
+                        "queue": entry["id"]}
+                receipt = delivery_receipts(repo) / f"{entry['head']}.json"
+                # Written before the push, so a lost push response is recoverable.
+                write_json(receipt, data)
+                receipts.append((entry, receipt, data))
+            tip = repo.git("rev-parse", "HEAD", cwd=tree)
+            if repo.git_ok("push", "-q", cfg.remote, f"{tip}:refs/heads/{cfg.staging}", cwd=tree):
+                for entry, receipt, data in receipts:
+                    decide(repo, entry, {"status": "landed", "receipt": str(receipt),
+                                         "delivery": data, "staging": tip,
+                                         "batch": len(picked), "checks": stats["checks"]})
+                return
+            for _, receipt, _ in receipts:
+                receipt.unlink(missing_ok=True)
+        log(f"merge queue: push to {cfg.staging} rejected (attempt {attempt + 1}); rebuilding")
+    for entry in entries:
+        if not verdict_path(repo, entry["id"]).exists():
+            decide(repo, entry, {"status": "error", "code": 1, "error":
+                                 f"could not push to {cfg.staging} after repeated attempts"})
+
+
+def queue_push(repo: Repo, args: argparse.Namespace, base: str, head: str) -> dict[str, Any]:
+    """Queue `base..head`, already rebased onto staging, and wait for its verdict, running
+    the queue whenever no other push on this host is."""
+    owner = ""
+    if args.bead:
+        owner = as_owner(require_actor(None), Beads(repo).show(args.bead))
+    entry = {"id": f"{time.time_ns():020d}-{os.getpid()}", "top": str(repo.top),
+             "base": base, "head": head, "bead": args.bead, "owner": owner,
+             "files": repo.git("diff", "--name-only", "--no-renames", base, head).splitlines(),
+             "ci": bool(repo.config.slow and not args.no_ci), "pid": os.getpid(),
+             "enqueued": time.time()}
+    folder = queue_dir(repo)
+    for old in queued(repo):
+        if old["top"] == entry["top"]:
+            drop_entry(repo, old["id"])
+    write_json(folder / f"{entry['id']}.json", entry)
+    lock = repo.state / "queue.lock"
+    try:
+        while not verdict_path(repo, entry["id"]).exists():
+            if not (folder / f"{entry['id']}.json").exists():
+                raise Fail("another push from this worktree replaced this one in the queue")
+            guard = try_lock(lock)
+            if guard is None:
+                time.sleep(QUEUE_POLL_SECONDS)
+                continue
+            try:
+                run_queue(repo, entry["id"])
+            finally:
+                release_lock(lock, guard)
+        return json.loads(verdict_path(repo, entry["id"]).read_text(encoding="utf-8"))
+    finally:
+        drop_entry(repo, entry["id"])
+
+
 def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     """Rebase, run the fast check and publish to staging.
 
@@ -2285,6 +2539,9 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     fast check run outside it, so other pushes, claims and syncs on this host
     proceed while a check runs; a push that loses the race to staging is
     rejected by the remote and re-integrates, as before.
+
+    With `[push] queue = true`, the fast check runs in the host's merge queue
+    instead (`queue_push`), once for a batch of pushes.
     """
     repo = find_repo()
     enact_update = update_enact()
@@ -2308,6 +2565,7 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     # staging, the check runs again with ENACT_CHECKED set to it, so a project's
     # check may skip what the commits that landed meanwhile cannot affect.
     checked = ""
+    queueing = cfg.push_queue and cfg.fast and not args.skip_checks
     for attempt in range(6):
         integrate(repo)
         before = repo.git("rev-parse", staging)
@@ -2316,6 +2574,31 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
             if not recovered:
                 return result
             result["recovered"] = recovered
+            break
+        # The integrator replays commits one by one, so a branch that merged a diverged
+        # master (rare: someone bypassed staging) takes the direct path.
+        if queueing and not repo.git("rev-list", "--merges", f"{before}..{head}"):
+            verdict = queue_push(repo, args, before, head)
+            if verdict["status"] == "conflict":
+                log("a branch queued ahead of this one conflicts with it; re-integrating")
+                fetch(repo)
+                continue
+            if verdict["status"] == "failed":
+                sys.stderr.write(verdict["output"])
+                raise Fail("fast checks failed; fix them and run `enact push` again", code=2)
+            if verdict["status"] != "landed":
+                raise Fail(verdict["error"], code=verdict["code"])
+            data = verdict["delivery"]
+            receipt = Path(verdict["receipt"])
+            with ownership_lock(repo):
+                result = {"pushed": True, **finish_delivery(repo, receipt, data, start=False)}
+            result["queue"] = {k: verdict[k] for k in ("batch", "checks") if k in verdict}
+            # The tree now holds what landed: the queue may have replayed its commits.
+            repo.git("reset", "-q", "--hard", data["head"])
+            bead = Beads(repo).show(args.bead) if args.bead else {}
+            pending_ci = receipt if data["ci"] else None
+            if recovered:
+                result["recovered"] = recovered
             break
         if cfg.fast and not args.skip_checks:
             if run_shell(cfg.fast, repo.top, {"ENACT_CHECKED": checked} if checked else None):

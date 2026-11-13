@@ -109,6 +109,8 @@ root = ".worktrees"   # inside the checkout; gitignored
 # create = "scripts/enact-worktree create"   # full replacement hooks
 # remove = "scripts/enact-worktree remove"
 # slots = 20   # reuse slot-01..slot-20 for beads, keeping build directories
+# [push]
+# queue = true   # one fast check per batch of this host's pushes (merge queue)
 [roles.warden.claude]
 effort = "max"
 [tiers.light.claude]  # beads labeled tier:light (mechanical work)
