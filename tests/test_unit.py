@@ -242,6 +242,43 @@ class RunBoundedTest(unittest.TestCase):
                 os.kill(grandchild, 0)
 
 
+@unittest.skipIf(enact.WINDOWS, "reaping is skipped on Windows")
+class ReapProcessesTest(unittest.TestCase):
+    def test_processes_inside_a_tree_end_and_others_stay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree, elsewhere = Path(tmp, "tree").resolve(), Path(tmp, "other").resolve()
+            tree.mkdir()
+            elsewhere.mkdir()
+            inside = subprocess.Popen(["sleep", "60"], cwd=tree)
+            ignores_term = subprocess.Popen(
+                [sys.executable, "-c",
+                 "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN);"
+                 "print('ready', flush=True); time.sleep(60)"],
+                cwd=tree, stdout=subprocess.PIPE, text=True)
+            ignores_term.stdout.readline()  # the handler is installed
+            outside = subprocess.Popen(["sleep", "60"], cwd=elsewhere)
+            try:
+                ended = enact.reap_processes(tree, grace=1)
+                self.assertEqual({e["pid"] for e in ended}, {inside.pid, ignores_term.pid})
+                self.assertIsNotNone(inside.wait(timeout=10))
+                self.assertIsNotNone(ignores_term.wait(timeout=10))
+                self.assertIsNone(outside.poll())
+            finally:
+                for process in (inside, ignores_term, outside):
+                    process.kill()
+                    process.wait()
+                ignores_term.stdout.close()
+
+    def test_this_process_is_spared_even_when_its_cwd_is_the_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            previous = os.getcwd()
+            os.chdir(tmp)
+            try:
+                self.assertEqual(enact.reap_processes(Path(tmp), grace=1), [])
+            finally:
+                os.chdir(previous)
+
+
 class RunMissingTest(unittest.TestCase):
     def test_missing_tool_names_it(self):
         with tempfile.TemporaryDirectory() as tmp:

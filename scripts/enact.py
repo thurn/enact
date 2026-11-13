@@ -1808,12 +1808,100 @@ def create_worktree(repo: Repo, name: str, branch: str | None, base: str) -> Pat
     return path
 
 
-def remove_worktree(repo: Repo, path: Path, branch: str | None) -> None:
+def process_ancestors() -> set[int]:
+    """This process and every process above it, which reaping must spare."""
+    spared = {os.getpid()}
+    pid = os.getppid()
+    while pid > 1 and pid not in spared:
+        spared.add(pid)
+        out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True,
+                             text=True, check=False).stdout.strip()
+        pid = int(out) if out.isdigit() else 0
+    return spared
+
+
+def processes_inside(path: Path) -> dict[int, str]:
+    """Map pid to command for processes whose cwd or executable is under `path`.
+
+    Uses `lsof` for the working directory and executable of every process
+    (macOS has no /proc); where lsof is missing, reads /proc instead.
+    """
+    root = str(path.resolve())
+    found: dict[int, str] = {}
+
+    def inside(candidate: str) -> bool:
+        return candidate == root or candidate.startswith(root + os.sep)
+
+    if shutil.which("lsof"):
+        lister = subprocess.Popen(["lsof", "-w", "-F", "pcn", "-d", "cwd,txt"],
+                                  stdout=subprocess.PIPE, text=True)
+        out = lister.communicate()[0]
+        pid, command = 0, ""
+        for line in out.splitlines():
+            if line[:1] == "p" and line[1:].isdigit():
+                pid, command = int(line[1:]), ""
+            elif line[:1] == "c":
+                command = line[1:]
+            elif line[:1] == "n" and inside(line[1:]):
+                found[pid] = command
+        found.pop(lister.pid, None)  # the lister inherits this process's cwd
+    elif Path("/proc/self").exists():
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdigit():
+                continue
+            for link in ("cwd", "exe"):
+                with contextlib.suppress(OSError):
+                    if inside(os.readlink(entry / link)):
+                        found[int(entry.name)] = (entry / "comm").read_text().strip()
+    return found
+
+
+def reap_processes(path: Path, grace: float = 3.0) -> list[dict[str, Any]]:
+    """End every process using a worktree: SIGTERM, then SIGKILL after `grace` seconds.
+
+    A fuzz run started in a bead's worktree once kept a core busy for hours
+    after the bead closed and the tree was deleted. Never ends this process
+    or its ancestors, whose working directory may be the tree itself.
+    """
+    if WINDOWS:
+        log(f"not ending processes in {path}: unsupported on Windows")
+        return []
+    spared = process_ancestors()
+    victims = {pid: command for pid, command in processes_inside(path).items()
+               if pid not in spared}
+    for pid in victims:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + grace
+    alive = set(victims)
+    while alive and time.monotonic() < deadline:
+        alive = {pid for pid in alive if not process_exited(pid)}
+        if alive:
+            time.sleep(0.1)
+    for pid in alive:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+    for pid, command in victims.items():
+        log(f"ended process {pid} ({command}) using worktree {path}")
+    return [{"pid": pid, "command": command} for pid, command in victims.items()]
+
+
+def process_exited(pid: int) -> bool:
+    # A terminated child of this process stays a zombie until it is reaped.
+    with contextlib.suppress(ChildProcessError):
+        if os.waitpid(pid, os.WNOHANG)[0] == pid:
+            return True
+    return not pid_alive(pid)
+
+
+def remove_worktree(repo: Repo, path: Path, branch: str | None) -> list[dict[str, Any]]:
+    """Delete a worktree and its branch; return the processes ended inside it."""
+    ended = reap_processes(path) if path.exists() else []
     if repo.config.worktree_remove:
         env = worktree_env(repo, path, branch or "", "")
         if run_shell(repo.config.worktree_remove, repo.main, env) != 0:
             raise Fail("worktree remove hook failed")
-        return
+        return ended
     repo.git("worktree", "remove", "--force", str(path), cwd=repo.main, check=False)
     # A build server still writing output can refill a tree as git deletes
     # it. Git no longer tracks what is left, so finish the job if possible;
@@ -1825,6 +1913,7 @@ def remove_worktree(repo: Repo, path: Path, branch: str | None) -> None:
     if branch:
         repo.git("branch", "-D", branch, cwd=repo.main, check=False)
     repo.git("worktree", "prune", cwd=repo.main, check=False)
+    return ended
 
 
 def rmtree(path: Path) -> None:
@@ -1858,11 +1947,12 @@ def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
     staging = repo.remote_ref(repo.config.staging)
     removed: list[str] = []
     kept: dict[str, str] = {}
+    ended: list[dict[str, Any]] = []
     registered = set()
 
     def remove(path: Path, branch: str | None) -> None:
         try:
-            remove_worktree(repo, path, branch)
+            ended.extend(remove_worktree(repo, path, branch))
         except (Fail, OSError) as error:
             kept[str(path)] = f"removal failed: {error}"
             return
@@ -1915,6 +2005,7 @@ def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
         elif time.time() - path.stat().st_mtime < SWEEP_AGE:
             kept[str(path)] = "changed within the last hour"
         else:
+            ended.extend(reap_processes(path))
             try:
                 rmtree(path)
             except OSError as error:
@@ -1922,7 +2013,7 @@ def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
                 continue
             log(f"swept stray directory {path}")
             removed.append(str(path))
-    return {"removed": removed, "kept": kept}
+    return {"removed": removed, "kept": kept, **({"ended_processes": ended} if ended else {})}
 
 
 def worktree_bead(repo: Repo, path: Path) -> dict[str, Any] | None:
@@ -2018,8 +2109,8 @@ def bead_worktree(args: argparse.Namespace) -> dict[str, Any]:
             not repo.git_ok("merge-base", "--is-ancestor", branch,
                             repo.remote_ref(repo.config.staging))):
         raise Fail("branch contains unpublished commits; preserve it for recovery", code=2)
-    remove_worktree(repo, path, branch)
-    return {"removed": str(path)}
+    ended = remove_worktree(repo, path, branch)
+    return {"removed": str(path), **({"ended_processes": ended} if ended else {})}
 
 
 # ---------------------------------------------------------------------------
@@ -2201,8 +2292,11 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
                     f"or move them, then run `enact worktree remove {repo.top.name}`.")
             else:
                 os.chdir(repo.main)
-                remove_worktree(repo, repo.top, branch if branch.startswith("enact/") else None)
+                ended = remove_worktree(repo, repo.top,
+                                        branch if branch.startswith("enact/") else None)
                 result["removed_worktree"] = str(repo.top)
+                if ended:
+                    result["ended_processes"] = ended
     finally:
         # Slow CI starts after the remove hook, which may save the build
         # caches the runner's fresh worktree warms itself from.

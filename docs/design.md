@@ -1101,3 +1101,14 @@ blindly recreate jobs or hand-edit scheduler databases.
   epic's labels, which would join unrelated beads into one lane.
 - No helper change. The scheduler still treats a lane as "one session at a
   time"; the rules only change which beads share a label.
+
+## Removing a worktree ends its processes
+
+A fuzz run started in a bead's worktree kept a core busy for four and a half
+hours after the bead closed and the tree was deleted, because nothing reads the
+result of a process whose directory is gone. `remove_worktree` and the sweep
+now end every process whose working directory or executable is inside the tree
+(SIGTERM, then SIGKILL after three seconds) before deleting it, never the
+calling process or its ancestors. The processes found by `lsof` (or `/proc`)
+are reported as `ended_processes` in the JSON of `worktree remove`, `push` and
+the sweep. On Windows reaping is skipped and logged.

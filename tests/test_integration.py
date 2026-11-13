@@ -5,6 +5,7 @@ machines, then drives the CLI exactly as agents do.
 """
 
 import concurrent.futures
+import importlib.util
 import json
 import os
 import queue
@@ -233,6 +234,34 @@ class CiLifetimeTest(unittest.TestCase):
                         coordinator.wait(timeout=10)
                         # Let any authorized orphan finish before removing its repository.
                         self.wait_for(lambda: not cli("--status")["running"])
+
+
+@unittest.skipUnless(shutil.which("git"), "needs git")
+@unittest.skipIf(os.name == "nt", "reaping is skipped on Windows")
+class WorktreeRemovalReapsTest(unittest.TestCase):
+    def test_removing_a_worktree_ends_processes_running_in_it(self):
+        spec = importlib.util.spec_from_file_location("enact_reap", SCRIPT)
+        enact = importlib.util.module_from_spec(spec)
+        sys.modules["enact_reap"] = enact
+        spec.loader.exec_module(enact)
+        with tempfile.TemporaryDirectory() as directory:
+            repo_dir = Path(directory).resolve() / "repo"
+            sh(["git", "init", "-q", "-b", "master", str(repo_dir)], Path(directory))
+            sh(["git", "config", "user.email", "test@example.com"], repo_dir)
+            sh(["git", "config", "user.name", "Test"], repo_dir)
+            sh(["git", "commit", "-q", "--allow-empty", "-m", "initial"], repo_dir)
+            repo = enact.find_repo(repo_dir)
+            tree = repo_dir / ".worktrees" / "bead"
+            sh(["git", "worktree", "add", "-q", "-b", "enact/bead", str(tree)], repo_dir)
+            sleeper = subprocess.Popen(["sleep", "60"], cwd=tree)
+            try:
+                ended = enact.remove_worktree(repo, tree, "enact/bead")
+                self.assertEqual([e["pid"] for e in ended], [sleeper.pid])
+                sleeper.wait(timeout=10)
+                self.assertFalse(tree.exists())
+            finally:
+                sleeper.kill()
+                sleeper.wait()
 
 
 @unittest.skipUnless(shutil.which("git"), "needs git")
