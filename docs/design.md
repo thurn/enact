@@ -1076,6 +1076,29 @@ blindly recreate jobs or hand-edit scheduler databases.
   `clear_session`. Fresh chats give each assignment its own context and
   history.
 
+## Codex event waits (2026-11-13)
+
+- A Beryl Codex vizier spent many model continuations holding a foreground
+  `enact next --wait 540` call while its worker chat ran. The helper already
+  blocked, but Codex's bounded command waits woke the model about once a
+  minute; repeated status narration added tokens without changing work.
+- `enact next` now includes `inflight_threads` for a Codex vizier's bound,
+  open beads. It reads these IDs from the graph already fetched for
+  scheduling. Claude results and the Claude background-command loop are
+  unchanged. The Codex reminder describes its event wait after compaction.
+- The Codex vizier makes an immediate `enact next --wait 0` scheduling pass.
+  On `wait` with active bound chats, it uses `wait_threads` with cursors for
+  up to five minutes and then makes another immediate scheduling pass. The
+  host wakes it when a worker turn ends or needs attention; the timeout
+  catches bead, remote-host and CI changes and renews the 20-minute local
+  vizier lease. At most eight chats fit one wait; rotate when there are more.
+- A worker can close a bead before its turn ends. The next dependent spawn
+  may then lag by up to five minutes. A chat that has already completed but
+  still owns an open bead cannot wake another event wait. With no active
+  bound chat, Codex falls back to `enact next --wait 540`, preserving CI and
+  remote-host progress and existing recovery checks. `enact next` remains
+  the only authority for claiming, spawning and archiving work.
+
 ## Speculative defaults instead of questions (2026-11-13)
 
 - A Beryl run stalled four times on questions the vizier put to the user:

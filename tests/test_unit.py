@@ -1458,6 +1458,10 @@ class CommandPolicyTest(unittest.TestCase):
         self.assertNotIn("session", step)
         codex("meta", first, "enact_session=exec-1", "--reservation", step["reservation"])
         codex("start", first, "--reservation", step["reservation"], thread="exec-1")
+        step = codex("next", "--epic", epic)
+        self.assertEqual((step["action"], step["inflight_threads"]),
+                         ("wait", ["exec-1"]))
+        self.assertIn("wait_threads", step["reminder"])
         codex("close", first, "--reason", "done", thread="exec-1")
         step = codex("next", "--epic", epic)
         self.assertEqual(step["archive"], [{"bead": first, "session": "exec-1"}])
@@ -1481,6 +1485,7 @@ class CommandPolicyTest(unittest.TestCase):
             step = self.a.enact("next", "--epic", epic, "--parallel", "3")
         self.assertEqual((step["bead"], step["settings"]), (first, {"model": "sonnet"}))
         self.assertIn("set_session_model", step["model_required"])
+        self.assertNotIn("wait_threads", step["reminder"])
         self.a.enact("meta", first, "enact_session=worker", "--reservation", step["reservation"])
         self.start_worker(self.a, first, "worker")
         # The rest of the lane waits for the session that holds it.
@@ -1520,6 +1525,7 @@ class CommandPolicyTest(unittest.TestCase):
                          ("spawn", beads[0], "local_a"))
         self.assertIn("never call start_session", step["pool_notice"])
         self.assertIn("background", step["reminder"])
+        self.assertNotIn("inflight_threads", step)
         self.a.enact("meta", beads[0], "enact_session=local_a", "--reservation", step["reservation"])
         self.a.enact("start", beads[0], "--reservation", step["reservation"], env=desktop("local_a"))
         # A reused member answers at once and may start before the vizier records it.
@@ -1530,8 +1536,9 @@ class CommandPolicyTest(unittest.TestCase):
         self.a.enact("start", beads[1], "--reservation", step["reservation"], env=desktop("local_b"))
         self.a.enact("meta", beads[1], "enact_session=local_b", "--reservation", step["reservation"])
         self.assertEqual(self.a.show(beads[1])["assignee"], "local_b")
-        self.assertEqual(self.a.enact("next", "--epic", epic, "--parallel", "2")["reason"],
-                         "capacity")
+        step = self.a.enact("next", "--epic", epic, "--parallel", "2")
+        self.assertEqual(step["reason"], "capacity")
+        self.assertNotIn("inflight_threads", step)
         self.a.enact("close", beads[0], "--reason", "done", env=desktop("local_a"))
         # Members rotate, finished members stay unarchived, and a refusal rests one.
         self.a.enact("pool", "rest", "local_c")

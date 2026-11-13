@@ -1613,6 +1613,15 @@ LOOP_REMINDER = (
     "Run `enact next` in the foreground and continue in this turn."
 )
 
+CODEX_LOOP_REMINDER = (
+    "Vizier loop: handle this action, including archive and spawn bookkeeping. "
+    "For action: wait, use event-driven `wait_threads` on active "
+    "`inflight_threads` for up to five minutes, then recheck with "
+    "`enact next --wait 0`. If none can signal progress, use the foreground "
+    "`enact next --wait 540` fallback. Keep one scheduler process at a time "
+    "and continue until done, paused or blocked."
+)
+
 
 @serialized
 def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any]:
@@ -1646,12 +1655,17 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
         "host": host_name(),
         # Pool members are reused, so they are archived only when the run ends.
         "archive": [item for item in finished if item["session"] not in members],
-        "reminder": POOL_REMINDER if pooled else LOOP_REMINDER,
+        "reminder": (POOL_REMINDER if pooled else CODEX_LOOP_REMINDER
+                     if provider() == "codex" else LOOP_REMINDER),
     }
     if pooled:
         result["pool_notice"] = POOL_NOTICE
     inflight = [b for b in mine if b.get("status") != "closed"]
     result["inflight"] = [b["id"] for b in inflight]
+    if provider() == "codex":
+        # The host can wait for these chats without another Beads lookup.
+        result["inflight_threads"] = sorted({meta(b, "enact_session") for b in inflight
+                                              if meta(b, "enact_session")})
 
     delivery = run_delivery(repo, graph, epic)
     result["delivery"] = delivery

@@ -60,7 +60,7 @@ chats; carry that authority into every worker and recovery prompt.
 | Archive | `archive_session` | `set_thread_archived` |
 | Message | `send_message` | `send_message_to_thread` |
 | Inspect | `get_session`, `list_sessions` | `read_thread`, `list_threads` |
-| Wait | background `enact next` | `wait_threads` |
+| Wait | background `enact next` | `wait_threads` or `enact next` |
 
 In Claude Desktop, load deferred tools with ToolSearch before first use.
 Subagents are never Enact sessions. In Codex, use the returned tool host ID
@@ -104,9 +104,9 @@ Justiciar recovery if no unique child can be established. Never create a
 replacement to resolve an ambiguous result. Each created chat must appear
 in the final response as a separate `::created-thread{threadId="..."}` line
 (or `clientThreadId` for still-pending setup). Retain these receipts across
-compaction. Normal scheduling waits through `enact next`; use bounded
-`wait_threads` with real IDs and returned cursors only for launch checks
-or recovery. Do not poll healthy worker chats in the vizier loop.
+compaction. `enact next` remains the scheduling authority. Its
+`inflight_threads` lists bound Codex chats owned by this vizier; use it for
+the event wait below. Do not inspect healthy worker chats in the loop.
 
 ### Claude Desktop session pool
 
@@ -419,16 +419,33 @@ it, start it again the same way and end your turn. A wake with no finished
 `enact next` (a session's report, a stale notice) needs no action: end the
 turn. If you find none running and no result unhandled, start one.
 
-In Codex, run `enact next --epic <epic> --parallel <N> --wait 540`
-inside the same turn as one foreground process:
-`exec_command` may return a `session_id` before the helper finishes; resume
-that same process with `write_stdin` in waits of at most 60 seconds. If the
-orchestration wrapper itself yields a cell ID, resume it with its `wait`
-tool first. Never launch a second `next` while the first still runs. Read the
-final JSON once the process exits. Check user steering between waits. On a
-stop, record the shared pause immediately, then drain the process without
-acting on a stale spawn result. Retain any unbound reservation and its token
-under the shared hold. After explicit resume, reconcile whether a child was
+In Codex, start with `enact next --epic <epic> --parallel <N> --wait 0`.
+Handle its action, including `archive`, before waiting. For `action: wait`:
+
+- If `inflight_threads` names bound Codex chats, call `wait_threads` with
+  those IDs and their returned host IDs (when known), at most eight targets.
+  First get a `timeoutMs: 0` snapshot for IDs without a cursor. Wait only on
+  chats whose latest turn is still in progress, passing each saved cursor
+  as `afterCursor`. Use `timeoutMs: 300000` (five minutes); if the host
+  rejects that duration, use its supported maximum. Rotate targets when
+  more than eight chats are in flight. On a wake or timeout, save cursors
+  and run `enact next --wait 0` again. The timeout also refreshes the
+  vizier's 20-minute lease and catches Beads or CI changes before a chat
+  finishes. A completed chat with an open bead is not a reason to spin on
+  repeated terminal snapshots. Call `wait_threads` directly when available;
+  if an orchestration wrapper is required, set its yield time to cover the
+  wait and resume the same call if the wrapper yields.
+- If no active, known Codex chat can wake the wait, use the foreground
+  `enact next --wait 540` process. This covers CI-only, remote-host and
+  unbound work. Resume its `session_id` with `write_stdin` in waits of at
+  most 60 seconds, or a yielded orchestration cell with its `wait` tool.
+  Read the final JSON after exit and handle it as usual.
+
+Never launch a second `next` while one runs. Check user steering between
+waits; `wait_threads` returns early for new user input. On a stop, record
+the shared pause immediately, then drain a running `next` without acting
+on a stale spawn result. Retain any unbound reservation and its token under
+the shared hold. After explicit resume, reconcile whether a child was
 created; if confirmed unbound, release with that token before scheduling
 again. Never release a bound or uncertain child just to restart the loop.
 
@@ -490,7 +507,8 @@ action or when the wait runs out. Handle the JSON:
    pre-flight, `enact pool add` them, retitle 🔮 and restart the loop. At
    the limit, ask them to run `/enact-plan <epic>` in a new session, which
    joins this epic with a fresh pool.
-5. **`action: wait`**: nothing to do yet. Run `enact next` again.
+5. **`action: wait`**: nothing to do yet. In Claude Desktop, run `enact next`
+   again in the background. In Codex, follow its wait path above.
 6. **`action: deadlock`**: open beads remain but nothing can ever become
    ready. Run `enact justiciar request --reason "Deadlock in epic <epic>:
    <open beads>"` (exit 3 means one is already requested or active), then
