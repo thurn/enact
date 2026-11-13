@@ -807,6 +807,44 @@ class VizierLeaseTest(unittest.TestCase):
         cygnus = enact.run_routes(self.epic(host="cygnus"))
         self.assertTrue(enact.route_leases(self.repo, "e", cygnus)[1])
 
+    def prune(self, *graph, complete):
+        delivery = {"commits": [], "pending": [], "stewards": [], "complete": complete}
+        saved = []
+        beads = mock.Mock()
+        beads.all.return_value = list(graph)
+        with mock.patch.object(enact, "sync"), mock.patch.object(enact, "Beads",
+                                                                 return_value=beads), \
+                mock.patch.object(enact, "run_delivery", return_value=delivery), \
+                mock.patch.object(enact, "save_run_meta",
+                                  side_effect=lambda *a: saved.append(a)):
+            pruned = enact.prune_runs(self.repo)
+        return pruned, saved, beads
+
+    def test_prune_finishes_a_stale_run_whose_delivery_is_complete(self):
+        self.lease(enact.VIZIER_LEASE_SECONDS + 1)
+        pruned, saved, _ = self.prune(self.epic(), complete=True)
+        self.assertEqual([(p["epic"], p["state"]) for p in pruned], [("e", "finished")])
+        self.assertEqual(saved[0][:3], (self.repo, "e", "enact_control"))
+        self.assertEqual(saved[0][3]["state"], "finished")
+
+    def test_prune_pauses_a_stale_run_with_pending_work_and_reopens_it(self):
+        pruned, saved, beads = self.prune(self.epic(status="closed"), complete=False)
+        self.assertEqual(pruned[0]["state"], "paused")
+        self.assertIn("lease expired", saved[0][3]["reason"])
+        beads.run.assert_called_once()
+        self.assertEqual(beads.run.call_args.args[:2], ("reopen", "e"))
+
+    def test_prune_leaves_fresh_foreign_finished_and_held_runs_alone(self):
+        self.lease(60)
+        self.assertEqual(self.prune(self.epic(), complete=False)[0], [])
+        self.lease(enact.VIZIER_LEASE_SECONDS + 1)
+        self.assertEqual(self.prune(self.epic(host="cygnus"), complete=False)[0], [])
+        for state in ("finished", "paused"):
+            held = {"enact_control": json.dumps({"state": state, "epoch": "1"})}
+            self.assertEqual(self.prune(self.epic(metadata=held), complete=False)[0], [])
+        # A closed run that delivered everything has nothing left to retire.
+        self.assertEqual(self.prune(self.epic(status="closed"), complete=True)[0], [])
+
     def steward(self, assignee=None, minutes_idle=120, host="jarvis", parent=None):
         updated = enact.dt.datetime.now(enact.dt.timezone.utc) - enact.dt.timedelta(
             minutes=minutes_idle)

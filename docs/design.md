@@ -1288,3 +1288,19 @@ instead of adopting it needs the plan's context.
   are all closed or deferred, and `schedule` ignores deferred beads when it
   looks for open work or a deadlock.
 - The vizier's skill text runs `enact run finish` as its last command.
+
+
+## Pruning stale runs (2026-11-13)
+
+- Routes outlive the viziers that wrote them, so runs whose vizier died
+  stayed in `enact status`. `enact run prune` retires them: a run is stale
+  when it is not finished, paused or blocked, has routes and all of them
+  are on this host, and none has a fresh lease. A run with any route on
+  another host is left alone, because that host's leases cannot be read
+  here. A closed run whose delivery is complete is also skipped.
+- A stale run whose delivery is complete becomes `finished`. One with
+  pending commits or Steward beads becomes `paused` with a reason naming
+  the expired lease (and a closed epic is reopened, as `run pause` does),
+  so a returning vizier resumes it with `enact run resume --explicit`.
+- `enact ci` prunes after it files or updates a Steward bead, and
+  `enact status` lists `stale_runs` with a hint to run the prune.

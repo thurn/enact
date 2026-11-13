@@ -1435,9 +1435,59 @@ def close_finished_epics(repo: Repo) -> list[str]:
             closed.append(bead["id"])
 
 
+def stale_runs(repo: Repo, graph: list[dict[str, Any]],
+               deliveries: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Unfinished runs whose vizier on this machine stopped renewing its lease:
+    every route is on this host and none has a fresh lease. A run with a
+    route on another host is left alone, since that host's leases cannot be
+    read here. Each entry has the epic bead and its delivery."""
+    stale = []
+    for bead in graph:
+        if bead.get("issue_type") != "epic" or run_finished(bead) or stopped_runs(bead, graph):
+            continue
+        routes = vizier_routes(bead, graph)
+        if not routes or any(r.get("host") != host_name() for r in routes):
+            continue
+        delivery = (deliveries or {}).get(bead["id"]) or run_delivery(repo, graph, bead["id"])
+        if bead.get("status") == "closed" and delivery["complete"]:
+            continue
+        if not any(route_alive(repo, bead["id"], r) for r in routes):
+            stale.append({"bead": bead, "delivery": delivery})
+    return stale
+
+
+@serialized
+def prune_runs(repo: Repo) -> list[dict[str, Any]]:
+    """Retire the runs `stale_runs` finds: a fully delivered run is marked
+    `finished`; one with work pending is `paused`, naming the expired lease,
+    so a returning vizier resumes it with `enact run resume --explicit`."""
+    sync(repo)
+    graph = Beads(repo).all()
+    pruned = []
+    for item in stale_runs(repo, graph):
+        bead, delivery = item["bead"], item["delivery"]
+        complete = delivery["complete"]
+        control = run_control(bead)
+        reason = ("pruned: delivery complete and its vizier's lease expired" if complete
+                  else "pruned: its vizier's lease expired with work pending")
+        state = "finished" if complete else "paused"
+        save_run_meta(repo, bead["id"], "enact_control",
+                      {"state": state, "epoch": control["epoch"], "reason": reason,
+                       "actor": "enact run prune", "at": now()})
+        if state == "paused" and bead.get("status") == "closed":
+            Beads(repo).run("reopen", bead["id"], "--reason", reason)
+            sync(repo)
+        pruned.append({"epic": bead["id"], "state": state, "reason": reason})
+    return pruned
+
+
 @serialized
 def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
+    if args.action == "prune":
+        return {"pruned": prune_runs(repo)}
+    if not args.epic:
+        raise Fail(f"run {args.action} needs an epic")
     sync(repo)
     beads = Beads(repo)
     bead = beads.show(args.epic)
@@ -3447,6 +3497,11 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
             "on staging; retesting the newer tip before filing")
         return {"tip": tip, "passed": False, "superseded_by": repaired}
     bead_id = report_ci_failure(repo, tip, green, tail)
+    try:
+        for run in prune_runs(repo):
+            log(f"pruned run {run['epic']} ({run['state']}): {run['reason']}")
+    except Fail as failure:
+        log(f"could not prune stale runs: {failure}")
     log(f"slow CI failed at {tip[:12]} in {seconds} s; steward bead {bead_id}")
     return {"tip": tip, "passed": False, "steward": bead_id, "seconds": seconds}
 
@@ -3549,6 +3604,7 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
     staging = repo.remote_ref(repo.config.staging)
     master = repo.remote_ref(repo.config.master)
     lag = repo.git("rev-list", "--count", f"{master}..{staging}", check=False)
+    stale = [item["bead"]["id"] for item in stale_runs(repo, graph, deliveries)]
     return {
         "host": here,
         "provider": provider(),
@@ -3565,6 +3621,9 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
             b["id"] for b in graph if role_of(b) == "steward" and b.get("status") != "closed"
         ],
         "unowned_stewards": unowned_stewards(repo, graph, deliveries),
+        "stale_runs": stale,
+        **({"hint": "Runs with no fresh vizier lease: `enact run prune` finishes "
+                    "the delivered ones and pauses the rest."} if stale else {}),
     }
 
 
@@ -3869,9 +3928,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--expected-session", help="archive target session")
     p.add_argument("--reservation", help="token from the spawn action for routing changes")
 
-    p = add("run", cmd_run, "Register, finish, pause, block or explicitly resume a shared run.")
-    p.add_argument("action", choices=["register", "finish", "pause", "block", "resume"])
-    p.add_argument("epic")
+    p = add("run", cmd_run, "Register, finish, pause, block, resume or prune shared runs.")
+    p.add_argument("action", choices=["register", "finish", "pause", "block", "resume", "prune"])
+    p.add_argument("epic", nargs="?")
     p.add_argument("--parallel", type=int, default=1)
     p.add_argument("--authorized", action="store_true", help="retain invocation's chat authority")
     p.add_argument("--reason")
