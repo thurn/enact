@@ -468,7 +468,7 @@ class GraphTest(unittest.TestCase):
             self.assertTrue((enact.ENACT_ROOT / "skills" / "enact" / "roles"
                              / f"{role}.md").is_file(), role)
 
-    def test_only_claude_workers_check_their_model(self):
+    def test_only_claude_spawns_require_their_model(self):
         bead = {"id": "x-1", "title": "Work"}
         codex_settings = {"model": "gpt-6.1-sol", "effort": "high"}
         repo = types.SimpleNamespace(config=enact.Config(roles={"executor": {
@@ -477,14 +477,11 @@ class GraphTest(unittest.TestCase):
         with mock.patch.object(enact, "provider", return_value="claude"):
             action = enact.spawn_action(repo, bead, "x-0", "viz")
         self.assertIn("set_session_model", action["model_required"])
-        self.assertIn("must run on the `fable` model", action["prompt"])
-        self.assertLess(action["prompt"].index("fable"), action["prompt"].index("enact start"))
 
         with mock.patch.object(enact, "provider", return_value="codex"):
             action = enact.spawn_action(repo, bead, "x-0", "viz")
         self.assertEqual(action["settings"], codex_settings)
         self.assertNotIn("model_required", action)
-        self.assertNotIn("wrong model", action["prompt"])
         self.assertIn("enact start", action["prompt"])
 
     def test_every_session_is_told_to_end_on_a_status_title(self):
@@ -1484,7 +1481,6 @@ class CommandPolicyTest(unittest.TestCase):
             step = self.a.enact("next", "--epic", epic, "--parallel", "3")
         self.assertEqual((step["bead"], step["settings"]), (first, {"model": "sonnet"}))
         self.assertIn("set_session_model", step["model_required"])
-        self.assertIn("must run on the `sonnet` model", step["prompt"])
         self.a.enact("meta", first, "enact_session=worker", "--reservation", step["reservation"])
         self.start_worker(self.a, first, "worker")
         # The rest of the lane waits for the session that holds it.

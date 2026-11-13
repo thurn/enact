@@ -67,8 +67,8 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   Claude Desktop support. Identify supported tools and execution location
   explicitly rather than treating product names as capability guarantees.
 - Invoking `/enact-plan` (`$enact-plan` in Codex) authorizes creating,
-  messaging and archiving its role chats. Carry that authorization into
-  worker prompts.
+  messaging and archiving its role chats. Worker prompts do not restate it
+  (2026-11-13): it changed no behaviour.
 - A run finishes only when its delivered commits have passed slow CI and
   reached `master`, including any required Steward fixes. Workers may still
   close their beads after pushing. Bead closure alone is not run completion.
@@ -950,9 +950,12 @@ blindly recreate jobs or hand-edit scheduler databases.
   Enact prompt. The holding turn is one trivial reply on the vizier's
   model; the worker's whole bead runs on the tier's.
 - A Claude spawn action that names a model carries `model_required` to
-  preserve these steps across compaction. The worker checks its model before
-  claiming the reservation. The vizier blocks the run if it cannot set the
-  required model.
+  preserve these steps across compaction. The vizier blocks the run if it
+  cannot set the required model. Workers no longer self-check their model
+  (2026-11-13): the vizier's `get_session` confirmation suffices, and the
+  check cost every prompt a paragraph. Spawn prompts likewise drop the
+  restated role-skill and unattended notices, which `common.md` already
+  carries, and pool members get a fixed one-line `background`.
 - The Codex adapter passes configured model and effort at launch. Codex
   workers cannot reliably identify their own model from the prompt, so they
   claim their reservations without a model self-check.

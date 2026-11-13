@@ -400,9 +400,9 @@ task-prompt run or a light run gets none.
    (the spare serves a Justiciar), at most `limit - started`: each with
    `start_session`, `initiation: "user_asked"`, `context: "fresh"`,
    `use_worktree: false`, title `🔮 Enact pool <n>`, prompt "Enact pool
-   session: reply only `ready` and end your turn; your work arrives in later
-   messages." and a `background` saying it is an Enact pool member for
-   epic `<epic>`. Do not pass `permission_mode`, so members inherit yours.
+   session: reply only `ready`." and `background` exactly "Enact pool
+   member, epic `<epic>`." Do not pass `permission_mode`, so members
+   inherit yours.
    Record them all: `enact pool add <id>...`. If the limit leaves fewer
    than `parallel + 1`, run with what you have.
 4. Title yourself `🔮 [<epic>] <short summary>`.

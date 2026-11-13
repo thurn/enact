@@ -744,6 +744,9 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
             self.a.commit_file(path, text, cwd=trees[name])
         spec = importlib.util.spec_from_file_location("enact_queue_test", SCRIPT)
         module = importlib.util.module_from_spec(spec)
+        # dataclasses looks the module up while the class body runs.
+        sys.modules[spec.name] = module
+        self.addCleanup(sys.modules.pop, spec.name, None)
         spec.loader.exec_module(module)
         state = self.a.path / ".git" / "enact"
         (state / "queue").mkdir(parents=True, exist_ok=True)

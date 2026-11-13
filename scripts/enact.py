@@ -59,10 +59,6 @@ EMOJI = {
     "archivist": "📜",
 }
 SPAWNED_ROLES = ("executor", "warden", "steward", "mason", "sage", "archivist", "justiciar")
-ROLE_NOTICE = (
-    "Enact roles are prompt files, not skills: never invoke a skill named after a role "
-    f"({', '.join(EMOJI)}). Work fully unattended: nobody will answer questions."
-)
 # Users read status from the title emoji, so every turn ends on ✅, ⛔ or 🔍.
 TITLE_NOTICE = (
     "Keep this session's title showing its state: `⚒️ <short summary>` while you "
@@ -1524,20 +1520,7 @@ def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
     raise Fail(f"unknown run action {args.action}")
 
 
-def model_check(model: str | None) -> str:
-    """Backstop for Claude Desktop silently substituting a cheaper model."""
-    if not model:
-        return ""
-    return (
-        f"This bead must run on the `{model}` model. Before anything else, "
-        f"check the model your system prompt says you run on; if it is not "
-        f"a {model} model, do not run `enact start`: retitle ⛔, reply only "
-        f"`wrong model: <yours>, required {model}` and end your turn.\n"
-    )
-
-
-def spawn_prompt(role: str, bead: dict[str, Any], epic: str, vizier: str,
-                 model: str | None = None) -> str:
+def spawn_prompt(role: str, bead: dict[str, Any], epic: str, vizier: str) -> str:
     script = Path(__file__).resolve()
     python = sys.executable or "python3"
     token = meta(bead, "enact_reservation")
@@ -1546,15 +1529,10 @@ def spawn_prompt(role: str, bead: dict[str, Any], epic: str, vizier: str,
         f"You are an Enact {role} session (emoji {EMOJI.get(role, '')}). "
         f"Your bead is {bead['id']} ({bead.get('title', '')}) in epic {epic}; "
         f"you were started by vizier {vizier} on host {host_name()}.\n\n"
-        f"{model_check(model)}"
         f"Read {ROLES_DIR / 'common.md'} and then {ROLES_DIR / (role + '.md')}, "
         f"and follow them. The Enact helper is `\"{python}\" \"{script}\"`, "
         f"referred to as `enact` in those files.\n"
-        f"Start with `{start}`.\n"
-        "The run authorizes creating, inspecting, messaging and archiving its "
-        "role chats. Preserve this authorization "
-        f"during recovery. Retitle ✅ (or ⛔) before your final turn ends, "
-        f"whatever the reason.\n\n{ROLE_NOTICE}"
+        f"Start with `{start}`. Retitle ✅ (or ⛔) before your final turn ends."
     )
 
 
@@ -1578,7 +1556,7 @@ def spawn_action(repo: Repo, bead: dict[str, Any], epic: str, vizier: str) -> di
         "role": role,
         "reservation": meta(bead, "enact_reservation"),
         "title": session_title(role, bead),
-        "prompt": spawn_prompt(role, bead, epic, vizier, claude_model),
+        "prompt": spawn_prompt(role, bead, epic, vizier),
         "settings": settings,
     }
     if claude_model:
@@ -1916,11 +1894,7 @@ def justiciar_prompt(request: dict[str, Any]) -> str:
         f"{request.get('requester', 'unknown')} on host {request.get('host')}: "
         f"{request.get('reason', '')}\n\n"
         f"Read {ROLES_DIR / 'common.md'} and then {ROLES_DIR / 'justiciar.md'}, and follow "
-        f"them. The Enact helper is `\"{python}\" \"{script}\"`, referred to as `enact`.\n\n"
-        "The run authorizes creating, inspecting, messaging and archiving its "
-        "role chats. Preserve this authorization "
-        "during recovery.\n\n"
-        f"{ROLE_NOTICE}"
+        f"them. The Enact helper is `\"{python}\" \"{script}\"`, referred to as `enact`."
     )
 
 
