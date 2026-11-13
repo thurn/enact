@@ -1072,3 +1072,32 @@ blindly recreate jobs or hand-edit scheduler databases.
   handle `deadlock` by requesting a Justiciar, so the change is compatible.
   Registration is the liveness proxy: a registered vizier that died still
   falls back to the stale check.
+
+## Lane and tier defaults (2026-11-13)
+
+- A user asked how nine beads filed outside a run should be executed to
+  spend the fewest tokens. The answer was already Enact's lane design, but
+  `/enact-plan` applied it only to beads it filed itself: given an existing
+  epic with children it filed nothing and ran one session per bead, or one
+  session per lane however the lanes had been labelled.
+- The reasoning, now stated in the skill: a session pays once to learn its
+  code and on every turn to re-read its whole context. One session per bead
+  relearns shared code. One session for many beads carries finished beads
+  through every later turn and runs all of them on the costliest bead's
+  model. The second cost is the larger, so lanes stay at two to four beads.
+- The vizier therefore runs a "lane and tier pass" over the unclaimed beads
+  of any epic or bead list it is given, using the files their descriptions
+  name. It does not read code for this, so the pass stays inside pre-flight
+  and the loop is unchanged.
+- A lane has one tier. The session keeps the model its first bead started
+  on, so the nine beads above, labelled by shared code alone, would have run
+  Sonnet-tier beads on Opus or an Opus-tier design on Sonnet. A bead of
+  another tier leaves the lane and takes an ordering edge where it edits the
+  same code non-additively.
+- A bead likely to fill a session (a design, a rewrite) stays out of lanes,
+  for the same reason a worker with a heavy context closes without
+  `--continue`.
+- Lane labels are not put on epics, like tier labels: children inherit an
+  epic's labels, which would join unrelated beads into one lane.
+- No helper change. The scheduler still treats a lane as "one session at a
+  time"; the rules only change which beads share a label.

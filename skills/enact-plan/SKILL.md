@@ -151,17 +151,16 @@ a recorded default (`common.md`, "Speculative defaults").
   in-progress children, another vizier (another machine or provider) is
   probably working it; joining needs nothing special. If it has no children
   yet, plan its description as a plan document or task prompt (below), filing
-  under this epic instead of a new one. Otherwise file nothing.
+  under this epic instead of a new one. Otherwise file nothing, but give its
+  unclaimed children the [lane and tier pass](#lane-and-tier-pass).
 - **Any other bead**: it needs an epic around it, because follow-ups and the
   scheduler work by epic. If it already has a parent epic, ask the user
   whether to run that whole epic instead or to move the bead into a run of
   its own. For a run of its own, create an epic titled after the bead, then
   `bd update <bead> --parent <new epic> --json`. Do not decompose it or add
   beads.
-- **Several beads**: the same, with one new epic holding them all. Beads
-  that touch related code form one lane (`bd label add <bead>
-  lane:<name>`; see [Build the graph](#build-the-graph)), worked in order by
-  one session.
+- **Several beads**: the same, with one new epic holding them all, then the
+  [lane and tier pass](#lane-and-tier-pass) over them.
 
 A [light run](#light-runs) adjusts the graph as described there. Then go to
 [Finish planning](#finish-planning).
@@ -254,7 +253,8 @@ Read enough of the codebase to decompose well. Then file the graph with raw
   anywhere else and that nothing depends on; otherwise name the preferred
   machine in its description.
 - **Lanes**: label related beads of one role that touch
-  the same code `lane:<name>`, usually two to four executor beads. One
+  the same code `lane:<name>`, following the
+  [lane and tier pass](#lane-and-tier-pass). One
   session works a lane in priority order, delivering and closing each bead
   before claiming the next with `enact close --continue`; the helper starts
   no other session on a lane while one holds it. Lanes need no ordering
@@ -270,10 +270,35 @@ Read enough of the codebase to decompose well. Then file the graph with raw
   Sage, unless they name another default. `tier:fable` is the third: use it
   only where the user asks, typically for the few beads that settle a
   design everything later builds on. All three work in any project with no
-  configuration. A lane's session starts on its first bead's tier, so give
-  a lane one tier. Record the policy in the run epic so beads filed later
-  follow it, and never put a tier label on an epic: children inherit an
-  epic's labels.
+  configuration. Record the policy in the run epic so beads filed later
+  follow it, and never put a tier or lane label on an epic: children inherit
+  an epic's labels.
+
+#### Lane and tier pass
+
+How beads are grouped into sessions decides what a run costs. A session
+pays once to learn the code it touches, and pays on every turn to re-read
+everything already in its context. So a session per bead relearns shared
+code, while one session for many beads drags each finished bead through
+every later turn, and runs them all on the costliest bead's model. The
+default is one session per lane, with lanes kept small. Apply these rules
+to the beads you file, and to the unclaimed beads of an epic or bead list
+you were given, going by the files their descriptions name without reading
+the code again:
+
+- **Same code, same role, same tier: one lane**, of two to four beads. A
+  fifth bead starts a second lane. A bead alone on its code gets no lane.
+- **One tier per lane.** A lane's session keeps the model of its first
+  bead, so a bead of another tier leaves the lane. If it edits the lane's
+  code non-additively, give it an ordering edge instead.
+- **A bead that fills a session stays out of lanes**: a design, a rewrite,
+  anything likely to end with a heavy context. Order it with an edge.
+- **Order inside a lane** is priority, then bead number. Where one lane
+  bead builds on another, set priorities or add an edge so it comes later.
+- **Every bead has a tier** when the project assigns models by name.
+- In beads you were given, keep lane labels that already follow these
+  rules, fix the ones that do not (`bd label add`, `bd label remove`), and
+  list what you changed in a comment on the run epic.
 
 Decompose a plan fully up front by default. For a large or uncertain plan you
 may instead file concrete beads for the first milestone plus one executor

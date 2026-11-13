@@ -32,6 +32,10 @@
 - `/enact <beads|epic|task>` runs Enact work inline in one session;
   `/enact-plan <bead|plan|task>` runs it unattended across sessions. Most
   work goes through neither.
+- When filing beads, name the files each one touches. Give two to four
+  beads that touch the same code and suit the same model one `lane:<name>`
+  label, so one session works them in order. Leave a large design bead out
+  of lanes.
 - Enact roles in use: all (Executor, Warden, Steward, Mason, Sage, Archivist).
 - Review policy: one Warden bead per lane or milestone area, and one per
   bead only for risky changes (data loss, concurrency, security).
