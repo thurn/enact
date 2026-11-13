@@ -1052,6 +1052,15 @@ blindly recreate jobs or hand-edit scheduler databases.
   open on screen) rests for a minute; an archived or missing one is
   dropped. Members rotate so work spreads over the pool. Members are
   archived only when the run is done.
+- Remote Control (2026-11-13): with the user's "Connect new sessions to
+  Remote Control" setting on, every member connects, and the host refuses
+  to clear or archive a connected session ("still has live work") for as
+  long as it sits idle. In a Beryl run two of four members were stuck that
+  way, and resting them only made the scheduler offer them back each time a
+  slot freed. The host's tool may toggle Remote Control only when the user
+  asks, so the skill makes invoking Enact that request for run-owned chats:
+  the vizier turns Remote Control off on each member after its `ready`
+  reply and before retrying a clear or archive refused for live work.
 - `enact next` holds a per-vizier lock, since two overlapping background
   waits could hand out the same member.
 - The scheduler only reads pool state for Claude. Older Claude viziers
