@@ -1256,6 +1256,19 @@ instead of adopting it needs the plan's context.
   runs. `claim()` unsets the flag. A failure with no recorded runs is
   always unowned, even while some vizier here loops: that vizier stops when
   its own run is delivered, so it is no promise.
+- `enact status` answers the same question as a snapshot, so a scheduled
+  routine need not guess which sessions are alive. Each route in
+  `active_runs` carries `lease_age` (whole seconds, or null with no lease
+  on that epic here), and a run is `stale` when no route is alive.
+  `unowned_stewards` lists open Stewards targeted at this machine
+  (`steward_targeted_here`) that no live run here would schedule (one
+  without a parent, or one in that run's delivery, as `schedule` does) and
+  whose assignee, if any, neither holds a fresh lease (on any epic) nor
+  updated the bead within `VIZIER_LEASE_SECONDS`. Unlike `enact_unowned`,
+  which is set once when CI files the failure, this counts any live vizier
+  as cover for a parentless Steward: a routine runs status again every
+  half hour, so the promise only has to hold until then. Worker sessions
+  hold no lease, so for them the bead's `updated_at` is the only evidence.
 
 
 ## Runs finish explicitly (2026-11-13)

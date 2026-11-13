@@ -792,6 +792,59 @@ class VizierLeaseTest(unittest.TestCase):
         # Finished is not halted: a late Steward repair may still be assigned.
         self.assertEqual(enact.stopped_runs(self.epic(metadata=finished), []), [])
 
+    def test_each_route_reports_its_lease_age_and_a_run_without_one_is_stale(self):
+        routes = enact.run_routes(self.epic())
+        aged, stale = enact.route_leases(self.repo, "e", routes)
+        self.assertEqual((aged[0]["lease_age"], stale), (None, True))
+        self.lease(90)
+        aged, stale = enact.route_leases(self.repo, "e", routes)
+        self.assertEqual((aged[0]["lease_age"], stale), (90, False))
+        self.lease(enact.VIZIER_LEASE_SECONDS + 5)
+        aged, stale = enact.route_leases(self.repo, "e", routes)
+        self.assertEqual((aged[0]["lease_age"], stale), (enact.VIZIER_LEASE_SECONDS + 5, True))
+        # Another machine's route cannot keep a run fresh from here.
+        self.lease(0)
+        cygnus = enact.run_routes(self.epic(host="cygnus"))
+        self.assertTrue(enact.route_leases(self.repo, "e", cygnus)[1])
+
+    def steward(self, assignee=None, minutes_idle=120, host="jarvis", parent=None):
+        updated = enact.dt.datetime.now(enact.dt.timezone.utc) - enact.dt.timedelta(
+            minutes=minutes_idle)
+        return {"id": "s", "labels": ["role:steward"], "status": "open",
+                "assignee": assignee, "parent": parent,
+                "updated_at": updated.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "metadata": {"enact_ci_host": host, "enact_ci_range": "a..b"}}
+
+    def unowned(self, *graph, deliveries=None):
+        return [b["id"] for b in enact.unowned_stewards(self.repo, list(graph), deliveries or {})]
+
+    def test_a_steward_nobody_is_repairing_is_unowned(self):
+        self.assertEqual(self.unowned(self.steward()), ["s"])
+        # The vizier that once ran the run stopped renewing its lease.
+        self.lease(enact.VIZIER_LEASE_SECONDS + 1)
+        self.assertEqual(self.unowned(self.epic(), self.steward()), ["s"])
+        # The assignee neither holds a lease nor touched the bead lately.
+        self.assertEqual(self.unowned(self.steward(assignee="gone")), ["s"])
+        closed = {**self.steward(), "status": "closed"}
+        self.assertEqual(self.unowned(closed), [])
+
+    def test_another_machines_steward_is_never_listed_here(self):
+        self.assertEqual(self.unowned(self.steward(host="cygnus")), [])
+
+    def test_a_live_vizier_covers_the_stewards_it_would_schedule(self):
+        self.lease(60)
+        self.assertEqual(self.unowned(self.epic(), self.steward()), [])
+        # A Steward under another epic is covered only through this run's delivery.
+        child = self.steward(parent="other")
+        self.assertEqual(self.unowned(self.epic(), child), ["s"])
+        self.assertEqual(self.unowned(self.epic(), child,
+                                      deliveries={"e": {"stewards": ["s"]}}), [])
+
+    def test_an_active_assignee_owns_its_steward(self):
+        self.assertEqual(self.unowned(self.steward(assignee="worker", minutes_idle=2)), [])
+        enact.renew_lease(self.repo, "worker", "anything")
+        self.assertEqual(self.unowned(self.steward(assignee="worker")), [])
+
     def test_deferred_beads_count_as_done(self):
         self.assertTrue(enact.work_done({"status": "deferred"}))
         self.assertTrue(enact.work_done({"status": "closed"}))

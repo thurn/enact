@@ -1293,19 +1293,20 @@ def drop_lease(repo: Repo, vizier: str) -> None:
     lease_path(repo, vizier).unlink(missing_ok=True)
 
 
-def lease_age(repo: Repo, vizier: str, epic: str) -> float | None:
-    """Seconds since the vizier last renewed its lease on this epic, or None
-    when it holds none here (another epic, or a vizier older than leases)."""
+def lease_age(repo: Repo, vizier: str, epic: str | None) -> float | None:
+    """Seconds since the vizier last renewed its lease on this epic (on any
+    epic when `epic` is None), or None when it holds none here (another epic,
+    or a vizier older than leases)."""
     try:
         lease = json.loads(lease_path(repo, vizier).read_text(encoding="utf-8"))
-        if lease.get("epic") != epic:
+        if epic is not None and lease.get("epic") != epic:
             return None
         return max(time.time() - float(lease["at"]), 0.0)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
 
-def lease_fresh(repo: Repo, vizier: str, epic: str) -> bool:
+def lease_fresh(repo: Repo, vizier: str, epic: str | None) -> bool:
     age = lease_age(repo, vizier, epic)
     return age is not None and age < VIZIER_LEASE_SECONDS
 
@@ -1326,6 +1327,55 @@ def runs_watched(repo: Repo, graph: list[dict[str, Any]], runs: list[str]) -> bo
     """A live vizier here will repair a slow-CI failure in these runs' commits."""
     by_id = {b["id"]: b for b in graph}
     return any(run in by_id and run_live(repo, by_id[run], graph) for run in runs)
+
+
+def route_leases(repo: Repo, epic: str,
+                 routes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    """Each route with its vizier's lease age in whole seconds (None when it
+    holds no lease on this epic here), and whether the run is stale: no route
+    has a fresh lease, so no vizier is looping on it."""
+    aged = []
+    for route in routes:
+        age = lease_age(repo, route["session"], epic) if route.get("session") else None
+        aged.append({**route, "lease_age": None if age is None else int(age)})
+    return aged, not any(route_alive(repo, epic, route) for route in routes)
+
+
+def seconds_since(stamp: str | None) -> float | None:
+    try:
+        then = dt.datetime.fromisoformat((stamp or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=dt.timezone.utc)
+    return max((dt.datetime.now(dt.timezone.utc) - then).total_seconds(), 0.0)
+
+
+def unowned_stewards(repo: Repo, graph: list[dict[str, Any]],
+                     deliveries: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Open Steward beads for this machine's slow-CI failures that nobody is
+    repairing. A live vizier here covers a Steward it would schedule: one
+    without a parent, or one in its run's delivery. Otherwise an assignee
+    counts as owner while its own lease is fresh or it touched the bead
+    within a lease's lifetime; an assignee that did neither is presumed gone."""
+    live = [b for b in graph if b.get("issue_type") == "epic" and run_live(repo, b, graph)]
+    unowned = []
+    for bead in graph:
+        if (role_of(bead) != "steward" or work_done(bead)
+                or not steward_targeted_here(bead)):
+            continue
+        if any(not bead.get("parent") or bead["id"] in deliveries.get(epic["id"], {}).get(
+                "stewards", ()) for epic in live):
+            continue
+        assignee = bead.get("assignee") or None
+        idle = seconds_since(bead.get("updated_at"))
+        if assignee and (lease_fresh(repo, assignee, None)
+                         or (idle is not None and idle < VIZIER_LEASE_SECONDS)):
+            continue
+        unowned.append({"id": bead["id"], "title": bead.get("title"), "assignee": assignee,
+                        "updated_at": bead.get("updated_at"),
+                        "range": meta(bead, "enact_ci_range")})
+    return unowned
 
 
 def bead_watched(repo: Repo, graph: list[dict[str, Any]], bead: dict[str, Any]) -> bool:
@@ -3491,8 +3541,9 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
             continue
         halted = stopped_runs(bead, graph)
         control = run_control(halted[0] if halted else bead)
+        routes, stale = route_leases(repo, bead["id"], routes)
         active_runs.append({"epic": bead["id"], "control": control, "routes": routes,
-                            "delivery": delivery, "recoverable": not halted})
+                            "stale": stale, "delivery": delivery, "recoverable": not halted})
     pending_deliveries = {epic: delivery for epic, delivery in deliveries.items()
                           if not delivery["complete"]}
     staging = repo.remote_ref(repo.config.staging)
@@ -3513,6 +3564,7 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
         "open_stewards": [
             b["id"] for b in graph if role_of(b) == "steward" and b.get("status") != "closed"
         ],
+        "unowned_stewards": unowned_stewards(repo, graph, deliveries),
     }
 
 
