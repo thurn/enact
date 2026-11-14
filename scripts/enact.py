@@ -27,6 +27,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 import uuid
@@ -48,6 +49,9 @@ ENACT_ROOT = Path(__file__).resolve().parent.parent
 ROLES_DIR = stable_checkout(ENACT_ROOT) / "skills" / "enact" / "roles"
 JUSTICIAR_PREFIX = "refs/enact/justiciars/"  # one lock per machine
 LEGACY_JUSTICIAR_REF = "refs/enact/justiciar"  # the old fleet-wide lock
+STAGING_LOCK_REF = "refs/enact/staging-lock"
+STAGING_LOCK_SECONDS = 180
+STAGING_RENEW_SECONDS = 60
 EMOJI = {
     "vizier": "🔮",
     "executor": "⚒️",
@@ -1888,6 +1892,11 @@ def justiciar_commit(repo: Repo, payload: dict[str, Any]) -> str:
 
 def justiciar_push(repo: Repo, sha: str, expect: str, ref: str | None = None) -> bool:
     ref = ref or justiciar_ref()
+    return compare_and_swap_ref(repo, sha, expect, ref)
+
+
+def compare_and_swap_ref(repo: Repo, sha: str, expect: str, ref: str) -> bool:
+    """Change a remote ref only while it still has the value last observed."""
     lease = f"--force-with-lease={ref}:{expect}"
     target = f"{sha}:{ref}" if sha else f":{ref}"
     return repo.git_ok("push", "-q", lease, repo.config.remote, target)
@@ -2560,6 +2569,99 @@ QUEUE_POLL_SECONDS = 1.0
 QUEUE_TREE = ".merge-queue"
 
 
+class LeaseLost(Exception):
+    """The remote staging lock changed while this host was checking a batch."""
+
+
+def staging_lock_state(repo: Repo) -> dict[str, Any] | None:
+    """Read the fleet-wide lock, fetching its commit to inspect its expiry."""
+    listing = repo.git("ls-remote", repo.config.remote, STAGING_LOCK_REF)
+    found = [line.split()[0] for line in listing.splitlines()
+             if line.split()[-1] == STAGING_LOCK_REF]
+    if not found:
+        return None
+    sha = found[0]
+    repo.git("fetch", "-q", repo.config.remote, STAGING_LOCK_REF, cwd=repo.main)
+    body = repo.git("log", "-1", "--format=%B", sha, check=False)
+    try:
+        state = json.loads(body)
+        updated = float(state["updated"])
+    except (ValueError, KeyError, TypeError):
+        # The ref may have changed between listing and fetching. A CAS steal of the old
+        # value will fail in that case; a genuinely malformed abandoned ref can recover.
+        return {"sha": sha, "updated": 0.0, "owner": "unknown"}
+    return {**state, "sha": sha, "updated": updated}
+
+
+class StagingLease:
+    def __init__(self, repo: Repo, owner: str, sha: str) -> None:
+        self.repo = repo
+        self.owner = owner
+        self.sha = sha
+        self.updated = time.time()
+        self.lost = False
+        self.stop = threading.Event()
+        self.guard = threading.Lock()
+        self.renewer = threading.Thread(target=self.renew, daemon=True)
+        self.renewer.start()
+
+    def renew(self) -> None:
+        while not self.stop.wait(STAGING_RENEW_SECONDS):
+            with self.guard:
+                next_sha = justiciar_commit(self.repo, {"owner": self.owner,
+                                                       "updated": time.time()})
+                if not compare_and_swap_ref(self.repo, next_sha, self.sha, STAGING_LOCK_REF):
+                    self.lost = True
+                    return
+                self.sha = next_sha
+                self.updated = time.time()
+
+    def assert_owned(self) -> None:
+        with self.guard:
+            if self.lost or time.time() - self.updated >= STAGING_LOCK_SECONDS:
+                raise LeaseLost()
+            current = staging_lock_state(self.repo)
+            if current is None or current["sha"] != self.sha:
+                raise LeaseLost()
+
+    def release(self) -> None:
+        self.stop.set()
+        self.renewer.join(timeout=10)
+        if self.renewer.is_alive():
+            log("merge queue: staging lock renewal did not exit; its lease will expire")
+            return
+        with self.guard:
+            if not self.lost:
+                compare_and_swap_ref(self.repo, "", self.sha, STAGING_LOCK_REF)
+
+
+@contextlib.contextmanager
+def staging_lock(repo: Repo):
+    """Serialize staging checks across hosts, recovering a dead holder after its lease ages.
+
+    Each host still has its own local batch queue. Only its integrator takes this remote lock,
+    so waiters on the same host cannot hold the fleet lock ahead of their own integrator.
+    """
+    owner = f"{host_name()}:{os.getpid()}:{uuid.uuid4().hex}"
+    last_log = 0.0
+    while True:
+        current = staging_lock_state(repo)
+        if current is None or time.time() - current["updated"] >= STAGING_LOCK_SECONDS:
+            sha = justiciar_commit(repo, {"owner": owner, "updated": time.time()})
+            if compare_and_swap_ref(repo, sha, current["sha"] if current else "",
+                                    STAGING_LOCK_REF):
+                break
+        elif time.monotonic() - last_log >= 60:
+            log(f"merge queue: waiting for staging lock held by {current['owner']}")
+            last_log = time.monotonic()
+        time.sleep(QUEUE_POLL_SECONDS)
+    lease = StagingLease(repo, owner, sha)
+    try:
+        yield lease
+    finally:
+        lease.release()
+
+
 def queue_dir(repo: Repo) -> Path:
     path = repo.state / "queue"
     path.mkdir(exist_ok=True)
@@ -2655,10 +2757,15 @@ def run_queue(repo: Repo, own: str) -> None:
         settled = settle_landed(repo, entries)
         batch = [e for e in entries if e["id"] not in settled][:repo.config.push_batch]
         if batch:
-            land(repo, tree, batch, stats)
+            try:
+                with staging_lock(repo) as lease:
+                    land(repo, tree, batch, stats, lease)
+            except LeaseLost:
+                log("merge queue: staging lock changed; retrying the batch")
 
 
-def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], stats: dict[str, int]) -> None:
+def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], stats: dict[str, int],
+         lease: StagingLease) -> None:
     """Rebase `entries` in order onto staging in `tree`, run the fast check once on the result
     and push it.
 
@@ -2669,9 +2776,13 @@ def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], stats: dict[str,
     """
     cfg = repo.config
     staging = repo.remote_ref(cfg.staging)
-    for attempt in range(6):
+    checked = ""
+    checked_entries: tuple[str, ...] = ()
+    attempt = 0
+    while True:
         entries = [e for e in entries if not verdict_path(repo, e["id"]).exists()]
         fetch(repo)
+        base_sha = repo.git("rev-parse", staging)
         repo.git("reset", "-q", "--hard", staging, cwd=tree)
         repo.git("clean", "-q", "-fd", cwd=tree)
         picked = []
@@ -2692,18 +2803,25 @@ def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], stats: dict[str,
                                                cwd=tree).split()})
         if not picked:
             return
+        picked_ids = tuple(entry["id"] for entry in picked)
+        if picked_ids != checked_entries:
+            checked = ""
         fast = find_repo(tree).config.fast
         log(f"merge queue: checking {len(picked)} branch(es) on {staging}")
-        code, output = run_bounded(fast, tree, cfg.push_timeout) if fast else (0, "")
+        env = {"ENACT_CHECKED": checked} if checked else None
+        code, output = run_bounded(fast, tree, cfg.push_timeout, env) if fast else (0, "")
         stats["checks"] += 1
+        lease.assert_owned()
         if code:
             if len(picked) == 1:
                 decide(repo, picked[0], {"status": "failed", "output": output[-20000:]})
                 return
             aside = {e["id"] for e in set_aside(picked, output)}
-            land(repo, tree, [e for e in entries if e["id"] not in aside], stats)
-            land(repo, tree, [e for e in entries if e["id"] in aside], stats)
+            land(repo, tree, [e for e in entries if e["id"] not in aside], stats, lease)
+            land(repo, tree, [e for e in entries if e["id"] in aside], stats, lease)
             return
+        checked = repo.git("rev-parse", "HEAD", cwd=tree)
+        checked_entries = picked_ids
         with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED):
             graph: list[dict[str, Any]] = []
             if any(e["bead"] for e in picked):
@@ -2737,6 +2855,7 @@ def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], stats: dict[str,
                 write_json(receipt, data)
                 receipts.append((entry, receipt, data))
             tip = repo.git("rev-parse", "HEAD", cwd=tree)
+            lease.assert_owned()
             if repo.git_ok("push", "-q", cfg.remote, f"{tip}:refs/heads/{cfg.staging}", cwd=tree):
                 for entry, receipt, data in receipts:
                     decide(repo, entry, {"status": "landed", "receipt": str(receipt),
@@ -2745,11 +2864,20 @@ def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], stats: dict[str,
                 return
             for _, receipt, _ in receipts:
                 receipt.unlink(missing_ok=True)
-        log(f"merge queue: push to {cfg.staging} rejected (attempt {attempt + 1}); rebuilding")
-    for entry in entries:
-        if not verdict_path(repo, entry["id"]).exists():
-            decide(repo, entry, {"status": "error", "code": 1, "error":
-                                 f"could not push to {cfg.staging} after repeated attempts"})
+        remote_tip = repo.git("ls-remote", cfg.remote,
+                              f"refs/heads/{cfg.staging}").split()
+        if not remote_tip:
+            raise Fail(f"remote {cfg.staging} disappeared during the merge queue push")
+        remote = remote_tip[0]
+        if remote == base_sha:
+            for entry in entries:
+                if not verdict_path(repo, entry["id"]).exists():
+                    decide(repo, entry, {"status": "error", "code": 1, "error":
+                                         f"push to {cfg.staging} was rejected without a "
+                                         "staging update; check remote permissions or hooks"})
+            return
+        attempt += 1
+        log(f"merge queue: {cfg.staging} advanced during check (retry {attempt}); rebuilding")
 
 
 def queue_push(repo: Repo, args: argparse.Namespace, base: str, head: str) -> dict[str, Any]:
@@ -2769,12 +2897,19 @@ def queue_push(repo: Repo, args: argparse.Namespace, base: str, head: str) -> di
             drop_entry(repo, old["id"])
     write_json(folder / f"{entry['id']}.json", entry)
     lock = repo.state / "queue.lock"
+    last_report = time.monotonic()
     try:
         while not verdict_path(repo, entry["id"]).exists():
             if not (folder / f"{entry['id']}.json").exists():
                 raise Fail("another push from this worktree replaced this one in the queue")
             guard = try_lock(lock)
             if guard is None:
+                if time.monotonic() - last_report >= 60:
+                    ahead = next((i for i, queued_entry in enumerate(queued(repo))
+                                  if queued_entry["id"] == entry["id"]), None)
+                    log(f"merge queue: waiting behind {ahead if ahead is not None else '?'} "
+                        "branch(es) on this host")
+                    last_report = time.monotonic()
                 time.sleep(QUEUE_POLL_SECONDS)
                 continue
             try:
@@ -3416,7 +3551,8 @@ def ci_check_worker(repo: Repo, tip: str, coordinator: int) -> dict[str, Any]:
             write_json(lock, coordinator)
 
 
-def run_bounded(command: str, cwd: Path, timeout: int) -> tuple[int, str]:
+def run_bounded(command: str, cwd: Path, timeout: int,
+                env: dict[str, str] | None = None) -> tuple[int, str]:
     """Run a project-configured check, its output as one stream, killing its whole process
     tree once `timeout` seconds pass: a hung grandchild (a stuck exec, a server never told to
     stop) fails the check instead of holding the runner. Returns (exit code, output)."""
@@ -3426,7 +3562,8 @@ def run_bounded(command: str, cwd: Path, timeout: int) -> tuple[int, str]:
         else {"start_new_session": True}
     )
     proc = subprocess.Popen(
-        args, shell=shell, cwd=cwd, text=True, encoding="utf-8", errors="replace",
+        args, shell=shell, cwd=cwd, env={**os.environ, **(env or {})}, text=True,
+        encoding="utf-8", errors="replace",
         # One stream, in order: the log tail must end where the check failed.
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, **group,
     )

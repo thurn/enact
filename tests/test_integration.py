@@ -784,6 +784,92 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
             sh(["git", "merge-base", "--is-ancestor", "HEAD", "origin/staging"], trees[name])
         self.assertEqual(list((state / "queue").iterdir()), [])
 
+    def test_merge_queue_recheck_names_the_commit_checked_before_a_race(self):
+        seen = self.tmp / "queue_checked.txt"
+        peer = self.b.path
+        script = (
+            "import os, pathlib, subprocess\n"
+            f"seen = pathlib.Path({str(seen)!r})\n"
+            "runs = seen.read_text().splitlines() if seen.exists() else []\n"
+            "runs.append(os.environ.get('ENACT_CHECKED', '-'))\n"
+            "seen.write_text('\\n'.join(runs) + '\\n')\n"
+            "if len(runs) <= 7:\n"
+            f"    git = lambda *a: subprocess.run(['git', *a], cwd={str(peer)!r}, check=True)\n"
+            "    git('fetch', '-q', 'origin')\n"
+            "    git('checkout', '-q', '-B', 'queue-race', 'origin/staging')\n"
+            f"    path = pathlib.Path({str(peer)!r}, f'queue-race-{{len(runs)}}.txt')\n"
+            "    path.write_text('race')\n"
+            "    git('add', path.name)\n"
+            "    git('commit', '-q', '-m', 'race')\n"
+            "    git('push', '-q', 'origin', 'HEAD:staging')\n"
+        )
+        check = self.tmp / "queue_race_check.py"
+        check.write_text(script)
+        fast = shlex.join([Path(sys.executable).as_posix(), check.as_posix()])
+        self.a.commit_file(".enact.toml", ENACT_TOML.replace(
+            '"python3 check.py fast"', json.dumps(fast)) + "[push]\nqueue = true\n")
+        self.a.git("push", "-q", "origin", "HEAD:staging")
+        wt = Path(self.a.enact("worktree", "create", "queue-race")["path"])
+        self.a.commit_file("mine.txt", "mine", cwd=wt)
+        first = self.a.git("rev-parse", "HEAD", cwd=wt)
+        tree = self.a.git("rev-parse", "HEAD^{tree}", cwd=wt)
+        stale = self.a.git("commit-tree", tree, "-m",
+                           json.dumps({"owner": "dead host", "updated": 1}), cwd=wt)
+        self.a.git("push", "-q", "origin", f"{stale}:refs/enact/staging-lock")
+        self.assertTrue(self.a.enact("push", "--no-ci", cwd=wt)["pushed"])
+        runs = seen.read_text().splitlines()
+        self.assertEqual(len(runs), 8)
+        self.assertEqual(runs[:2], ["-", first])
+        self.assertEqual(self.a.git("ls-remote", "origin", "refs/enact/staging-lock"), "")
+
+    def test_merge_queues_on_two_hosts_take_turns_checking_staging(self):
+        started = self.tmp / "queue-started"
+        started.mkdir()
+        release = self.tmp / "queue-release"
+        script = (
+            "import os, pathlib, time\n"
+            f"started = pathlib.Path({str(started)!r})\n"
+            f"release = pathlib.Path({str(release)!r})\n"
+            "(started / str(os.getpid())).write_text('started')\n"
+            "while not release.exists(): time.sleep(0.05)\n"
+        )
+        check = self.tmp / "two_host_check.py"
+        check.write_text(script)
+        fast = shlex.join([Path(sys.executable).as_posix(), check.as_posix()])
+        self.a.commit_file(".enact.toml", ENACT_TOML.replace(
+            '"python3 check.py fast"', json.dumps(fast)) + "[push]\nqueue = true\n")
+        self.a.git("push", "-q", "origin", "HEAD:staging")
+        self.b.git("fetch", "-q", "origin")
+        first = Path(self.a.enact("worktree", "create", "first-host")["path"])
+        self.a.commit_file("first.txt", "first", cwd=first)
+        second = Path(self.b.enact("worktree", "create", "second-host")["path"])
+        self.b.commit_file("second.txt", "second", cwd=second)
+        pushes = []
+        try:
+            for machine, tree in ((self.a, first), (self.b, second)):
+                pushes.append(subprocess.Popen(
+                    [sys.executable, str(SCRIPT), "push", "--no-ci", "--keep"],
+                    cwd=tree, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    env={**os.environ, **machine.env()}))
+                deadline = time.time() + 40
+                while len(list(started.iterdir())) < 1:
+                    self.assertLess(time.time(), deadline, "first check did not start")
+                    time.sleep(0.05)
+            queue = self.b.path / ".git" / "enact" / "queue"
+            deadline = time.time() + 40
+            while not list(queue.glob("*.json")):
+                self.assertLess(time.time(), deadline, "second push did not queue")
+                time.sleep(0.05)
+            time.sleep(0.3)
+            self.assertEqual(len(list(started.iterdir())), 1)
+        finally:
+            release.write_text("go")
+        done = [proc.communicate(timeout=120) for proc in pushes]
+        self.assertEqual([proc.returncode for proc in pushes], [0, 0], done)
+        tree = sh(["git", "ls-tree", "--name-only", "staging"], self.origin).split()
+        self.assertTrue({"first.txt", "second.txt"} <= set(tree))
+        self.assertEqual(self.a.git("ls-remote", "origin", "refs/enact/staging-lock"), "")
+
     def test_worktree_create_hook_replaces_git(self):
         hook = (
             "python3 -c \"import os,subprocess; subprocess.check_call(['git','worktree','add',"

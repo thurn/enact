@@ -1208,6 +1208,18 @@ check twice or more. `[push] queue = true` replaces that with a queue per host.
 - The check reads `.enact.toml` from the combined tree and is killed after
   `[push] timeout` seconds (default 1800), since a hung check would hold
   every push on the host.
+- A local integrator takes `refs/enact/staging-lock` before checking and
+  keeps its three-minute lease fresh while the check runs. Integrators on
+  other hosts wait for that lease; if its holder dies, they take it over
+  after it expires. The remote ref changes with compare-and-swap, so only
+  its holder may release it. This prevents checks on separate hosts from
+  repeatedly racing to advance `staging`.
+- If an older client advances `staging` during a check, the queue retries
+  with `ENACT_CHECKED` set to the passing candidate. A project may skip
+  check lanes the new staging commits cannot reach, as direct pushes already
+  do. A changed batch runs every selected lane again. The queue keeps
+  retrying genuine staging races; a push rejected while staging is unchanged
+  reports the remote error instead of rerunning a check.
 - A branch that merged a diverged master, and `--skip-checks`, take the old
   direct path: the integrator replays commits one by one and cannot replay a
   merge.
