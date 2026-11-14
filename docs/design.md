@@ -1367,3 +1367,30 @@ instead of adopting it needs the plan's context.
   explicitly resume it. This fixes the false completion in recovery; the
   Codex vizier still needs an active turn or a new message to continue its
   scheduling loop.
+
+## Stalled workers (2026-11-14)
+
+- In Beryl run by-bajq two workers ended their turns waiting on background
+  `just specs <card>` commands, servers that never exit. They sat idle for
+  4.5 to 6 hours with beads `in_progress`, filling all three slots. A bound
+  open bead counts as busy forever, so the vizier kept reporting `wait`
+  until the user noticed.
+- `enact next` now lists `stalled` entries: the vizier's own open beads
+  bound by `enact_session` whose `updated_at` is 90 minutes old or more.
+  Each carries the session, idle minutes and a one-line `nudge`. The result
+  adds `stall_notice` so the instructions survive compaction.
+- Bead age is only a hint: a healthy worker may run long without touching
+  its bead. Only the host knows whether a session is idle, so the vizier
+  checks it (`get_session`, `read_thread`), nudges only an idle one with
+  `send_message` (which works from automated turns), and releases an
+  archived or missing one as any lost worker. A false positive costs one
+  session lookup.
+- Each 90-minute period of a stall is reported once, keyed by bead and
+  period in the existing per-vizier `archive-reported` file, and a new one
+  ends a background wait early. So a vizier is not re-woken by the same
+  stall, while a nudge that did not help surfaces again one period later.
+  A bead update clears the key.
+- Rejected: watching worktree file times or commits (costly on big trees,
+  host-local, and a hung server can still write logs), and a separate
+  record of nudges (the period key gives the same spacing statelessly).
+  Older viziers ignore the new fields.

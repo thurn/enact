@@ -2,6 +2,7 @@
 
 import importlib.util
 import contextlib
+import datetime as dt
 import functools
 import io
 import json
@@ -793,6 +794,49 @@ class VizierLeaseTest(unittest.TestCase):
             result = enact.next_step(self.repo, args, "v")
         self.assertEqual(result["action"], "finished")
         self.assertFalse(self.active(self.epic()))
+
+    def test_a_bound_bead_untouched_for_a_stall_period_is_stalled(self):
+        def ago(seconds):
+            stamp = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=seconds)
+            return stamp.isoformat()
+        period = enact.STALL_SECONDS
+        inflight = [
+            {"id": "a", "updated_at": ago(period + 60), "metadata": {"enact_session": "s1"}},
+            {"id": "b", "updated_at": ago(period - 60), "metadata": {"enact_session": "s2"}},
+            {"id": "c", "updated_at": ago(period * 3)},  # reserved, never bound
+            {"id": "d", "updated_at": ago(period * 2 + 60), "metadata": {"enact_session": "s4"}},
+        ]
+        stalled = enact.stalled_workers(inflight)
+        self.assertEqual([(s["bead"], s["session"], s["tier"]) for s in stalled],
+                         [("a", "s1", 1), ("d", "s4", 2)])
+        self.assertIn("bead a", stalled[0]["nudge"])
+
+    def test_each_stall_period_wakes_the_vizier_once(self):
+        args = types.SimpleNamespace(epic="e", parallel=1, wait=0, interval=1)
+        stall = {"bead": "a", "session": "s1", "idle_minutes": 95, "tier": 1, "nudge": "n"}
+
+        def step(*stalled):
+            with mock.patch.object(enact, "sync"), mock.patch.object(
+                    enact, "schedule", return_value={"action": "wait", "archive": [],
+                                                     "stalled": list(stalled)}):
+                return enact.next_step(self.repo, args, "v")
+
+        first = step(stall)
+        self.assertEqual(first["stalled"], [stall])
+        self.assertIn("stall_notice", first)
+        self.assertNotIn("stalled", step(stall))  # already reported
+        self.assertEqual(step({**stall, "tier": 2})["stalled"][0]["tier"], 2)
+        step()  # the worker touched its bead: the stall is forgotten
+        self.assertEqual(step(stall)["stalled"], [stall])
+
+    def test_a_new_stall_ends_a_background_wait_early(self):
+        args = types.SimpleNamespace(epic="e", parallel=1, wait=3000, interval=1)
+        stall = {"bead": "a", "session": "s1", "idle_minutes": 95, "tier": 1, "nudge": "n"}
+        with mock.patch.object(enact, "sync"), mock.patch.object(
+                enact, "schedule", return_value={"action": "wait", "archive": [],
+                                                 "stalled": [stall]}), \
+                mock.patch.object(enact.time, "sleep", side_effect=AssertionError):
+            self.assertEqual(enact.next_step(self.repo, args, "v")["stalled"], [stall])
 
     def test_a_finished_run_is_not_active(self):
         self.lease(0)

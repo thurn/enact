@@ -528,7 +528,13 @@ action or when the wait runs out. Handle the JSON:
    are deferred closes and reaches `done`; if it stays open for another
    reason, run `enact run finish` anyway once its work is delivered.
    `action: finished` means a run was already finished: report it as `done`.
-8. **`action: paused` or `blocked`**: no new spawning or recovery. Report
+8. **`stalled`** (any action may carry it): a worker's bead has had no
+   update for 90 minutes or more. Follow `stall_notice`: check that
+   session (`get_session` in Claude Desktop, `read_thread` in Codex); if
+   its turn still runs, leave it; if it is idle, send it `nudge` verbatim;
+   if it is archived or missing, release it as a lost worker (above). Each
+   entry comes once per 90-minute period.
+9. **`action: paused` or `blocked`**: no new spawning or recovery. Report
    the shared reason, retitle `⛔ [<epic>] <same summary>` and end the turn,
    preserving unfinished requirements.
    Already running workers may finish and deliver. Do not automatically
@@ -536,8 +542,8 @@ action or when the wait runs out. Handle the JSON:
 
 Rules for the loop:
 
-- Spend no tokens beyond this loop. Do not read beads, inspect sessions,
-  summarize progress or narrate waits. One short line per action is enough.
+- Spend no tokens beyond this loop. Do not read beads, inspect sessions
+  (except a `stalled` one), summarize progress or narrate waits. One short line per action is enough.
 - Do not answer `side-sessions-event` notices or session reports except by
   continuing the loop. The beads graph is the only signal.
 - Never ask the user to unblock the run (drop a bead, restructure the

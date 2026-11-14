@@ -1627,6 +1627,16 @@ CODEX_LOOP_REMINDER = (
 )
 
 
+STALL_NOTICE = (
+    "Stalled workers: for each `stalled` entry, check that session (get_session "
+    "in Claude Desktop, read_thread in Codex). If its turn is still running, "
+    "leave it. If it is idle, send it `nudge` verbatim with send_message (a "
+    "Codex follow-up). If it is archived or missing, release the bead with "
+    "`enact release --inactive` as for any lost worker. Each entry is listed "
+    "once per stall period."
+)
+
+
 @serialized
 def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any]:
     fetch(repo)
@@ -1666,6 +1676,7 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
         result["pool_notice"] = POOL_NOTICE
     inflight = [b for b in mine if b.get("status") != "closed"]
     result["inflight"] = [b["id"] for b in inflight]
+    result["stalled"] = stalled_workers(inflight)
     if provider() == "codex":
         # The host can wait for these chats without another Beads lookup.
         result["inflight_threads"] = sorted({meta(b, "enact_session") for b in inflight
@@ -1779,6 +1790,36 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
     return {**result, "action": "wait", "reason": "nothing ready"}
 
 
+# A worker bound to an open bead that has not touched it for this long may
+# have ended its turn without finishing (Beryl by-bajq: two workers waited
+# hours on servers that never exit). Only the host knows whether the session
+# is idle, so the vizier checks before nudging.
+STALL_SECONDS = 90 * 60
+
+STALL_NUDGE = (
+    "Enact: bead {bead} has had no update for {minutes} minutes and your turn "
+    "has ended. If you are waiting on a background command that never exits "
+    "(a server, watcher or REPL), stop it and continue the bead. Otherwise "
+    "continue it, or close or release it as your role says."
+)
+
+
+def stalled_workers(inflight: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Bound open beads untouched for STALL_SECONDS or more. `tier` counts
+    whole stall periods, so each period is reported once and a nudge that
+    did not help surfaces again one period later."""
+    stalled = []
+    for bead in inflight:
+        session, idle = meta(bead, "enact_session"), seconds_since(bead.get("updated_at"))
+        if not session or idle is None or idle < STALL_SECONDS:
+            continue
+        minutes = int(idle // 60)
+        stalled.append({"bead": bead["id"], "session": session, "idle_minutes": minutes,
+                        "tier": int(idle // STALL_SECONDS),
+                        "nudge": STALL_NUDGE.format(bead=bead["id"], minutes=minutes)})
+    return stalled
+
+
 def stale_hours(beads_list: list[dict[str, Any]]) -> float | None:
     stamps = []
     for bead in beads_list:
@@ -1821,12 +1862,19 @@ def next_step(repo: Repo, args: argparse.Namespace, vizier: str) -> dict[str, An
         sync(repo)
         result = schedule(repo, args.epic, args.parallel, vizier)
         pending = {item["bead"] for item in result["archive"]}
+        # Each stall period wakes the vizier once; it is not listed again.
+        stalls = {f"stalled:{item['bead']}:{item['tier']}": item
+                  for item in result.pop("stalled", [])}
+        fresh = [item for key, item in stalls.items() if key not in reported]
         timed_out = time.monotonic() >= deadline
         if result["action"] in ("done", "paused", "blocked", "finished"):
             # The vizier stops looping, so nothing here repairs slow CI for it.
             drop_lease(repo, vizier)
-        if result["action"] != "wait" or pending - reported or timed_out:
-            reported_file.write_text(json.dumps(sorted(pending)))
+        if result["action"] != "wait" or pending - reported or fresh or timed_out:
+            reported_file.write_text(json.dumps(sorted(pending | set(stalls))))
+            if fresh:
+                result["stalled"] = fresh
+                result["stall_notice"] = STALL_NOTICE
             return result
         time.sleep(min(args.interval, max(deadline - time.monotonic(), 1)))
 
