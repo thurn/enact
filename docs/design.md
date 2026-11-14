@@ -1346,9 +1346,24 @@ instead of adopting it needs the plan's context.
   are on this host, and none has a fresh lease. A run with any route on
   another host is left alone, because that host's leases cannot be read
   here. A closed run is pruned like an open one.
-- A stale run whose delivery is complete becomes `finished`. One with
-  pending commits or Steward beads becomes `paused` with a reason naming
-  the expired lease (and a closed epic is reopened, as `run pause` does),
-  so a returning vizier resumes it with `enact run resume --explicit`.
+- A stale run becomes `finished` only when its epic is closed and its
+  delivery is complete. A green delivery can belong to an open epic with
+  more beads to run; marking that run finished would strand those beads.
+  An open epic, or one with pending commits or Steward beads, becomes
+  `paused` with a reason naming the expired lease (and a closed epic is
+  reopened, as `run pause` does), so a returning vizier resumes it with
+  `enact run resume --explicit`.
 - `enact ci` prunes after it files or updates a Steward bead, and
   `enact status` lists `stale_runs` with a hint to run the prune.
+
+## Green delivery with unfinished work (2026-11-13)
+
+- In Beryl run `by-bmdk`, the Codex vizier ended a turn while `enact next`
+  still returned `action: wait`. Its lease expired. The epic remained open,
+  but the commits delivered so far had all reached master. That state must
+  remain recoverable; a green delivery is not evidence that all beads ran.
+- `run prune` now requires both a closed epic and complete delivery to mark
+  a stale run `finished`. It pauses an open epic so a returning vizier can
+  explicitly resume it. This fixes the false completion in recovery; the
+  Codex vizier still needs an active turn or a new message to continue its
+  scheduling loop.

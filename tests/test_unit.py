@@ -831,12 +831,12 @@ class VizierLeaseTest(unittest.TestCase):
             pruned = enact.prune_runs(self.repo)
         return pruned, saved, beads
 
-    def test_prune_finishes_a_stale_run_whose_delivery_is_complete(self):
+    def test_prune_pauses_an_open_run_even_when_delivery_is_complete(self):
         self.lease(enact.VIZIER_LEASE_SECONDS + 1)
         pruned, saved, _ = self.prune(self.epic(), complete=True)
-        self.assertEqual([(p["epic"], p["state"]) for p in pruned], [("e", "finished")])
+        self.assertEqual([(p["epic"], p["state"]) for p in pruned], [("e", "paused")])
         self.assertEqual(saved[0][:3], (self.repo, "e", "enact_control"))
-        self.assertEqual(saved[0][3]["state"], "finished")
+        self.assertEqual(saved[0][3]["state"], "paused")
 
     def test_prune_pauses_a_stale_run_with_pending_work_and_reopens_it(self):
         pruned, saved, beads = self.prune(self.epic(status="closed"), complete=False)

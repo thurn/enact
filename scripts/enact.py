@@ -1456,17 +1456,17 @@ def stale_runs(repo: Repo, graph: list[dict[str, Any]],
 
 @serialized
 def prune_runs(repo: Repo) -> list[dict[str, Any]]:
-    """Retire the runs `stale_runs` finds: a fully delivered run is marked
-    `finished`; one with work pending is `paused`, naming the expired lease,
-    so a returning vizier resumes it with `enact run resume --explicit`."""
+    """Retire stale runs. Only a closed, fully delivered epic is finished;
+    an open epic still has work even when every current commit is green."""
     sync(repo)
     graph = Beads(repo).all()
     pruned = []
     for item in stale_runs(repo, graph):
         bead, delivery = item["bead"], item["delivery"]
-        complete = delivery["complete"]
+        complete = bead.get("status") == "closed" and delivery["complete"]
         control = run_control(bead)
-        reason = ("pruned: delivery complete and its vizier's lease expired" if complete
+        reason = ("pruned: epic closed, delivery complete and its vizier's lease expired"
+                  if complete
                   else "pruned: its vizier's lease expired with work pending")
         state = "finished" if complete else "paused"
         save_run_meta(repo, bead["id"], "enact_control",
