@@ -1214,12 +1214,16 @@ check twice or more. `[push] queue = true` replaces that with a queue per host.
   after it expires. The remote ref changes with compare-and-swap, so only
   its holder may release it. This prevents checks on separate hosts from
   repeatedly racing to advance `staging`.
-- If an older client advances `staging` during a check, the queue retries
-  with `ENACT_CHECKED` set to the passing candidate. A project may skip
-  check lanes the new staging commits cannot reach, as direct pushes already
-  do. A changed batch runs every selected lane again. The queue keeps
-  retrying genuine staging races; a push rejected while staging is unchanged
-  reports the remote error instead of rerunning a check.
+- The integrator remembers the last passing batch check even if it loses the
+  staging lease. Once it reacquires the lease, it skips the check if the
+  staging base, ordered batch and resulting Git tree match. This also covers
+  a cherry-pick that rebuilt the same tree with new commit timestamps.
+- If staging advanced and the batch is the same, the queue retries with
+  `ENACT_CHECKED` set to the passing candidate. A project may skip check
+  lanes the new staging commits cannot reach, as direct pushes already do.
+  A different batch uses only the individual branch checks it came with.
+  The queue keeps retrying genuine staging races. A push rejected while
+  staging is unchanged reports the remote error.
 - A branch that merged a diverged master, and `--skip-checks`, take the old
   direct path: the integrator replays commits one by one and cannot replay a
   merge.

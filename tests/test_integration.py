@@ -5,6 +5,7 @@ machines, then drives the CLI exactly as agents do.
 """
 
 import concurrent.futures
+import contextlib
 import importlib.util
 import json
 import os
@@ -19,6 +20,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "enact.py"
 HAVE_TOOLS = all(shutil.which(t) for t in ("git", "bd", "dolt"))
@@ -408,6 +410,101 @@ class Machine:
         (where / name).write_text(text)
         self.git("add", name, cwd=where)
         self.git("commit", "-q", "-m", message or f"add {name}", cwd=where)
+
+
+@unittest.skipUnless(shutil.which("git"), "needs git")
+class QueueLeaseRetryTest(unittest.TestCase):
+    def test_passed_batch_survives_lease_loss(self):
+        from scripts import enact
+
+        for change in ("none", "staging", "batch"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                origin = root / "origin.git"
+                sh(["git", "init", "-q", "--bare", "-b", "staging", str(origin)], root)
+                sh(["git", "init", "-q", "-b", "staging"], root)
+                machine = Machine(root, "worker", "session")
+                machine.git("config", "user.name", "Test")
+                machine.git("config", "user.email", "test@example.com")
+                machine.git("remote", "add", "origin", str(origin))
+                fast = shlex.join([Path(sys.executable).as_posix(), "-c", "pass"])
+                machine.commit_file(".enact.toml", f"[checks]\nfast = {json.dumps(fast)}\n")
+                machine.git("push", "-q", "origin", "staging", "staging:master")
+                base = machine.git("rev-parse", "HEAD")
+                repo = enact.find_repo(root)
+
+                def enqueue(name, parent, head, order):
+                    entry = {"id": name, "base": parent, "head": head, "bead": None,
+                             "ci": False, "pid": os.getpid(), "enqueued": order}
+                    enact.write_json(enact.queue_dir(repo) / f"{name}.json", entry)
+
+                # Replaying the second entry can produce a new commit SHA for the
+                # same content. Fix the time on each attempt to exercise that case.
+                machine.git("checkout", "-q", "--detach", base)
+                machine.commit_file("first.txt", "first")
+                first = machine.git("rev-parse", "HEAD")
+                enqueue("first", base, first, 1)
+                machine.git("checkout", "-q", "--detach", base)
+                machine.commit_file("second.txt", "second")
+                second = machine.git("rev-parse", "HEAD")
+                enqueue("second", base, second, 2)
+                empty = machine.git("commit-tree", f"{base}^{{tree}}", "-p", base,
+                                    "-m", "empty queued change")
+                machine.git("checkout", "-q", "--detach", base)
+                machine.commit_file("staging.txt", "peer change")
+                staging = machine.git("rev-parse", "HEAD")
+
+                checked = []
+                run_check = enact.run_bounded
+                run_git = enact.run
+                acquire = enact.staging_lock
+
+                def date_cherry_picks(cmd, cwd, check=True, env=None):
+                    if cmd[:2] == ["git", "cherry-pick"]:
+                        day = "02" if checked else "01"
+                        env = {**(env or {}), "GIT_COMMITTER_DATE": f"2026-01-{day}T00:00:00Z"}
+                    return run_git(cmd, cwd, check, env)
+
+                def lose_first_lease(command, tree, timeout, env):
+                    result = run_check(command, tree, timeout, env)
+                    self.assertEqual(result[0], 0, result[1])
+                    checked.append((machine.git("rev-parse", "HEAD", cwd=tree), env))
+                    if len(checked) == 1:
+                        sh(["git", "update-ref", "-d", enact.STAGING_LOCK_REF], origin)
+                        if change == "staging":
+                            machine.git("push", "-q", "origin", f"{staging}:staging")
+                        elif change == "batch":
+                            enqueue("empty", base, empty, 3)
+                    return result
+
+                @contextlib.contextmanager
+                def observe_acquisition(repo):
+                    expected = staging if checked and change == "staging" else base
+                    self.assertEqual(sh(["git", "rev-parse", "staging"], origin), expected)
+                    with acquire(repo) as lease:
+                        yield lease
+
+                with (mock.patch.object(enact, "run", date_cherry_picks),
+                      mock.patch.object(enact, "run_bounded", lose_first_lease),
+                      mock.patch.object(enact, "staging_lock", observe_acquisition)):
+                    enact.run_queue(repo, "second")
+
+                verdict = json.loads(enact.verdict_path(repo, "second").read_text())
+                self.assertEqual(verdict["status"], "landed")
+                count = 1 if change == "none" else 2
+                self.assertEqual(verdict["checks"], count)
+                self.assertEqual(len(checked), count)
+                self.assertEqual(verdict["batch"], 3 if change == "batch" else 2)
+                self.assertEqual(sh(["git", "rev-parse", "staging"], origin), verdict["staging"])
+                landed = verdict["staging"]
+                self.assertNotEqual(landed, checked[0][0])
+                landed_tree = sh(["git", "rev-parse", f"{landed}^{{tree}}"], origin)
+                checked_tree = machine.git("rev-parse", f"{checked[0][0]}^{{tree}}")
+                self.assertEqual(landed_tree == checked_tree, change != "staging")
+                if change != "none":
+                    expected = {"ENACT_CHECKED": checked[0][0]} if change == "staging" else None
+                    self.assertEqual(checked[1][1], expected)
+                self.assertEqual(machine.git("ls-remote", "origin", enact.STAGING_LOCK_REF), "")
 
 
 @unittest.skipUnless(HAVE_TOOLS, "needs git, bd and dolt")
@@ -1442,6 +1539,7 @@ def load_tests(loader, standard_tests, pattern):
     return ParallelScenarios([
         *loader.loadTestsFromTestCase(CiLifetimeTest),
         *loader.loadTestsFromTestCase(WorktreeSweepTest),
+        *loader.loadTestsFromTestCase(QueueLeaseRetryTest),
         *loader.loadTestsFromTestCase(EnactTest),
     ])
 

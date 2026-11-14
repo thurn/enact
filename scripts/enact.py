@@ -2806,11 +2806,25 @@ def settle_landed(repo: Repo, entries: list[dict[str, Any]]) -> set[str]:
     return settled
 
 
+@dataclass(frozen=True)
+class QueueCheck:
+    entries: tuple[str, ...]
+    base: str
+    tip: str
+    tree: str
+
+
+@dataclass
+class QueueProgress:
+    checks: int = 0
+    passed: QueueCheck | None = None
+
+
 def run_queue(repo: Repo, own: str) -> None:
     """Land queued branches, a batch at a time, until entry `own` has a verdict. The caller
     holds `queue.lock`."""
     tree = queue_tree(repo)
-    stats = {"checks": 0}
+    progress = QueueProgress()
     while not verdict_path(repo, own).exists():
         fetch(repo)
         entries = queued(repo)
@@ -2821,12 +2835,12 @@ def run_queue(repo: Repo, own: str) -> None:
         if batch:
             try:
                 with staging_lock(repo) as lease:
-                    land(repo, tree, batch, stats, lease)
+                    land(repo, tree, batch, progress, lease)
             except LeaseLost:
                 log("merge queue: staging lock changed; retrying the batch")
 
 
-def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], stats: dict[str, int],
+def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], progress: QueueProgress,
          lease: StagingLease) -> None:
     """Rebase `entries` in order onto staging in `tree`, run the fast check once on the result
     and push it.
@@ -2838,8 +2852,6 @@ def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], stats: dict[str,
     """
     cfg = repo.config
     staging = repo.remote_ref(cfg.staging)
-    checked = ""
-    checked_entries: tuple[str, ...] = ()
     attempt = 0
     while True:
         entries = [e for e in entries if not verdict_path(repo, e["id"]).exists()]
@@ -2866,35 +2878,42 @@ def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], stats: dict[str,
         if not picked:
             return
         picked_ids = tuple(entry["id"] for entry in picked)
-        if picked_ids != checked_entries:
-            checked = ""
+        tip, tree_sha = repo.git("rev-parse", "HEAD", "HEAD^{tree}", cwd=tree).splitlines()
+        candidate = QueueCheck(picked_ids, base_sha, tip, tree_sha)
+        passed = progress.passed
+        if passed and passed.entries != picked_ids:
+            passed = None
         fast = find_repo(tree).config.fast
-        tip = repo.git("rev-parse", "HEAD", cwd=tree)
-        # Each push checked its branch in its own tree before queueing (`cmd_push`), so the
-        # project's check may rerun only what the rest of the batch and the commits that
-        # landed meanwhile can reach (`queue_checked`).
-        names = checked or queue_checked(picked)
-        if fast and tip in names.split():
-            # A lone branch fast-forwarded onto the staging tip it was checked on: the tree
-            # is the one that passed, so there is nothing to check again.
+        # The previous pass is for the same ordered batch. The staging base also
+        # has to match to skip the check, since it determines which lanes run.
+        if passed:
+            names = passed.tip
+            already_passed = (passed.base, passed.tree) == (base_sha, tree_sha)
+        else:
+            # A lone branch may fast-forward to the exact commit it checked
+            # in its own worktree before queueing.
+            names = queue_checked(picked)
+            already_passed = tip in names.split()
+        if fast and already_passed:
             code, output = 0, ""
             log(f"merge queue: {tip[:8]} passed its fast check as it stands; landing it")
         else:
             log(f"merge queue: checking {len(picked)} branch(es) on {staging}")
             env = {"ENACT_CHECKED": names} if names else None
             code, output = run_bounded(fast, tree, cfg.push_timeout, env) if fast else (0, "")
-            stats["checks"] += 1
+            progress.checks += 1
+        # A lost lease prevents publication but does not invalidate a passing check.
+        if fast and not code:
+            progress.passed = candidate
         lease.assert_owned()
         if code:
             if len(picked) == 1:
                 decide(repo, picked[0], {"status": "failed", "output": output[-20000:]})
                 return
             aside = {e["id"] for e in set_aside(picked, output)}
-            land(repo, tree, [e for e in entries if e["id"] not in aside], stats, lease)
-            land(repo, tree, [e for e in entries if e["id"] in aside], stats, lease)
+            land(repo, tree, [e for e in entries if e["id"] not in aside], progress, lease)
+            land(repo, tree, [e for e in entries if e["id"] in aside], progress, lease)
             return
-        checked = repo.git("rev-parse", "HEAD", cwd=tree)
-        checked_entries = picked_ids
         with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED):
             graph: list[dict[str, Any]] = []
             if any(e["bead"] for e in picked):
@@ -2933,7 +2952,7 @@ def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], stats: dict[str,
                 for entry, receipt, data in receipts:
                     decide(repo, entry, {"status": "landed", "receipt": str(receipt),
                                          "delivery": data, "staging": tip,
-                                         "batch": len(picked), "checks": stats["checks"]})
+                                         "batch": len(picked), "checks": progress.checks})
                 return
             for _, receipt, _ in receipts:
                 receipt.unlink(missing_ok=True)
