@@ -2581,7 +2581,13 @@ def staging_lock_state(repo: Repo) -> dict[str, Any] | None:
     if not found:
         return None
     sha = found[0]
-    repo.git("fetch", "-q", repo.config.remote, STAGING_LOCK_REF, cwd=repo.main)
+    if not repo.git_ok("cat-file", "-e", sha):
+        fetched = run(["git", "fetch", "-q", repo.config.remote, STAGING_LOCK_REF],
+                      repo.main, check=False)
+        if fetched.returncode:
+            # The holder may have released the ref between ls-remote and fetch. A
+            # compare-and-swap against the listed SHA will fail, then we reread it.
+            return {"sha": sha, "updated": 0.0, "owner": "changing"}
     body = repo.git("log", "-1", "--format=%B", sha, check=False)
     try:
         state = json.loads(body)

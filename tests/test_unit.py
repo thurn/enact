@@ -276,6 +276,20 @@ class RunBoundedTest(unittest.TestCase):
                 os.kill(grandchild, 0)
 
 
+class StagingLockStateTest(unittest.TestCase):
+    def test_release_between_listing_and_fetch_is_retried(self):
+        repo = mock.Mock()
+        repo.config.remote = "origin"
+        repo.main = Path("/tmp")
+        repo.git.return_value = "abc123 refs/enact/staging-lock"
+        repo.git_ok.return_value = False
+        missing = subprocess.CompletedProcess([], 128, "", "remote ref disappeared")
+        with mock.patch.object(enact, "run", return_value=missing):
+            state = enact.staging_lock_state(repo)
+        self.assertEqual(state, {"sha": "abc123", "updated": 0.0,
+                                 "owner": "changing"})
+
+
 @unittest.skipIf(enact.WINDOWS, "reaping is skipped on Windows")
 class ReapProcessesTest(unittest.TestCase):
     def test_processes_inside_a_tree_end_and_others_stay(self):
