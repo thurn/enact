@@ -33,6 +33,7 @@ import tomllib
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Collection
 from typing import Any, BinaryIO
 
 
@@ -1255,9 +1256,32 @@ def stopped_runs(bead: dict[str, Any], graph: list[dict[str, Any]],
             run_control(by_id[i])["state"] in ("paused", "blocked")]
 
 
+def run_holds(bead: dict[str, Any], graph: list[dict[str, Any]],
+              epic: str) -> list[dict[str, Any]]:
+    """What holds `bead` within the run `epic`: a pause or block on the run,
+    on a milestone above the run, or on a milestone the bead sits in. A
+    Steward that repairs slow CI for several runs links all of them, and
+    `stopped_runs` reports a hold on any of them; that hold belongs to the
+    other run and must not stop this one (Beryl by-jj37: a shared Steward
+    carried by-bajq.2's pause into by-jj37, whose vizier then stopped
+    looping, dropped its lease and was pruned)."""
+    by_id = {b["id"]: b for b in graph}
+    ids = set(epic_and_ancestors(epic, graph))
+    current = by_id.get(bead["id"], bead)
+    while current["id"] not in ids:
+        ids.add(current["id"])
+        if current.get("parent") not in by_id:
+            break
+        current = by_id[current["parent"]]
+    return [by_id[i] for i in ids if i in by_id and
+            run_control(by_id[i])["state"] in ("paused", "blocked")]
+
+
 def require_running(bead: dict[str, Any], graph: list[dict[str, Any]],
                     extra: str | None = None) -> None:
-    if halted := stopped_runs(bead, graph, extra):
+    # Work claimed for a run answers only to that run's holds.
+    run = extra or meta(bead, "enact_run")
+    if halted := (run_holds(bead, graph, run) if run else stopped_runs(bead, graph)):
         raise Fail("run is paused or blocked; only explicit resume permits new work",
                    code=3, runs={b["id"]: run_control(b) for b in halted})
 
@@ -1297,34 +1321,50 @@ def drop_lease(repo: Repo, vizier: str) -> None:
     lease_path(repo, vizier).unlink(missing_ok=True)
 
 
-def lease_age(repo: Repo, vizier: str, epic: str | None) -> float | None:
+def lease_age(repo: Repo, vizier: str, epic: str | Collection[str] | None) -> float | None:
     """Seconds since the vizier last renewed its lease on this epic (on any
-    epic when `epic` is None), or None when it holds none here (another epic,
-    or a vizier older than leases)."""
+    of these epics when given several, on any epic when `epic` is None), or
+    None when it holds none here (another epic, or a vizier older than
+    leases)."""
+    epics = {epic} if isinstance(epic, str) else None if epic is None else set(epic)
     try:
         lease = json.loads(lease_path(repo, vizier).read_text(encoding="utf-8"))
-        if epic is not None and lease.get("epic") != epic:
+        if epics is not None and lease.get("epic") not in epics:
             return None
         return max(time.time() - float(lease["at"]), 0.0)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
 
-def lease_fresh(repo: Repo, vizier: str, epic: str | None) -> bool:
+def lease_fresh(repo: Repo, vizier: str, epic: str | Collection[str] | None) -> bool:
     age = lease_age(repo, vizier, epic)
     return age is not None and age < VIZIER_LEASE_SECONDS
 
 
-def route_alive(repo: Repo, epic: str, route: dict[str, Any]) -> bool:
-    """The route's vizier runs on this machine and renewed its lease recently."""
+def epic_and_ancestors(epic: str, graph: list[dict[str, Any]]) -> list[str]:
+    """`epic` and every epic above it. A vizier loops on its top-level run, so
+    its lease names that epic and also covers each milestone under it (Beryl
+    by-bajq: slow-CI prune paused milestones by-bajq.1 to .3 while their
+    vizier looped on by-bajq)."""
+    by_id = {b["id"]: b for b in graph}
+    found = [epic]
+    while (parent := by_id.get(found[-1], {}).get("parent")) and parent not in found:
+        found.append(parent)
+    return found
+
+
+def route_alive(repo: Repo, epic: str, route: dict[str, Any],
+                graph: list[dict[str, Any]] | None = None) -> bool:
+    """The route's vizier runs on this machine and renewed its lease recently,
+    on this epic or on a run it belongs to."""
     return (route.get("host") == host_name() and bool(route.get("session"))
-            and lease_fresh(repo, route["session"], epic))
+            and lease_fresh(repo, route["session"], epic_and_ancestors(epic, graph or [])))
 
 
 def run_live(repo: Repo, epic: dict[str, Any], graph: list[dict[str, Any]]) -> bool:
     """A vizier on this machine is looping on this run, which is not held."""
     return not stopped_runs(epic, graph) and not run_finished(epic) and any(
-        route_alive(repo, epic["id"], route) for route in run_routes(epic))
+        route_alive(repo, epic["id"], route, graph) for route in run_routes(epic))
 
 
 def runs_watched(repo: Repo, graph: list[dict[str, Any]], runs: list[str]) -> bool:
@@ -1333,16 +1373,17 @@ def runs_watched(repo: Repo, graph: list[dict[str, Any]], runs: list[str]) -> bo
     return any(run in by_id and run_live(repo, by_id[run], graph) for run in runs)
 
 
-def route_leases(repo: Repo, epic: str,
-                 routes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+def route_leases(repo: Repo, epic: str, routes: list[dict[str, Any]],
+                 graph: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], bool]:
     """Each route with its vizier's lease age in whole seconds (None when it
     holds no lease on this epic here), and whether the run is stale: no route
     has a fresh lease, so no vizier is looping on it."""
     aged = []
     for route in routes:
-        age = lease_age(repo, route["session"], epic) if route.get("session") else None
+        covered = epic_and_ancestors(epic, graph or [])
+        age = lease_age(repo, route["session"], covered) if route.get("session") else None
         aged.append({**route, "lease_age": None if age is None else int(age)})
-    return aged, not any(route_alive(repo, epic, route) for route in routes)
+    return aged, not any(route_alive(repo, epic, route, graph) for route in routes)
 
 
 def seconds_since(stamp: str | None) -> float | None:
@@ -1453,7 +1494,7 @@ def stale_runs(repo: Repo, graph: list[dict[str, Any]],
         if not routes or any(r.get("host") != host_name() for r in routes):
             continue
         delivery = (deliveries or {}).get(bead["id"]) or run_delivery(repo, graph, bead["id"])
-        if not any(route_alive(repo, bead["id"], r) for r in routes):
+        if not any(route_alive(repo, bead["id"], r, graph) for r in routes):
             stale.append({"bead": bead, "delivery": delivery})
     return stale
 
@@ -1734,7 +1775,8 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
         for b in ready
         if (b["id"] in scope or (role_of(b) == "steward" and not b.get("parent")))
         and targeted_here(b)
-        and not stopped_runs(b, graph, epic)
+        and not (run_holds(b, graph, epic) if b["id"] in scope
+                 else stopped_runs(b, graph, epic))
         and not (hold_archivist and role_of(b) == "archivist")
         and not lane_held(by_id.get(b["id"], b), graph)
     ]
@@ -1774,7 +1816,7 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
     working = [b for b in open_scope if b.get("status") == "in_progress"]
     elsewhere = [b for b in ready if b["id"] in scope and not targeted_here(b)]
     if not working and not inflight:
-        held = [h for b in open_scope for h in stopped_runs(b, graph)]
+        held = [h for b in open_scope for h in run_holds(b, graph, epic)]
         if held:
             control = run_control(held[0])
             return {**result, "action": control["state"], "control": control}
@@ -3899,7 +3941,7 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
             continue
         halted = stopped_runs(bead, graph)
         control = run_control(halted[0] if halted else bead)
-        routes, stale = route_leases(repo, bead["id"], routes)
+        routes, stale = route_leases(repo, bead["id"], routes, graph)
         active_runs.append({"epic": bead["id"], "control": control, "routes": routes,
                             "stale": stale, "delivery": delivery, "recoverable": not halted})
     pending_deliveries = {epic: delivery for epic, delivery in deliveries.items()

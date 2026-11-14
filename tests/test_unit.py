@@ -927,6 +927,40 @@ class VizierLeaseTest(unittest.TestCase):
             held = {"enact_control": json.dumps({"state": state, "epoch": "1"})}
             self.assertEqual(self.prune(self.epic(metadata=held), complete=False)[0], [])
 
+    def test_a_lease_on_the_run_keeps_its_milestones_alive(self):
+        # The vizier loops on `e`; slow CI's prune must not pause milestone
+        # `e.1`, whose only route comes from that vizier.
+        milestone = {**self.epic(), "id": "e.1", "parent": "e"}
+        self.lease(60)
+        self.assertEqual(self.prune(self.epic(), milestone, complete=False)[0], [])
+        self.assertTrue(enact.route_leases(self.repo, "e.1", enact.run_routes(milestone),
+                                           [self.epic(), milestone])[1] is False)
+        # A lease on another run still says nothing about this one.
+        self.lease(0, epic="other")
+        pruned = self.prune(self.epic(), milestone, complete=False)[0]
+        self.assertEqual(sorted(p["epic"] for p in pruned), ["e", "e.1"])
+
+    def test_a_shared_steward_does_not_carry_another_runs_pause(self):
+        paused = {"enact_control": json.dumps({"state": "paused", "epoch": "1"})}
+        other = {"id": "o", "issue_type": "epic", "status": "open", "metadata": paused}
+        steward = {"id": "s", "labels": ["role:steward"], "status": "open",
+                   "metadata": {"enact_runs": "e o"}}
+        graph = [self.epic(), other, steward]
+        self.assertEqual([b["id"] for b in enact.stopped_runs(steward, graph)], ["o"])
+        self.assertEqual(enact.run_holds(steward, graph, "e"), [])
+        enact.require_running({**steward, "metadata": {**steward["metadata"],
+                                                       "enact_run": "e"}}, graph)
+        with self.assertRaises(enact.Fail):
+            enact.require_running(steward, graph, "o")
+        # The run's own pause, or one on a milestone the bead sits in, holds.
+        held_epic = self.epic(metadata=paused)
+        self.assertEqual([b["id"] for b in enact.run_holds(steward, [held_epic, other, steward],
+                                                           "e")], ["e"])
+        milestone = {"id": "e.1", "issue_type": "epic", "parent": "e", "metadata": paused}
+        task = {"id": "t", "parent": "e.1", "metadata": {}}
+        self.assertEqual([b["id"] for b in enact.run_holds(task, [self.epic(), milestone, task],
+                                                           "e")], ["e.1"])
+
     def test_prune_finishes_a_closed_run_without_reopening_it(self):
         pruned, _, beads = self.prune(self.epic(status="closed"), complete=True)
         self.assertEqual(pruned[0]["state"], "finished")

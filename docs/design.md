@@ -1430,3 +1430,25 @@ instead of adopting it needs the plan's context.
   host-local, and a hung server can still write logs), and a separate
   record of nudges (the period key gives the same spacing statelessly).
   Older viziers ignore the new fields.
+
+## A run answers only to its own holds (2026-11-14)
+
+- Beryl paused two live runs on 2026-11-14. A Steward that repairs slow
+  CI for several runs lists all of them in `enact_runs`. When one of them
+  (by-bajq.2) was paused, `schedule` checked the Steward with
+  `stopped_runs`, found that pause, and reported the other run (by-jj37)
+  as paused too. Its vizier stopped looping and dropped its lease, so the
+  next slow-CI prune found no fresh lease and paused by-jj37 for real.
+- `run_holds(bead, graph, epic)` now decides what holds a bead within a
+  run: a pause or block on the run, on an epic above it, or on a milestone
+  the bead sits in. `schedule` uses it for the beads in its scope, and
+  `require_running` uses it for work claimed for a run (`enact_run`).
+  Unparented Stewards outside the run's scope keep the wider
+  `stopped_runs` check.
+- A vizier's lease names the epic it loops on, but prune also checks
+  milestones, whose routes come from that vizier's workers. A lease on an
+  epic now covers every epic below it, so milestones by-bajq.1 to .3 are
+  no longer pruned while their vizier loops on by-bajq.
+- Rejected: one lease per epic a vizier touches (more files and the same
+  question of which epics count), and skipping milestones in prune (a
+  milestone can have a vizier of its own).
