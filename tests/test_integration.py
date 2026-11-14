@@ -720,17 +720,20 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.assertEqual(runs[1], first)
 
     def test_merge_queue_lands_a_batch_with_one_check_and_returns_the_failure(self):
-        # Six pushes queue while the test holds the integrator's lock. Two add the same file
-        # differently, so one of them conflicts; one adds a file the check rejects. The
-        # other four must land in one push after one passing check, and the check runs
-        # three times in all: the whole batch, the batch without the named file, that file.
+        # Six pushes queue while the test holds the integrator's lock, each after its own
+        # check passed in its tree. Two add the same file differently, so one of them
+        # conflicts; one adds a file the check rejects beside another branch's file, which
+        # only the batch can see. The other four must land in one push after one passing
+        # check, and the queue checks three times in all: the whole batch, the batch without
+        # the named file, that file on its own.
         runs = self.tmp / "checks.txt"
         check = self.tmp / "queue_check.py"
         check.write_text(
-            "import pathlib, sys\n"
-            f"with open({str(runs)!r}, 'a') as log: log.write('run\\n')\n"
-            "if pathlib.Path('bad.txt').exists():\n"
-            "    print('bad.txt is not allowed')\n"
+            "import os, pathlib, sys\n"
+            "where = 'queue' if '.merge-queue' in os.getcwd() else 'tree'\n"
+            f"with open({str(runs)!r}, 'a') as log: log.write(where + '\\n')\n"
+            "if pathlib.Path('bad.txt').exists() and pathlib.Path('four').exists():\n"
+            "    print('bad.txt is not allowed with the other change')\n"
             "    sys.exit(1)\n")
         fast = shlex.join([Path(sys.executable).as_posix(), check.as_posix()])
         self.a.commit_file(".enact.toml", ENACT_TOML.replace(
@@ -771,11 +774,12 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         # One push of four branches, after the failed whole batch and one passing check.
         self.assertEqual([r["queue"] for r in landed.values()], [{"batch": 4, "checks": 2}] * 4)
         self.assertEqual(done["bad5"][0], 2)
-        self.assertIn("bad.txt is not allowed", done["bad5"][2])
+        self.assertIn("bad.txt is not allowed with the other change", done["bad5"][2])
         loser = ({"c1", "c2"} - set(landed)).pop()
         self.assertEqual(done[loser][0], 2)
         self.assertIn("conflicts", done[loser][2])
-        self.assertEqual(runs.read_text().splitlines(), ["run"] * 3)
+        lines = runs.read_text().splitlines()
+        self.assertEqual((lines.count("tree"), lines.count("queue")), (6, 3))
         tree = sh(["git", "ls-tree", "--name-only", "staging"], self.origin).split()
         self.assertTrue({"shared.txt", "three", "four", "six"} <= set(tree))
         self.assertNotIn("bad.txt", tree)
@@ -783,6 +787,26 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         for name in landed:
             sh(["git", "merge-base", "--is-ancestor", "HEAD", "origin/staging"], trees[name])
         self.assertEqual(list((state / "queue").iterdir()), [])
+
+    def test_merge_queue_lands_a_lone_checked_branch_without_checking_again(self):
+        # The push checks its own tree, then fast-forwards staging in the queue: the queue's
+        # tree is the one that passed, so it lands without a second check.
+        runs = self.tmp / "lone_checks.txt"
+        check = self.tmp / "lone_check.py"
+        check.write_text(
+            "import os\n"
+            "where = 'queue' if '.merge-queue' in os.getcwd() else 'tree'\n"
+            f"with open({str(runs)!r}, 'a') as log: log.write(where + '\\n')\n")
+        fast = shlex.join([Path(sys.executable).as_posix(), check.as_posix()])
+        self.a.commit_file(".enact.toml", ENACT_TOML.replace(
+            '"python3 check.py fast"', json.dumps(fast)) + "[push]\nqueue = true\n")
+        self.a.git("push", "-q", "origin", "HEAD:staging")
+        wt = Path(self.a.enact("worktree", "create", "lone")["path"])
+        self.a.commit_file("lone.txt", "lone", cwd=wt)
+        head = self.a.git("rev-parse", "HEAD", cwd=wt)
+        result = self.a.enact("push", "--no-ci", cwd=wt)
+        self.assertEqual((result["staging"], result["queue"]), (head, {"batch": 1, "checks": 0}))
+        self.assertEqual(runs.read_text().splitlines(), ["tree"])
 
     def test_merge_queue_recheck_names_the_commit_checked_before_a_race(self):
         seen = self.tmp / "queue_checked.txt"
@@ -823,13 +847,25 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.assertEqual(self.a.git("ls-remote", "origin", "refs/enact/staging-lock"), "")
 
     def test_merge_queues_on_two_hosts_take_turns_checking_staging(self):
+        # Each push checks its own tree at once. The first host's check also lands a
+        # commit on staging, so its branch no longer stands as it was checked and the merge
+        # queue checks it again; queue checks wait for the test to release them.
         started = self.tmp / "queue-started"
         started.mkdir()
         release = self.tmp / "queue-release"
         script = (
-            "import os, pathlib, time\n"
+            "import os, pathlib, subprocess, time\n"
             f"started = pathlib.Path({str(started)!r})\n"
             f"release = pathlib.Path({str(release)!r})\n"
+            "if '.merge-queue' not in os.getcwd():\n"
+            "    if 'first-host' in os.getcwd():\n"
+            f"        main = {str(self.a.path)!r}\n"
+            "        git = lambda *a: subprocess.run(['git', *a], cwd=main, check=True)\n"
+            "        pathlib.Path(main, 'landed.txt').write_text('landed')\n"
+            "        git('add', 'landed.txt')\n"
+            "        git('commit', '-q', '-m', 'landed')\n"
+            "        git('push', '-q', 'origin', 'HEAD:staging')\n"
+            "    raise SystemExit(0)\n"
             "(started / str(os.getpid())).write_text('started')\n"
             "while not release.exists(): time.sleep(0.05)\n"
         )

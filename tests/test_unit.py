@@ -224,6 +224,19 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual((queue.push_queue, queue.push_batch), (True, 3))
 
 
+
+class QueueCheckedTest(unittest.TestCase):
+    """`ENACT_CHECKED` for a merge-queue batch."""
+
+    def test_names_each_entrys_checked_commit(self):
+        entries = [{"checked": "a1"}, {"checked": "b2"}]
+        self.assertEqual(enact.queue_checked(entries), "a1 b2")
+
+    def test_an_unchecked_entry_checks_the_whole_batch(self):
+        self.assertEqual(enact.queue_checked([{"checked": "a1"}, {"id": "old"}]), "")
+        self.assertEqual(enact.queue_checked([]), "")
+
+
 class SetAsideTest(unittest.TestCase):
     """Which branches a failed merge-queue batch checks apart from the rest."""
 

@@ -1225,6 +1225,27 @@ check twice or more. `[push] queue = true` replaces that with a queue per host.
   merge.
 - Off by default, so projects opt in.
 
+## Each push checks its own tree before queueing (2026-11-14)
+
+- With the queue running every fast check, a batch's check was the host's
+  bottleneck. On 2026-11-14 Beryl's took 150-300 s per batch in the queue's
+  tree, against about 64 s for the same change in the branch's own warm
+  tree, and seven pushes waited up to 25 minutes behind one another.
+- Now `enact push` runs the full fast check in its own tree first, beside
+  other pushes' checks, and queues only a branch that passed. Its queue entry
+  records the commit that passed (`checked`).
+- The queue runs the check on a batch with `ENACT_CHECKED` set to every
+  entry's checked commit, separated by spaces. A project may then rerun only
+  the lanes that an entry's own change and the rest of the merged tree (the
+  batch's other branches and the commits that landed since its check) both
+  reach. A project that reads `ENACT_CHECKED` as one commit finds no such
+  commit and runs every lane, as before. An entry from an older client has
+  no checked commit, and then the batch's check gets no `ENACT_CHECKED`.
+- A lone branch that fast-forwards onto the staging tip it was checked on
+  lands with no second check: the queue's tree is the tree that passed.
+- A queued push that comes back with a conflict re-integrates and checks
+  again in its own tree with `ENACT_CHECKED` naming what passed before.
+
 ## One Justiciar per machine (2026-11-13)
 
 - The Justiciar lock was fleet-wide (`refs/enact/justiciar`). A hold from

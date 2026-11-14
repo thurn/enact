@@ -2766,6 +2766,14 @@ def set_aside(entries: list[dict[str, Any]], output: str) -> list[dict[str, Any]
     return entries[len(entries) // 2:]
 
 
+def queue_checked(entries: list[dict[str, Any]]) -> str:
+    """`ENACT_CHECKED` for a batch: the commit each entry's fast check passed in its own
+    tree, separated by spaces, or nothing when any entry was queued unchecked (an older
+    client), so that the project's check runs every lane it selects."""
+    names = [e.get("checked") or "" for e in entries]
+    return " ".join(names) if names and all(names) else ""
+
+
 def queue_tree(repo: Repo) -> Path:
     """The integrator's worktree. It is kept between batches, on a detached HEAD, so its
     build directories stay warm; the sweep keeps it as a tree not on an Enact branch."""
@@ -2861,10 +2869,21 @@ def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], stats: dict[str,
         if picked_ids != checked_entries:
             checked = ""
         fast = find_repo(tree).config.fast
-        log(f"merge queue: checking {len(picked)} branch(es) on {staging}")
-        env = {"ENACT_CHECKED": checked} if checked else None
-        code, output = run_bounded(fast, tree, cfg.push_timeout, env) if fast else (0, "")
-        stats["checks"] += 1
+        tip = repo.git("rev-parse", "HEAD", cwd=tree)
+        # Each push checked its branch in its own tree before queueing (`cmd_push`), so the
+        # project's check may rerun only what the rest of the batch and the commits that
+        # landed meanwhile can reach (`queue_checked`).
+        names = checked or queue_checked(picked)
+        if fast and tip in names.split():
+            # A lone branch fast-forwarded onto the staging tip it was checked on: the tree
+            # is the one that passed, so there is nothing to check again.
+            code, output = 0, ""
+            log(f"merge queue: {tip[:8]} passed its fast check as it stands; landing it")
+        else:
+            log(f"merge queue: checking {len(picked)} branch(es) on {staging}")
+            env = {"ENACT_CHECKED": names} if names else None
+            code, output = run_bounded(fast, tree, cfg.push_timeout, env) if fast else (0, "")
+            stats["checks"] += 1
         lease.assert_owned()
         if code:
             if len(picked) == 1:
@@ -2934,9 +2953,10 @@ def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], stats: dict[str,
         log(f"merge queue: {cfg.staging} advanced during check (retry {attempt}); rebuilding")
 
 
-def queue_push(repo: Repo, args: argparse.Namespace, base: str, head: str) -> dict[str, Any]:
-    """Queue `base..head`, already rebased onto staging, and wait for its verdict, running
-    the queue whenever no other push on this host is."""
+def queue_push(repo: Repo, args: argparse.Namespace, base: str, head: str,
+               checked: str = "") -> dict[str, Any]:
+    """Queue `base..head`, already rebased onto staging and checked at `checked`, and wait
+    for its verdict, running the queue whenever no other push on this host is."""
     owner = ""
     if args.bead:
         owner = as_owner(require_actor(None), Beads(repo).show(args.bead))
@@ -2944,7 +2964,7 @@ def queue_push(repo: Repo, args: argparse.Namespace, base: str, head: str) -> di
              "base": base, "head": head, "bead": args.bead, "owner": owner,
              "files": repo.git("diff", "--name-only", "--no-renames", base, head).splitlines(),
              "ci": bool(repo.config.slow and not args.no_ci), "pid": os.getpid(),
-             "enqueued": time.time()}
+             "checked": checked, "enqueued": time.time()}
     folder = queue_dir(repo)
     for old in queued(repo):
         if old["top"] == entry["top"]:
@@ -3022,7 +3042,17 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
         # The integrator replays commits one by one, so a branch that merged a diverged
         # master (rare: someone bypassed staging) takes the direct path.
         if queueing and not repo.git("rev-list", "--merges", f"{before}..{head}"):
-            verdict = queue_push(repo, args, before, head)
+            # The full check runs here, in this push's own tree, whose build directories
+            # are warm for its change, and beside other pushes' checks. The queue then
+            # checks a batch only for what its branches and the commits that landed since
+            # can break together (`queue_checked`), so it is not the host's bottleneck.
+            if head != checked:
+                env = {"ENACT_CHECKED": checked} if checked else None
+                if run_shell(cfg.fast, repo.top, env):
+                    raise Fail("fast checks failed; fix them and run `enact push` again",
+                               code=2)
+                checked = head
+            verdict = queue_push(repo, args, before, head, checked)
             if verdict["status"] == "conflict":
                 log("a branch queued ahead of this one conflicts with it; re-integrating")
                 fetch(repo)
