@@ -3357,11 +3357,11 @@ def ci_wait(repo: Repo, sha: str, seconds: int, interval: int) -> dict[str, Any]
         time.sleep(min(interval, max(deadline - time.monotonic(), 1)))
 
 
-def ci_runner(repo: Repo) -> Path:
-    """An immutable copy of this script in the git common directory, which
-    the runner launches from: the caller may be delivering Enact itself and
-    remove its own worktree, this script's file with it."""
-    source = Path(__file__).read_bytes()
+def ci_runner(repo: Repo, script: Path | None = None) -> Path:
+    """An immutable copy of `script` (default: this script) in the git common
+    directory, which the runner launches from: the caller may be delivering
+    Enact itself and remove its own worktree, this script's file with it."""
+    source = (script or Path(__file__)).read_bytes()
     runner = repo.state / f"ci-runner-{hashlib.sha256(source).hexdigest()}.py"
     if not runner.exists():
         temp = runner.with_suffix(f".{os.getpid()}.tmp")
@@ -3370,12 +3370,19 @@ def ci_runner(repo: Repo) -> Path:
     return runner
 
 
-def start_ci(repo: Repo, runner: Path | None = None) -> dict[str, Any]:
+def start_ci(repo: Repo, runner: Path | None = None,
+             source: str | None = None) -> dict[str, Any]:
+    """Start a detached slow-CI runner from a copy of Enact. `source` is the
+    script that copy came from (default: this script, unless this is itself a
+    copy), which the runner watches for updates (`runner_outdated`)."""
     status = ci_status(repo)
     if status["running"]:
         return {"started": False, "reason": "runner already active", **status}
     runner = runner or ci_runner(repo)
-    cmd = [sys.executable, str(runner), "ci"]
+    here = Path(__file__).resolve()
+    if source is None and here.parent != repo.state.resolve():
+        source = str(here)
+    cmd = [sys.executable, str(runner), "ci", *(["--source", source] if source else [])]
     kwargs: dict[str, Any] = {}
     if WINDOWS:
         kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED | NEW_PROCESS_GROUP
@@ -3546,6 +3553,7 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
     lock = repo.state / "ci.lock"
     last_file = repo.state / "ci-last"
     results: list[dict[str, Any]] = []
+    relaunch = False
     while True:
         guard = try_lock(lock)
         if guard is None:
@@ -3562,6 +3570,9 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
             if promotion:
                 results.append(promotion)
             while True:
+                if runner_outdated(args.source):
+                    relaunch = True
+                    break
                 fetch(repo)
                 tip = repo.git("rev-parse", repo.remote_ref(cfg.staging), cwd=repo.main)
                 last = last_file.read_text().strip() if last_file.exists() else ""
@@ -3580,10 +3591,30 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
                 results.append(result)
         finally:
             release_lock(lock, guard)
+        if relaunch:
+            log(f"Enact changed at {args.source}; a new runner takes over")
+            source = Path(args.source)
+            return {"ran": results, "relaunched": start_ci(
+                repo, ci_runner(repo, source), str(source))}
         fetch(repo)
         tip = repo.git("rev-parse", repo.remote_ref(cfg.staging), cwd=repo.main)
         if tip == (last_file.read_text().strip() if last_file.exists() else ""):
             return {"ran": results}
+
+
+def runner_outdated(source: str | None) -> bool:
+    """Whether the Enact script this runner was copied from (`start_ci`) has
+    changed since. A runner loops for as long as staging keeps moving, and
+    each check runs this runner's copy with the configuration read at its
+    start: on 2026-11-14 one ran for over 90 minutes on code and settings that
+    a delivered change had replaced. Then the runner hands over to a new one
+    between checks."""
+    if not source:
+        return False
+    try:
+        return Path(source).read_bytes() != Path(__file__).read_bytes()
+    except OSError:
+        return False  # moved or mid-delivery: keep running this copy
 
 
 def ci_gap_remaining(finished: float | None, now_time: float, gap: int) -> float:
@@ -4242,6 +4273,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--interval", type=int, default=30, help=argparse.SUPPRESS)
     p.add_argument("--check-worker", help=argparse.SUPPRESS)
     p.add_argument("--coordinator", type=int, default=0, help=argparse.SUPPRESS)
+    p.add_argument("--source", help=argparse.SUPPRESS)
 
     p = add("worktree", cmd_worktree,
             "Create or remove a bead worktree cut from staging, or prune dead ones.")

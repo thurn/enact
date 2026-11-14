@@ -253,6 +253,19 @@ class SetAsideTest(unittest.TestCase):
         self.assertEqual(self.ids(" ".join(f"src/f{i}.py" for i in range(5))), ["2", "3", "4"])
 
 
+class RunnerOutdatedTest(unittest.TestCase):
+    def test_a_runner_follows_changes_to_the_script_it_was_copied_from(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "enact.py"
+            source.write_bytes(Path(enact.__file__).read_bytes())
+            self.assertFalse(enact.runner_outdated(str(source)))
+            source.write_text("# a delivered change\n")
+            self.assertTrue(enact.runner_outdated(str(source)))
+            source.unlink()
+            self.assertFalse(enact.runner_outdated(str(source)))
+        self.assertFalse(enact.runner_outdated(None))
+
+
 class CiGapTest(unittest.TestCase):
     def test_config_default_and_setting(self):
         self.assertEqual(enact.Config.parse("").slow_min_gap, 0)
