@@ -284,6 +284,17 @@ inspection; uncertainty never authorizes releasing ownership.
   whose `enact_branch` is checked out in it. Default 0 keeps the old
   behavior. Slots never shrink the build directory, so a project that enables
   them must prune it itself.
+- Reused slow-CI tree (2026-11-14): `[checks] slow_tree = "<name>"` makes
+  every slow-CI run check its tip out, detached, in one worktree of that name
+  instead of a new `ci-<tip>` tree that is removed afterwards. The reset,
+  checkout and `clean -fd` keep ignored files, so build directories carry
+  over. Rust's incremental caches are bound to the checkout's absolute path:
+  on Beryl, rebuilding the tests after a one-function change to the base
+  crate took 18 CPU-seconds in the tree that built them and 544 in a copy at
+  another path. The tree is never removed after a run (its processes are
+  still reaped), so the `remove` hook does not run for it; a project that
+  shares its build directory with other trees must save it from the slow
+  check itself. The sweep keeps it. Default unset keeps the old behavior.
 - The check and hook commands are POSIX shell on every OS (2026-10-30). On
   Windows they run in Git for Windows' `bin/bash.exe` (found next to the
   `git` on PATH, else under `%ProgramFiles%\Git`; `ENACT_BASH` overrides),

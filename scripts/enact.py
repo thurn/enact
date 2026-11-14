@@ -272,6 +272,9 @@ class Config:
     # Under a high commit rate the runner would otherwise be busy all the time and compete with
     # the sessions' builds; with a gap, commits that arrive meanwhile join the next run's batch.
     slow_min_gap: int = 0
+    # The name of one worktree that every slow-CI run reuses (`checkout_slow_tree`), or None for
+    # a new `ci-<tip>` worktree per run, removed after it.
+    slow_tree: str | None = None
     worktree_root: str = DEFAULT_WORKTREE_ROOT
     worktree_create: str | None = None
     worktree_remove: str | None = None
@@ -300,6 +303,7 @@ class Config:
             slow=checks.get("slow") or None,
             slow_timeout=int(checks.get("slow_timeout") or DEFAULT_SLOW_TIMEOUT),
             slow_min_gap=max(int(checks.get("slow_min_gap") or 0), 0),
+            slow_tree=checks.get("slow_tree") or None,
             worktree_root=worktree.get("root", DEFAULT_WORKTREE_ROOT),
             worktree_create=worktree.get("create") or None,
             worktree_remove=worktree.get("remove") or None,
@@ -2358,6 +2362,8 @@ def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
         branch = entry.get("branch", "").removeprefix("refs/heads/")
         if path.resolve() == repo.top.resolve():
             kept[str(path)] = "current checkout"
+        elif path.name == repo.config.slow_tree:
+            kept[str(path)] = "slow CI's reused tree"
         elif path.name.startswith("ci-") and "detached" in entry:
             if not ci_trees:
                 kept[str(path)] = "the slow-CI runner sweeps its own trees"
@@ -3689,6 +3695,36 @@ def run_bounded(command: str, cwd: Path, timeout: int,
         return 124, f"{output or ''}\n{note}\n"
 
 
+def checkout_slow_tree(repo: Repo, name: str, tip: str) -> Path:
+    """Check `tip` out, detached, in the worktree `name` that every slow-CI run reuses, and
+    return its path: creating it if missing, recreating it if git refuses.
+
+    Ignored files stay, so build directories carry over from one run to the next. Rust's
+    incremental caches hold the absolute path of the checkout that built them, and rustc
+    discards them in any other directory; on Beryl, a one-function change to its base crate
+    cost 18 CPU-seconds to rebuild the tests in the tree that built them and 544 in a copy of
+    that tree at another path. Tracked changes and untracked files are discarded, since the
+    runner holds the CI lock and the tree holds no work.
+    """
+    path = repo.worktree_root() / name
+    if path.exists() and any(Path(entry["worktree"]).resolve() == path.resolve()
+                             for entry in worktree_entries(repo)):
+        # A runner killed inside a git command leaves git's lock.
+        repo.git("worktree", "unlock", str(path), cwd=repo.main, check=False)
+        for step in (("reset", "-q", "--hard"), ("checkout", "-q", "-f", "--detach", tip),
+                     ("clean", "-q", "-fd")):
+            done = run(["git", *step], path, check=False)
+            if done.returncode != 0:
+                log(f"slow-CI tree {path} not reused ({' '.join(step)}): "
+                    f"{done.stderr.strip()}")
+                break
+        else:
+            return path
+    if path.exists():
+        remove_worktree(repo, path, None)
+    return create_worktree(repo, name, None, tip)
+
+
 def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
     cfg = repo.config
     green = repo.git("rev-parse", repo.remote_ref(cfg.master), cwd=repo.main, check=False) or "?"
@@ -3699,18 +3735,24 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
             "merge-base", "--is-ancestor", passed, tip
         ):
             green = passed  # a later failure must not blame already-passing work
-    name = f"ci-{tip[:12]}"
-    stale = repo.worktree_root() / name
-    if stale.exists():
-        remove_worktree(repo, stale, None)
-    path = create_worktree(repo, name, None, tip)
+    if cfg.slow_tree:
+        path = checkout_slow_tree(repo, cfg.slow_tree, tip)
+    else:
+        name = f"ci-{tip[:12]}"
+        stale = repo.worktree_root() / name
+        if stale.exists():
+            remove_worktree(repo, stale, None)
+        path = create_worktree(repo, name, None, tip)
     # Timed, so a Sage can hold the slow suite to its budget from the log.
     started = time.monotonic()
     log(f"slow CI on {tip[:12]} in {path} at {now()}")
     try:
         returncode, output = run_bounded(cfg.slow, path, cfg.slow_timeout)
     finally:
-        remove_worktree(repo, path, None)
+        if cfg.slow_tree:
+            reap_processes(path)
+        else:
+            remove_worktree(repo, path, None)
     seconds = round(time.monotonic() - started)
     sys.stderr.write(output[-20000:])
     if returncode == 0:

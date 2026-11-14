@@ -735,6 +735,33 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         swept = self.a.enact("worktree", "prune")
         self.assertEqual(swept["kept"][str(path)], "idle slot")
 
+    def test_slow_ci_reuses_its_tree_with_ignored_files_intact(self):
+        config = self.a.path / ".enact.toml"
+        config.write_text(config.read_text().replace(
+            "[checks]\n", '[checks]\nslow_tree = "ci-runner"\n'))
+        (self.a.path / ".gitignore").write_text("build/\n")
+        self.a.git("add", ".gitignore")
+        self.a.git("commit", "-q", "-am", "reuse the slow-CI tree")
+        self.a.git("push", "-q", "origin", "HEAD:master", "HEAD:staging")
+        tree = self.a.path / ".worktrees" / "ci-runner"
+        tips = []
+        for name in ("one", "two"):
+            path = Path(self.a.enact("worktree", "create", name)["path"])
+            self.a.commit_file(name, name, cwd=path)
+            tips.append(self.a.enact("push", "--no-ci", cwd=path)["staging"])
+            self.assertTrue(self.a.enact("ci")["ran"][0]["passed"])
+            self.assertEqual(self.a.git("rev-parse", "HEAD", cwd=tree), tips[-1])
+            if name == "one":
+                # Build output the next run keeps, and a stray file it drops.
+                (tree / "build").mkdir()
+                (tree / "build" / "object").write_text("built")
+                (tree / "stray").write_text("left over")
+        self.assertEqual((tree / "build" / "object").read_text(), "built")
+        self.assertFalse((tree / "stray").exists())
+        self.assertEqual(self.remote_sha("master"), tips[-1])
+        swept = self.a.enact("worktree", "prune")
+        self.assertEqual(swept["kept"][str(tree)], "slow CI's reused tree")
+
     def test_self_delivery_keeps_ci_entry_point_after_removing_worktree(self):
         path = Path(self.a.enact("worktree", "create", "self")["path"])
         self.a.commit_file("enact.py", SCRIPT.read_text(), cwd=path)

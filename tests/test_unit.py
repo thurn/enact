@@ -257,6 +257,9 @@ class CiGapTest(unittest.TestCase):
     def test_config_default_and_setting(self):
         self.assertEqual(enact.Config.parse("").slow_min_gap, 0)
         self.assertEqual(enact.Config.parse("[checks]\nslow_min_gap = 600\n").slow_min_gap, 600)
+        self.assertIsNone(enact.Config.parse("").slow_tree)
+        self.assertEqual(enact.Config.parse('[checks]\nslow_tree = "ci-runner"\n').slow_tree,
+                         "ci-runner")
 
     def test_remaining_wait(self):
         self.assertEqual(enact.ci_gap_remaining(None, 1000.0, 600), 0.0)  # never ran
