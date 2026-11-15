@@ -1489,3 +1489,30 @@ instead of adopting it needs the plan's context.
   follow-up whose acceptance runs the blocked checks, and record the gap on
   the bead. Handoffs and summaries are never where such a gap goes, since
   nothing acts on them. Marginal bugs met in passing stay unfiled.
+
+## Ownership lock queue and skipped syncs (2026-11-15)
+
+- On Beryl's Mac a 5-minute sample found the ownership lock held the whole
+  time, by 16 commands holding it 19 s on average (`start` up to 46 s). In 3
+  days sessions printed "still waiting for the ownership lock" about 166
+  times and gave up after 180 s about 20 times. Waiters polled the OS lock,
+  so whichever polled first after a release won, and an early waiter could
+  lose every handoff.
+- Waiters now queue: each writes a ticket `<time_ns>-<pid>` under
+  `.git/enact/ownership.queue` and tries the lock only when no live,
+  recently refreshed ticket sorts before its own. Older helpers that do not
+  queue can still take the lock between queued waiters.
+- Most of a hold was Beads syncs. A command syncs before it reads and again
+  after it writes, and each sync launches Dolt about 6 times; every launch
+  waits while any bd command (including a dashboard polling `bd export`)
+  has the embedded store open. A sync is now skipped when this process has
+  made no bd write since its last sync and `git ls-remote` shows the
+  remote's `refs/dolt/data` still at the tip the last sync recorded. A tip
+  is recorded only when Dolt's git cache holds that commit, so a push from
+  another machine that lands during a sync is never mistaken for one this
+  clone has. A pause written on another machine is therefore still seen by
+  the next command here. `enact sync` always syncs, because agents run it
+  after raw bd writes that Enact cannot see.
+- The store's remotes and branch are cached in
+  `.git/enact/beads-dolt-settings.json`, keyed on the contents of Dolt's
+  config files, which saves three Dolt launches per full sync.

@@ -1382,6 +1382,44 @@ class OwnershipLockWaitTest(unittest.TestCase):
         with enact.ownership_lock(self.repo, wait=60):
             self.assertTrue(self.path.exists())
 
+    def test_waiters_take_the_lock_in_arrival_order(self):
+        queue = self.repo.state / "ownership.queue"
+        queue.mkdir()
+        mine = queue / f"{time.time_ns():020d}-{os.getpid()}"
+        mine.touch()
+        # A live waiter that arrived first keeps its place.
+        earlier = queue / f"{time.time_ns() - 10**9:020d}-{os.getpid()}"
+        earlier.touch()
+        self.assertFalse(enact.first_in_line(queue, mine))
+        # Its ticket goes stale once its waiter stops refreshing it.
+        old = time.time() - enact.TICKET_STALE - 1
+        os.utime(earlier, (old, old))
+        self.assertTrue(enact.first_in_line(queue, mine))
+        self.assertFalse(earlier.exists())
+        # A dead waiter's ticket is removed at once.
+        dead = queue / f"{time.time_ns() - 10**9:020d}-999999"
+        dead.touch()
+        with mock.patch.object(enact, "pid_alive", return_value=False):
+            self.assertTrue(enact.first_in_line(queue, mine))
+        self.assertFalse(dead.exists())
+        # Later arrivals never hold up an earlier one.
+        (queue / f"{time.time_ns() + 10**9:020d}-{os.getpid()}").touch()
+        self.assertTrue(enact.first_in_line(queue, mine))
+
+    def test_a_queued_waiter_waits_for_an_earlier_one(self):
+        queue = self.repo.state / "ownership.queue"
+        queue.mkdir()
+        earlier = queue / f"{time.time_ns() - 10**9:020d}-{os.getpid()}"
+        earlier.touch()
+        # The lock itself is free, but the earlier waiter is next.
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(enact.Fail):
+            with enact.ownership_lock(self.repo, wait=0.3):
+                pass
+        earlier.unlink()
+        with enact.ownership_lock(self.repo, wait=1):
+            pass
+        self.assertEqual(list(queue.iterdir()), [])
+
     def test_the_holder_record_is_removed_on_release(self):
         with enact.ownership_lock(self.repo):
             self.assertIn(str(os.getpid()), self.path.with_name(
@@ -1441,6 +1479,69 @@ class BeadsReadTest(unittest.TestCase):
 
 
 class SyncTest(unittest.TestCase):
+    def fresh_sync_repo(self, root):
+        (root / ".beads").mkdir()
+        (root / ".beads" / "metadata.json").write_text(json.dumps({
+            "dolt_mode": "embedded", "dolt_database": "test",
+        }))
+        repo = enact.Repo(root, root, root / ".git", enact.Config())
+        repo.state.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(enact._beads_dirty.discard, repo.common)
+        return repo
+
+    def test_a_sync_is_skipped_until_a_write_or_a_remote_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.fresh_sync_repo(Path(directory))
+            calls, remote = [], {"tip": "a", "cached": {"a", "b"}}
+
+            def command(args, cwd, **kwargs):
+                calls.append(args[1])
+                out = {"config": "user.name = Test\nuser.email = t@example.com",
+                       "remote": "origin", "commit": "no changes added to commit",
+                       "pull": "", "push": "", "update": ""}[args[1]]
+                return subprocess.CompletedProcess(args, args[1] == "commit", out, "")
+
+            def git(args, **kwargs):
+                if args[1] == "ls-remote":
+                    return subprocess.CompletedProcess(args, 0, f"{remote['tip']}\tref\n", "")
+                known = args[-1].split("^")[0] in remote["cached"]
+                return subprocess.CompletedProcess(args, 0 if known else 1, "", "")
+
+            tips = [{"local_tip": "a", "remote_tip": "b"}]
+            with mock.patch.object(enact.shutil, "which", return_value="dolt"), \
+                    mock.patch.object(enact, "run", side_effect=command), \
+                    mock.patch.object(enact.subprocess, "run", side_effect=git), \
+                    mock.patch.object(enact, "dolt_git_remote",
+                                      return_value=("https://x/r.git", Path("cache"))), \
+                    mock.patch.object(enact, "dolt_json", side_effect=lambda db, q: (
+                        [{"b": "main"}] if "active_branch" in q else tips)):
+                self.assertNotIn("unchanged", enact.sync(repo))
+                self.assertEqual(calls.count("pull"), 1)
+                # Nothing was written here and the remote has not moved.
+                self.assertIn("unchanged", enact.sync(repo))
+                self.assertEqual(calls.count("pull"), 1)
+                # Another machine pushed: pull it.
+                remote["tip"] = "b"
+                self.assertNotIn("unchanged", enact.sync(repo))
+                self.assertEqual(calls.count("pull"), 2)
+                self.assertIn("unchanged", enact.sync(repo))
+                # A write by this process must be published.
+                enact.Beads(repo).run("update", "work", "--title", "x")
+                self.assertNotIn("unchanged", enact.sync(repo))
+                self.assertEqual(calls.count("pull"), 3)
+                # `enact sync` always syncs, and the remotes and branch come
+                # from the cache while Dolt's config files are unchanged.
+                self.assertNotIn("unchanged", enact.sync(repo, force=True))
+                self.assertEqual(calls.count("pull"), 4)
+                self.assertEqual(calls.count("config"), 1)
+                self.assertEqual(calls.count("remote"), 1)
+                # A tip this clone never fetched is not recorded, so the
+                # sync after it runs in full even if the remote stays put.
+                remote["tip"] = "c"
+                self.assertNotIn("unchanged", enact.sync(repo, force=True))
+                self.assertNotIn("unchanged", enact.sync(repo))
+                self.assertEqual(calls.count("pull"), 6)
+
     def test_embedded_commit_failure_cannot_publish(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

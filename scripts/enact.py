@@ -408,6 +408,8 @@ class Beads:
     def raw(self, *args: str, actor: str | None = None) -> subprocess.CompletedProcess[str]:
         if args[0] not in {"show", "list", "ready"}:
             _beads_reads.get(self.repo.common, {}).clear()
+            if args[0] != "dolt" and not (args[0] == "comments" and "add" not in args):
+                _beads_dirty.add(self.repo.common)
         cmd = ["bd"]
         if actor:
             cmd += ["--actor", actor]
@@ -611,12 +613,50 @@ def lock_holder(path: Path) -> str:
         return "unknown holder"
 
 
+# A waiter whose ticket is this old has died without removing it: live waiters
+# refresh theirs every TICKET_REFRESH seconds.
+TICKET_STALE = 30
+TICKET_REFRESH = 5
+
+
+def first_in_line(queue: Path, mine: Path) -> bool:
+    """Whether no live waiter's ticket in `queue` sorts before `mine`.
+
+    Tickets are named `<time_ns>-<pid>`, so they sort in arrival order. A ticket
+    whose waiter died, or stopped refreshing it, is removed.
+    """
+    now = time.time()
+    try:
+        tickets = sorted(p for p in queue.iterdir() if p.name < mine.name)
+    except OSError:
+        return True
+    for ticket in tickets:
+        try:
+            pid = int(ticket.name.rpartition("-")[2])
+            fresh = now - ticket.stat().st_mtime < TICKET_STALE
+        except (OSError, ValueError):
+            continue
+        if fresh and pid_alive(pid):
+            return False
+        ticket.unlink(missing_ok=True)
+    return True
+
+
 @contextlib.contextmanager
 def ownership_lock(repo: Repo, wait: float = OWNERSHIP_WAIT):
     """Take the clone's ownership lock, waiting up to `wait` seconds.
 
     Callers that already passed a fast check use `OWNERSHIP_WAIT_CHECKED`. A holder record
     next to the lock names the process, so a waiter that gives up can say who kept it.
+
+    Waiters queue in arrival order. Every waiter used to poll the OS lock, and
+    whichever process polled first after a release took it, so with the lock busy
+    all the time a waiter could lose every handoff until it gave up: on Beryl's
+    Mac, 16 holds of 19 s on average kept the lock busy for a whole 5-minute
+    sample, and sessions gave up after 180 s about 20 times in 3 days. Now a
+    waiter only tries the lock once no live waiter that arrived before it is
+    still waiting. Older helpers that skip the queue can still take the lock
+    between two queued waiters.
     """
     path = repo.state / "ownership.lock"
     if path in _ownership_locks:
@@ -625,17 +665,34 @@ def ownership_lock(repo: Repo, wait: float = OWNERSHIP_WAIT):
     start = time.monotonic()
     deadline = start + wait
     next_report = start + 60
-    while (guard := try_lock(path)) is None:
-        now = time.monotonic()
-        if now >= deadline:
-            holder = lock_holder(path)
-            log(f"gave up waiting for the ownership lock after {int(now - start)} s; "
-                f"held by {holder}")
-            raise Fail(f"ownership operation busy (held by {holder}); retry", code=3)
-        if now >= next_report:
-            log(f"still waiting for the ownership lock, held by {lock_holder(path)}")
-            next_report = now + 60
-        time.sleep(0.1)
+    queue = repo.state / "ownership.queue"
+    ticket = queue / f"{time.time_ns():020d}-{os.getpid()}"
+    try:
+        queue.mkdir(exist_ok=True)
+        ticket.touch()
+    except OSError:
+        ticket = None  # an unwritable queue must not block the lock itself
+    refreshed = start
+    try:
+        while (ticket is not None and not first_in_line(queue, ticket)) or \
+                (guard := try_lock(path)) is None:
+            now = time.monotonic()
+            if now >= deadline:
+                holder = lock_holder(path)
+                log(f"gave up waiting for the ownership lock after {int(now - start)} s; "
+                    f"held by {holder}")
+                raise Fail(f"ownership operation busy (held by {holder}); retry", code=3)
+            if now >= next_report:
+                log(f"still waiting for the ownership lock, held by {lock_holder(path)}")
+                next_report = now + 60
+            if ticket is not None and now - refreshed >= TICKET_REFRESH:
+                with contextlib.suppress(OSError):
+                    os.utime(ticket)
+                refreshed = now
+            time.sleep(0.1)
+    finally:
+        if ticket is not None:
+            ticket.unlink(missing_ok=True)
     holder_path = path.with_name(path.name + ".holder")
     try:
         write_json(holder_path, {"pid": os.getpid(), "command": " ".join(sys.argv[:4]),
@@ -670,11 +727,94 @@ DOLT_JOURNAL = "v" * 32
 COMPACT_JOURNAL_BYTES = 64 << 20
 
 
+# Most commands sync before they read, to see other machines' writes, and again
+# after they write. The lock passes straight from one command's closing sync to
+# the next command's opening one, which then only repeats the pull. Each sync
+# costs about 6 Dolt launches that wait whenever any bd command has the store
+# open, all inside the ownership lock. So a sync is skipped when this process
+# has written nothing since its last sync and the remote's Beads data ref is
+# still the one this clone last fetched or pushed (`remote_unchanged`). Asking
+# the remote takes one `git ls-remote` and never opens the store.
+# Clones this process wrote to (a bd command other than a read) since it last synced.
+_beads_dirty: set[Path] = set()
+# Dolt keeps a git cache of a `git+` remote here, holding every commit of its
+# data ref that this clone fetched or pushed.
+DOLT_GIT_CACHE = Path(".dolt") / "git-remote-cache"
+DOLT_DATA_REF = "refs/dolt/data"
+
+
+def dolt_git_remote(repo: Repo) -> tuple[str, Path] | None:
+    """The git URL of the embedded store's remote and Dolt's local cache of it,
+    when the remote is a `git+` URL with a single cache."""
+    try:
+        db = dolt_db_dir(repo)
+        state = json.loads((db / ".dolt" / "repo_state.json").read_text(encoding="utf-8"))
+        url = state["remotes"][repo.config.remote]["url"]
+        caches = list((db / DOLT_GIT_CACHE).glob("*/repo.git"))
+    except (Fail, OSError, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(url, str) or not url.startswith("git+") or len(caches) != 1:
+        return None
+    return url[len("git+"):], caches[0]
+
+
+def remote_data_tip(url: str, cwd: Path) -> str | None:
+    try:
+        proc = subprocess.run(["git", "ls-remote", url, DOLT_DATA_REF], cwd=cwd,
+                              text=True, capture_output=True, stdin=subprocess.DEVNULL,
+                              env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    fields = proc.stdout.split()
+    return fields[0] if proc.returncode == 0 and fields else None
+
+
+def record_synced_tip(repo: Repo) -> None:
+    """After a sync, record the remote's data ref, but only if Dolt's git cache
+    holds that commit, which proves this clone fetched or pushed it. A ref that
+    moved on to another machine's push in the meantime is not in the cache and
+    is not recorded, so the next sync runs in full."""
+    stamp = repo.state / "beads-synced"
+    remote = dolt_git_remote(repo)
+    tip = remote and remote_data_tip(remote[0], repo.main)
+    if not remote or not tip:
+        return
+    known = subprocess.run(["git", "--git-dir", str(remote[1]), "cat-file", "-e",
+                            f"{tip}^{{commit}}"], capture_output=True,
+                           stdin=subprocess.DEVNULL).returncode == 0
+    if known:
+        write_json(stamp, {"tip": tip, "time": time.time()})
+
+
+def remote_unchanged(repo: Repo) -> bool:
+    """Whether the remote's data ref is still the one the last sync recorded."""
+    try:
+        recorded = json.loads((repo.state / "beads-synced").read_text())["tip"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    remote = dolt_git_remote(repo)
+    return bool(remote) and remote_data_tip(remote[0], repo.main) == recorded
+
+
 @serialized
-def sync(repo: Repo) -> dict[str, Any]:
+def sync(repo: Repo, force: bool = False) -> dict[str, Any]:
     """Commit local Beads writes, merge the remote and push refs/dolt/data,
-    then compact an embedded store whose journal has grown (`compact_beads`)."""
+    then compact an embedded store whose journal has grown (`compact_beads`).
+
+    Without `force`, the sync is skipped when nothing was written here and the
+    remote has not moved since the last one (see `_beads_dirty`)."""
+    if not force and repo.common not in _beads_dirty and remote_unchanged(repo):
+        # Other processes' bd reads and writes on this host need no pull, but
+        # cached reads must still see the latter.
+        _beads_reads.get(repo.common, {}).clear()
+        return {"remote": True, "dropped": [], "unchanged": True}
+    # A sync that fails part way may leave local commits unpushed.
+    (repo.state / "beads-synced").unlink(missing_ok=True)
     result = sync_beads(repo)
+    _beads_dirty.discard(repo.common)
+    if result.get("remote"):
+        with contextlib.suppress(OSError):
+            record_synced_tip(repo)
     compact_beads(repo)
     return result
 
@@ -703,6 +843,41 @@ def compact_beads(repo: Repo) -> bool:
     return True
 
 
+def dolt_settings_key(repo: Repo) -> str:
+    """A hash of the files that hold the embedded store's identity, remotes and
+    branch. Dolt rewrites repo_state.json on every pull, so compare contents."""
+    db = dolt_db_dir(repo) / ".dolt"
+    digest = hashlib.sha256()
+    for path in (db / "config.json", db / "repo_state.json",
+                 Path.home() / ".dolt" / "config_global.json"):
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            digest.update(b"-")
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def load_dolt_settings(repo: Repo) -> dict[str, str] | None:
+    """The remotes and branch an earlier sync read from the embedded store, if
+    its config files have not changed since. Reading them again takes three Dolt
+    launches inside the ownership lock, each waiting while any bd command has the
+    store open."""
+    try:
+        cached = json.loads((repo.state / "beads-dolt-settings.json").read_text())
+        if cached.get("key") == dolt_settings_key(repo):
+            return {"remotes": str(cached["remotes"]), "branch": str(cached["branch"])}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def save_dolt_settings(repo: Repo, remotes: str, branch: str) -> None:
+    with contextlib.suppress(OSError):
+        write_json(repo.state / "beads-dolt-settings.json",
+                   {"key": dolt_settings_key(repo), "remotes": remotes, "branch": branch})
+
+
 def sync_beads(repo: Repo) -> dict[str, Any]:
     _beads_reads.get(repo.common, {}).clear()
     beads = Beads(repo)
@@ -719,22 +894,29 @@ def sync_beads(repo: Repo) -> dict[str, Any]:
             return beads.raw("dolt", *args)
         return dolt(list(args), dolt_db_dir(repo), check=False)
 
-    if embedded:
-        config = dict(line.split(" = ", 1) for line in
-                      command("config", "--list").stdout.splitlines() if " = " in line)
-        # bd supplies its own identity; the external CLI requires Dolt config.
-        # Preserve that fallback rather than adding a new setup requirement.
-        embedded = bool(config.get("user.name") and config.get("user.email"))
-    remote = command("remote") if embedded else beads.raw("dolt", "remote", "list")
-    if embedded and remote.returncode != 0:
-        raise Fail(f"dolt remote failed: {(remote.stderr or remote.stdout).strip()}")
-    if embedded and "origin" not in remote.stdout.split():
-        embedded = False  # retain bd's remote selection for custom Dolt remotes
-        remote = beads.raw("dolt", "remote", "list")
-    if remote.returncode != 0 or not remote.stdout.strip():
-        return {"remote": False, "dropped": []}
-    branch = (dolt_json(dolt_db_dir(repo), "select active_branch() as b")[0]["b"]
-              if embedded else None)
+    cached = load_dolt_settings(repo) if embedded else None
+    if cached:
+        remote = subprocess.CompletedProcess(["dolt", "remote"], 0, cached["remotes"], "")
+        branch = cached["branch"]
+    else:
+        if embedded:
+            config = dict(line.split(" = ", 1) for line in
+                          command("config", "--list").stdout.splitlines() if " = " in line)
+            # bd supplies its own identity; the external CLI requires Dolt config.
+            # Preserve that fallback rather than adding a new setup requirement.
+            embedded = bool(config.get("user.name") and config.get("user.email"))
+        remote = command("remote") if embedded else beads.raw("dolt", "remote", "list")
+        if embedded and remote.returncode != 0:
+            raise Fail(f"dolt remote failed: {(remote.stderr or remote.stdout).strip()}")
+        if embedded and "origin" not in remote.stdout.split():
+            embedded = False  # retain bd's remote selection for custom Dolt remotes
+            remote = beads.raw("dolt", "remote", "list")
+        if remote.returncode != 0 or not remote.stdout.strip():
+            return {"remote": False, "dropped": []}
+        branch = (dolt_json(dolt_db_dir(repo), "select active_branch() as b")[0]["b"]
+                  if embedded else None)
+        if embedded:
+            save_dolt_settings(repo, remote.stdout, branch)
     target = [repo.config.remote, branch] if embedded else []
     dropped: list[dict[str, Any]] = []
     for attempt in range(8):
@@ -945,7 +1127,8 @@ def cmd_meta(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def cmd_sync(args: argparse.Namespace) -> dict[str, Any]:
-    return sync(find_repo())
+    # Run after raw bd writes this process cannot see, so never skipped.
+    return sync(find_repo(), force=True)
 
 
 def handoff(comments: list[dict[str, Any]]) -> str | None:
