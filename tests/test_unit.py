@@ -1489,10 +1489,10 @@ class SyncTest(unittest.TestCase):
         self.addCleanup(enact._beads_dirty.discard, repo.common)
         return repo
 
-    def test_a_sync_is_skipped_until_a_write_or_a_remote_change(self):
+    def test_a_sync_is_skipped_until_a_write_or_a_push_from_elsewhere(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = self.fresh_sync_repo(Path(directory))
-            calls, remote = [], {"tip": "a", "cached": {"a", "b"}}
+            calls, remote = [], {"tip": "a", "cached": {"b"}}
 
             def command(args, cwd, **kwargs):
                 calls.append(args[1])
@@ -1517,13 +1517,18 @@ class SyncTest(unittest.TestCase):
                         [{"b": "main"}] if "active_branch" in q else tips)):
                 self.assertNotIn("unchanged", enact.sync(repo))
                 self.assertEqual(calls.count("pull"), 1)
-                # Nothing was written here and the remote has not moved.
+                remote["cached"].add("a")  # the pull fetched it
+                # Nothing was written here and this clone has the remote's tip.
                 self.assertIn("unchanged", enact.sync(repo))
                 self.assertEqual(calls.count("pull"), 1)
-                # Another machine pushed: pull it.
+                # A bd write here pushed a tip this clone has: still nothing to pull.
                 remote["tip"] = "b"
+                self.assertIn("unchanged", enact.sync(repo))
+                # Another machine pushed a tip this clone never fetched: pull it.
+                remote["tip"] = "c"
                 self.assertNotIn("unchanged", enact.sync(repo))
                 self.assertEqual(calls.count("pull"), 2)
+                remote["cached"].add("c")  # the pull fetched it
                 self.assertIn("unchanged", enact.sync(repo))
                 # A write by this process must be published.
                 enact.Beads(repo).run("update", "work", "--title", "x")
@@ -1535,12 +1540,6 @@ class SyncTest(unittest.TestCase):
                 self.assertEqual(calls.count("pull"), 4)
                 self.assertEqual(calls.count("config"), 1)
                 self.assertEqual(calls.count("remote"), 1)
-                # A tip this clone never fetched is not recorded, so the
-                # sync after it runs in full even if the remote stays put.
-                remote["tip"] = "c"
-                self.assertNotIn("unchanged", enact.sync(repo, force=True))
-                self.assertNotIn("unchanged", enact.sync(repo))
-                self.assertEqual(calls.count("pull"), 6)
 
     def test_embedded_commit_failure_cannot_publish(self):
         with tempfile.TemporaryDirectory() as directory:

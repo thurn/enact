@@ -1506,13 +1506,15 @@ instead of adopting it needs the plan's context.
   after it writes, and each sync launches Dolt about 6 times; every launch
   waits while any bd command (including a dashboard polling `bd export`)
   has the embedded store open. A sync is now skipped when this process has
-  made no bd write since its last sync and `git ls-remote` shows the
-  remote's `refs/dolt/data` still at the tip the last sync recorded. A tip
-  is recorded only when Dolt's git cache holds that commit, so a push from
-  another machine that lands during a sync is never mistaken for one this
-  clone has. A pause written on another machine is therefore still seen by
-  the next command here. `enact sync` always syncs, because agents run it
-  after raw bd writes that Enact cannot see.
+  made no bd write since its last sync and the commit at the remote's
+  `refs/dolt/data` (one `git ls-remote`) is already in Dolt's git cache,
+  which holds only commits this clone fetched or pushed. bd pushes after
+  every write by itself, which moved Beryl's ref about every 15 s, so a
+  first version that compared with the tip of the last sync rarely matched.
+  A push from another machine is never in the cache, so a pause written
+  there is still pulled before the next command here reads it. `enact sync`
+  always syncs, because agents run it after raw bd writes that Enact cannot
+  see.
 - The store's remotes and branch are cached in
   `.git/enact/beads-dolt-settings.json`, keyed on the contents of Dolt's
   config files, which saves three Dolt launches per full sync.

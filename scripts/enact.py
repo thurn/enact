@@ -732,9 +732,9 @@ COMPACT_JOURNAL_BYTES = 64 << 20
 # the next command's opening one, which then only repeats the pull. Each sync
 # costs about 6 Dolt launches that wait whenever any bd command has the store
 # open, all inside the ownership lock. So a sync is skipped when this process
-# has written nothing since its last sync and the remote's Beads data ref is
-# still the one this clone last fetched or pushed (`remote_unchanged`). Asking
-# the remote takes one `git ls-remote` and never opens the store.
+# has written nothing since its last sync and this clone already has the
+# remote's Beads data ref (`remote_tip_known`). Asking the remote takes one
+# `git ls-remote` and never opens the store.
 # Clones this process wrote to (a bd command other than a read) since it last synced.
 _beads_dirty: set[Path] = set()
 # Dolt keeps a git cache of a `git+` remote here, holding every commit of its
@@ -769,31 +769,24 @@ def remote_data_tip(url: str, cwd: Path) -> str | None:
     return fields[0] if proc.returncode == 0 and fields else None
 
 
-def record_synced_tip(repo: Repo) -> None:
-    """After a sync, record the remote's data ref, but only if Dolt's git cache
-    holds that commit, which proves this clone fetched or pushed it. A ref that
-    moved on to another machine's push in the meantime is not in the cache and
-    is not recorded, so the next sync runs in full."""
-    stamp = repo.state / "beads-synced"
+def remote_tip_known(repo: Repo) -> bool:
+    """Whether this clone already has the commit at the remote's data ref.
+
+    Dolt's git cache holds a commit of the data ref only once this clone
+    fetched it (and a pull merges what it fetches) or pushed it, through Enact
+    or through bd, which pushes after each write on its own. Every bd write
+    anywhere moves the ref, about every 15 s on Beryl, so comparing with the
+    tip of the last sync would rarely match. A push from another machine is
+    never in the cache, so a pause written there is still pulled before the
+    next command here reads it.
+    """
     remote = dolt_git_remote(repo)
     tip = remote and remote_data_tip(remote[0], repo.main)
     if not remote or not tip:
-        return
-    known = subprocess.run(["git", "--git-dir", str(remote[1]), "cat-file", "-e",
-                            f"{tip}^{{commit}}"], capture_output=True,
-                           stdin=subprocess.DEVNULL).returncode == 0
-    if known:
-        write_json(stamp, {"tip": tip, "time": time.time()})
-
-
-def remote_unchanged(repo: Repo) -> bool:
-    """Whether the remote's data ref is still the one the last sync recorded."""
-    try:
-        recorded = json.loads((repo.state / "beads-synced").read_text())["tip"]
-    except (OSError, ValueError, KeyError, TypeError):
         return False
-    remote = dolt_git_remote(repo)
-    return bool(remote) and remote_data_tip(remote[0], repo.main) == recorded
+    return subprocess.run(["git", "--git-dir", str(remote[1]), "cat-file", "-e",
+                           f"{tip}^{{commit}}"], capture_output=True,
+                          stdin=subprocess.DEVNULL).returncode == 0
 
 
 @serialized
@@ -803,18 +796,13 @@ def sync(repo: Repo, force: bool = False) -> dict[str, Any]:
 
     Without `force`, the sync is skipped when nothing was written here and the
     remote has not moved since the last one (see `_beads_dirty`)."""
-    if not force and repo.common not in _beads_dirty and remote_unchanged(repo):
+    if not force and repo.common not in _beads_dirty and remote_tip_known(repo):
         # Other processes' bd reads and writes on this host need no pull, but
         # cached reads must still see the latter.
         _beads_reads.get(repo.common, {}).clear()
         return {"remote": True, "dropped": [], "unchanged": True}
-    # A sync that fails part way may leave local commits unpushed.
-    (repo.state / "beads-synced").unlink(missing_ok=True)
     result = sync_beads(repo)
     _beads_dirty.discard(repo.common)
-    if result.get("remote"):
-        with contextlib.suppress(OSError):
-            record_synced_tip(repo)
     compact_beads(repo)
     return result
 
