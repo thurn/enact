@@ -735,6 +735,33 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         swept = self.a.enact("worktree", "prune")
         self.assertEqual(swept["kept"][str(path)], "idle slot")
 
+    def test_an_ad_hoc_worktree_reuses_the_newest_free_slot(self):
+        config = self.a.path / ".enact.toml"
+        config.write_text(config.read_text() + "[worktree]\nslots = 2\n")
+        self.a.git("commit", "-q", "-am", "use slots")
+        self.a.git("push", "-q", "origin", "HEAD:master", "HEAD:staging")
+        first = Path(self.a.enact("worktree", "create", "first")["path"])
+        second = Path(self.a.enact("worktree", "create", "second")["path"])
+        self.assertEqual((first.name, second.name), ("slot-01", "slot-02"))
+        # Creating it again, as a resumed session does, finds the same slot.
+        again = self.a.enact("worktree", "create", "first")
+        self.assertEqual(Path(again["path"]), first)
+        self.assertTrue(again["recovered"])
+        # Removal by name releases the slot; a push releases the other at a newer tip.
+        self.a.enact("worktree", "remove", "first")
+        self.assertEqual(self.a.git("rev-parse", "--abbrev-ref", "HEAD", cwd=first), "HEAD")
+        self.a.commit_file("two", "2", cwd=second)
+        pushed = self.a.enact("push", "--no-ci", cwd=second)
+        self.assertTrue(pushed["pushed"])
+        self.assertEqual(self.a.git("rev-parse", "--abbrev-ref", "HEAD", cwd=second), "HEAD")
+        # The next tree takes the slot parked at the newest commit.
+        third = Path(self.a.enact("worktree", "create", "third")["path"])
+        self.assertEqual(third, second)
+        # With every slot busy, a tree gets a directory of its own name.
+        self.a.enact("worktree", "create", "fourth")
+        fifth = Path(self.a.enact("worktree", "create", "fifth")["path"])
+        self.assertEqual(fifth.name, "fifth")
+
     def test_slow_ci_reuses_its_tree_with_ignored_files_intact(self):
         config = self.a.path / ".enact.toml"
         config.write_text(config.read_text().replace(

@@ -2395,28 +2395,46 @@ def is_slot(repo: Repo, path: Path) -> bool:
 def claim_slot(repo: Repo, branch: str, base: str) -> Path | None:
     """Check `branch` out in a free slot, or return None when every slot is busy.
 
-    A cargo build's fingerprints include the worktree's path, so a bead that starts in a
-    directory built before skips recompiling the workspace crates (measured on Beryl:
-    115 s instead of 224 s for a build plus test build). A free slot is a registered worktree
-    on a detached HEAD. Its ignored files (`rust/target`, `node_modules`) are kept; tracked
-    changes and untracked files are discarded, since a released slot holds no work.
+    rustc keys its incremental caches to the worktree's path, so a worktree that starts
+    in a directory built before recompiles only what changed, incrementally (measured on
+    Beryl: 18 CPU-seconds for a test build after a one-function change, against 421-544
+    in a new directory). A free slot is a registered worktree on a detached HEAD. Of the
+    free slots, the one parked at the newest commit is taken, since its build is the
+    closest to staging; a new slot is made only when none is free. Its ignored files
+    (`rust/target`, `node_modules`) are kept; tracked changes and untracked files are
+    discarded, since a released slot holds no work.
     """
     parked = {Path(entry["worktree"]).resolve() for entry in worktree_entries(repo)
               if "detached" in entry}
-    for number in range(1, repo.config.worktree_slots + 1):
-        path = repo.worktree_root() / f"slot-{number:02d}"
-        if path.resolve() in parked:
-            repo.git("reset", "-q", "--hard", cwd=path)
-            repo.git("clean", "-q", "-fd", cwd=path)
-        elif not path.exists():
-            create_worktree(repo, path.name, None, base)
-        else:
-            continue
-        if repo.git_ok("rev-parse", "--verify", f"refs/heads/{branch}"):
-            repo.git("checkout", "-q", branch, cwd=path)
-        else:
-            repo.git("checkout", "-q", "-b", branch, base, cwd=path)
-        return path
+    slots = [repo.worktree_root() / f"slot-{number:02d}"
+             for number in range(1, repo.config.worktree_slots + 1)]
+    free = [path for path in slots if path.resolve() in parked]
+    path = None
+    if free:
+        # Slots are parked at staging tips, so the longest history is the newest.
+        path = max(free, key=lambda p: int(
+            repo.git("rev-list", "--count", "HEAD", cwd=p, check=False) or 0))
+        repo.git("reset", "-q", "--hard", cwd=path)
+        repo.git("clean", "-q", "-fd", cwd=path)
+    else:
+        path = next((p for p in slots if not p.exists()), None)
+        if path is None:
+            return None
+        create_worktree(repo, path.name, None, base)
+    if repo.git_ok("rev-parse", "--verify", f"refs/heads/{branch}"):
+        repo.git("checkout", "-q", branch, cwd=path)
+    else:
+        repo.git("checkout", "-q", "-b", branch, base, cwd=path)
+    return path
+
+
+def slot_on_branch(repo: Repo, branch: str) -> Path | None:
+    """The slot that has `branch` checked out, if any: where an ad hoc worktree named
+    after the branch lives."""
+    for entry in worktree_entries(repo):
+        path = Path(entry["worktree"])
+        if entry.get("branch") == f"refs/heads/{branch}" and is_slot(repo, path):
+            return path
     return None
 
 
@@ -2680,6 +2698,7 @@ def worktree_bead(repo: Repo, path: Path) -> dict[str, Any] | None:
                 (owns_slot(bead, path, slot_branch) if slot
                  else meta(bead, "enact_worktree") == str(path))) or any(
                     r.get("host") == host_name() and r.get("path") == str(path)
+                    and (not slot or r.get("branch") == slot_branch)
                     for r in recovery_records(bead)):
             return bead
     return None
@@ -2723,6 +2742,9 @@ def bead_worktree(args: argparse.Namespace) -> dict[str, Any]:
                 raise Fail("worktree claim lost", code=3)
             bead = Beads(repo).show(bead["id"])
         require_owner(bead, actor)
+    elif not path.exists():
+        # An ad hoc worktree may live in a slot, under its branch rather than its name.
+        path = slot_on_branch(repo, branch) or path
     if args.action == "create":
         fetch(repo)
         base = repo.git("rev-parse", repo.remote_ref(repo.config.staging), cwd=repo.main)
@@ -2744,12 +2766,15 @@ def bead_worktree(args: argparse.Namespace) -> dict[str, Any]:
                 if meta(bead, "enact_worktree_host") == host_name():
                     verified_worktree(repo, path, branch)
                     reused = True
+        if not reused and not bead and is_slot(repo, path):
+            reused = True  # An ad hoc worktree created again finds its slot.
         if not reused:
             saved_head = repo.git("rev-parse", "--verify", f"refs/heads/{branch}",
                                   check=False)
             if saved_head:
                 base, reused = saved_head, True
-            slot = claim_slot(repo, branch, base) if bead else None
+            # An ad hoc tree already made under its name keeps that directory.
+            slot = claim_slot(repo, branch, base) if bead or not path.exists() else None
             path = slot or create_worktree(repo, args.name, branch, base)
         if bead:
             Beads(repo).set_meta(bead["id"], {

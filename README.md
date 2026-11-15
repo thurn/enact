@@ -109,7 +109,7 @@ slow = "scripts/check"
 root = ".worktrees"   # inside the checkout; gitignored
 # create = "scripts/enact-worktree create"   # full replacement hooks
 # remove = "scripts/enact-worktree remove"
-# slots = 20   # reuse slot-01..slot-20 for beads, keeping build directories
+# slots = 20   # reuse slot-01..slot-20 for worktrees, keeping build directories
 # [push]
 # queue = true   # check in the push's tree, then land batches through a merge queue
 [roles.warden.claude]

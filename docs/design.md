@@ -284,6 +284,15 @@ inspection; uncertainty never authorizes releasing ownership.
   whose `enact_branch` is checked out in it. Default 0 keeps the old
   behavior. Slots never shrink the build directory, so a project that enables
   them must prune it itself.
+- Ad hoc trees in slots (2026-11-15): `enact worktree create <name>` without a
+  bead takes a slot too, checking out `enact/<name>`; `create` and `remove`
+  with the same name find the slot by that branch. Of the free slots, the one
+  parked at the newest staging tip is taken, because its build is the closest.
+  Beryl's fast check had its Rust test step killed at the 180 s limit in 48 of
+  52 runs over a day, because each change ran in a new path where rustc
+  ignored the incremental caches; most of those trees were ad hoc. A recovery
+  record pointing at a slot now matches a tree only on the same branch, since
+  later occupants share the path.
 - Reused slow-CI tree (2026-11-14): `[checks] slow_tree = "<name>"` makes
   every slow-CI run check its tip out, detached, in one worktree of that name
   instead of a new `ci-<tip>` tree that is removed afterwards. The reset,
