@@ -140,6 +140,15 @@ Use an allowed role, with `review:inline` or a dependent Warden for
 substantial fixes as the run requires; do not introduce a forbidden role or
 quietly expand your scope.
 
+A problem that stops you verifying your own bead is never a nice-to-have.
+When a tool, checker or test harness defect means a check your acceptance
+relies on cannot run (a name mismatch, an unreachable scenario, a broken
+fixture), fix it in your bead if it is within reach, even when it touches
+several call sites. If it is genuinely separate work, file a follow-up bead
+whose acceptance includes running the checks it unblocks, and record on your
+bead which checks went unrun and why. Never park it in a handoff or closing
+summary: nothing acts on those, so the gap silently becomes permanent.
+
 If a Warden bead that has not started yet depends on yours (check
 `bd dep list <bead> --direction=up --json`) and the issue is in the code it
 will review, comment the issue on that Warden bead instead of filing a bead.

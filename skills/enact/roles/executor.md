@@ -19,6 +19,8 @@ staging. Read `common.md` first; this file adds what is specific to you.
      behavior changed;
    - exercise the change by hand: run the CLI, call the endpoint, load the
      page, run the script. Do not trust a green suite alone;
+   - a check you could not run is not a pass. If tooling blocks one, fix
+     the tooling or file it (`common.md`, "Follow-up beads");
    - re-read your full diff against `origin/staging` as a skeptical reviewer
      before pushing.
 5. If your bead has the label `review:inline` and the run is not light

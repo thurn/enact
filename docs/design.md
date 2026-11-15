@@ -1478,3 +1478,14 @@ instead of adopting it needs the plan's context.
   recovers milestones older Enact pruned.
 - Steward `enact_runs` still lists milestones: `run_holds` already ignores
   holds outside a run, and the links keep delivery tracking complete.
+
+## Blocked verification is essential (2026-11-14)
+
+- An executor left an oracle check for its own card unrun because the
+  checker mismatched a card name, and noted the fix only in its handoff.
+- The essential-only follow-up rule read as permission to drop it. A
+  tooling defect that blocks verifying the bead's own work now counts as
+  essential: fix it in the bead when within reach, otherwise file a
+  follow-up whose acceptance runs the blocked checks, and record the gap on
+  the bead. Handoffs and summaries are never where such a gap goes, since
+  nothing acts on them. Marginal bugs met in passing stay unfiled.
