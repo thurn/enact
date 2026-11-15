@@ -1452,3 +1452,29 @@ instead of adopting it needs the plan's context.
 - Rejected: one lease per epic a vizier touches (more files and the same
   question of which epics count), and skipping milestones in prune (a
   milestone can have a vizier of its own).
+
+## Prune touches only registered runs (2026-11-14)
+
+- After the fix above, Beryl run by-bajq stayed paused. Slow CI lists every
+  epic a failing commit touches in a Steward's `enact_runs`, milestones
+  included. `vizier_routes` then infers a route on milestone by-bajq.1 from
+  each Steward that names it, including Stewards claimed by another run's
+  vizier (by-jj37's). That vizier's lease named by-jj37, which does not
+  cover by-bajq.1, so prune paused by-bajq.1 to .3 as stale runs while
+  by-bajq's own vizier was looping. `run resume by-bajq --explicit` cleared
+  only by-bajq, and `run_holds` still saw the milestone pauses.
+- A run, for prune, is now an epic a vizier registered (`enact_vizier_route_*`
+  metadata). Inferred routes still show in `enact status` but never make an
+  epic prunable.
+- A milestone below a registered, unfinished run is never pruned on its
+  own: pausing the run already holds it. This answers the earlier objection
+  that a milestone can have a vizier of its own: a fresh lease from a vizier
+  registered on any milestone keeps the whole run alive, so prune cannot
+  pause a run above a live milestone vizier either.
+- `run resume <epic> --explicit` also lifts pauses that prune wrote
+  (`actor: enact run prune`) on the epic's milestones, giving them the
+  run's new epoch, and reports them in `resumed_milestones`. A pause a
+  person wrote on a milestone stays until they resume that milestone. This
+  recovers milestones older Enact pruned.
+- Steward `enact_runs` still lists milestones: `run_holds` already ignores
+  holds outside a run, and the links keep delivery tracking complete.

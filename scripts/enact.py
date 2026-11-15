@@ -1485,17 +1485,34 @@ def stale_runs(repo: Repo, graph: list[dict[str, Any]],
     """Unfinished runs whose vizier on this machine stopped renewing its lease:
     every route is on this host and none has a fresh lease. A run with a
     route on another host is left alone, since that host's leases cannot be
-    read here. Each entry has the epic bead and its delivery."""
+    read here. Each entry has the epic bead and its delivery.
+
+    Only an epic a vizier registered (`enact run register`) is a run here.
+    Routes inferred from workers do not count: slow CI lists every epic a
+    failing commit touches in a Steward's `enact_runs`, milestones included,
+    so a milestone inherited another run's vizier as a route and was paused
+    when that vizier's lease, held on its own run, did not cover it (Beryl
+    by-bajq.1 to .3). A milestone of a registered run is never a run of its
+    own: pruning the run already holds it. A run stays alive while a vizier
+    registered on it, or on one of its milestones, keeps a fresh lease."""
+    by_id = {b["id"]: b for b in graph}
     stale = []
     for bead in graph:
         if bead.get("issue_type") != "epic" or run_finished(bead) or stopped_runs(bead, graph):
             continue
-        routes = vizier_routes(bead, graph)
+        routes = run_routes(bead)
         if not routes or any(r.get("host") != host_name() for r in routes):
             continue
+        if any(run_routes(by_id[a]) and not run_finished(by_id[a])
+               for a in epic_and_ancestors(bead["id"], graph)[1:] if a in by_id):
+            continue
+        scope = [bead, *(b for b in descendants(graph, bead["id"])
+                         if b.get("issue_type") == "epic")]
+        if any(route_alive(repo, epic["id"], r, graph)
+               for epic in scope for r in run_routes(epic)):
+            continue
         delivery = (deliveries or {}).get(bead["id"]) or run_delivery(repo, graph, bead["id"])
-        if not any(route_alive(repo, bead["id"], r, graph) for r in routes):
-            stale.append({"bead": bead, "delivery": delivery})
+        stale.append({"bead": bead, "delivery": delivery})
     return stale
 
 
@@ -1516,7 +1533,7 @@ def prune_runs(repo: Repo) -> list[dict[str, Any]]:
         state = "finished" if complete else "paused"
         save_run_meta(repo, bead["id"], "enact_control",
                       {"state": state, "epoch": control["epoch"], "reason": reason,
-                       "actor": "enact run prune", "at": now()})
+                       "actor": PRUNE_ACTOR, "at": now()})
         if state == "paused" and bead.get("status") == "closed":
             Beads(repo).run("reopen", bead["id"], "--reason", reason)
             sync(repo)
@@ -1562,11 +1579,33 @@ def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
                    "epoch": uuid.uuid4().hex if args.action == "resume" else control["epoch"],
                    "reason": args.reason, "actor": actor, "at": now()}
         save_run_meta(repo, args.epic, "enact_control", control)
+        cleared = resume_pruned_milestones(repo, args.epic, control) if args.action == "resume" else []
         if args.action != "resume" and bead.get("status") == "closed":
             beads.run("reopen", args.epic, "--reason", args.reason)
             sync(repo)
-        return {"epic": args.epic, "control": control}
+        return {"epic": args.epic, "control": control,
+                **({"resumed_milestones": cleared} if cleared else {})}
     raise Fail(f"unknown run action {args.action}")
+
+
+PRUNE_ACTOR = "enact run prune"
+
+
+def resume_pruned_milestones(repo: Repo, epic: str, control: dict[str, Any]) -> list[str]:
+    """An explicit resume of a run also lifts pauses that prune wrote on its
+    milestones, which older Enact pruned as runs of their own; otherwise the
+    resumed run stays held by them. A pause a person put on a milestone
+    stays until they resume that milestone."""
+    graph = Beads(repo).all()
+    cleared = []
+    for bead in descendants(graph, epic):
+        held = run_control(bead)
+        if (bead.get("issue_type") == "epic" and held["state"] == "paused"
+                and held.get("actor") == PRUNE_ACTOR):
+            save_run_meta(repo, bead["id"], "enact_control",
+                          {**control, "reason": f"resumed with run {epic}: {control['reason']}"})
+            cleared.append(bead["id"])
+    return cleared
 
 
 def spawn_prompt(role: str, bead: dict[str, Any], epic: str, vizier: str) -> str:

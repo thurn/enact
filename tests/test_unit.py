@@ -935,10 +935,69 @@ class VizierLeaseTest(unittest.TestCase):
         self.assertEqual(self.prune(self.epic(), milestone, complete=False)[0], [])
         self.assertTrue(enact.route_leases(self.repo, "e.1", enact.run_routes(milestone),
                                            [self.epic(), milestone])[1] is False)
-        # A lease on another run still says nothing about this one.
+        # A lease on another run still says nothing about this one. Pausing
+        # the run holds its milestone, which is not pruned on its own.
         self.lease(0, epic="other")
         pruned = self.prune(self.epic(), milestone, complete=False)[0]
-        self.assertEqual(sorted(p["epic"] for p in pruned), ["e", "e.1"])
+        self.assertEqual([p["epic"] for p in pruned], ["e"])
+
+    def test_prune_never_treats_a_milestone_as_a_run_of_its_own(self):
+        # Beryl by-bajq: a Steward shared with run `o` listed milestone `e.1`
+        # in `enact_runs`, so `o`'s vizier `w` became an inferred route on
+        # `e.1`. `w` looped on `o`, not `e.1`, and prune paused `e.1` while
+        # `v` looped on `e`.
+        milestone = {"id": "e.1", "issue_type": "epic", "status": "open", "parent": "e",
+                     "metadata": {}}
+        other = {"id": "o", "issue_type": "epic", "status": "open", "metadata": {}}
+        steward = {"id": "s", "labels": ["role:steward"], "status": "open",
+                   "metadata": {"enact_runs": "e.1 o", "enact_vizier": "w",
+                                "enact_spawn_host": "jarvis", "enact_spawn_provider": "claude",
+                                "enact_spawn_app": "claude", "enact_spawn_project": "/p"}}
+        graph = [self.epic(), milestone, other, steward]
+        with mock.patch.dict(enact.os.environ, {"ENACT_APP": "claude"}):
+            self.assertEqual([r["session"] for r in enact.vizier_routes(milestone, graph)],
+                             ["w"])
+        self.lease(0)
+        enact.renew_lease(self.repo, "w", "o")
+        self.assertEqual(self.prune(*graph, complete=False)[0], [])
+        # Even with the run's vizier gone, only registered runs are pruned.
+        self.lease(enact.VIZIER_LEASE_SECONDS + 1)
+        self.assertEqual([p["epic"] for p in self.prune(*graph, complete=False)[0]], ["e"])
+        # A milestone registered under a registered run is not pruned on its
+        # own lease, and its live vizier keeps the run alive.
+        registered = {**milestone, "metadata": {"enact_vizier_route_m": json.dumps(
+            {"session": "m", "host": "jarvis", "provider": "claude"})}}
+        self.assertEqual([p["epic"] for p in self.prune(self.epic(), registered,
+                                                         complete=False)[0]], ["e"])
+        enact.renew_lease(self.repo, "m", "e.1")
+        self.assertEqual(self.prune(self.epic(), registered, complete=False)[0], [])
+
+    def test_explicit_resume_lifts_prune_pauses_on_milestones_only(self):
+        def held(actor):
+            return {"enact_control": json.dumps({"state": "paused", "epoch": "legacy",
+                                                 "actor": actor})}
+        graph = [self.epic(metadata=held(enact.PRUNE_ACTOR)),
+                 {"id": "e.1", "issue_type": "epic", "parent": "e",
+                  "metadata": held(enact.PRUNE_ACTOR)},
+                 {"id": "e.2", "issue_type": "epic", "parent": "e", "metadata": held("user")},
+                 {"id": "o", "issue_type": "epic", "metadata": held(enact.PRUNE_ACTOR)}]
+        beads = mock.Mock()
+        beads.all.return_value = graph
+        beads.show.return_value = graph[0]
+        saved = []
+        args = types.SimpleNamespace(action="resume", epic="e", reason="user says go",
+                                     explicit=True, exhausted=False)
+        with mock.patch.object(enact, "find_repo", return_value=self.repo), \
+                mock.patch.object(enact, "sync"), \
+                mock.patch.object(enact, "Beads", return_value=beads), \
+                mock.patch.object(enact, "require_actor", return_value="v"), \
+                mock.patch.object(enact, "save_run_meta",
+                                  side_effect=lambda *a: saved.append(a)):
+            result = enact.cmd_run.__wrapped__(args)  # skip the ownership lock
+        self.assertEqual(result["resumed_milestones"], ["e.1"])
+        self.assertEqual([a[1] for a in saved], ["e", "e.1"])
+        self.assertEqual(saved[1][3]["state"], "active")
+        self.assertEqual(saved[1][3]["epoch"], saved[0][3]["epoch"])
 
     def test_a_shared_steward_does_not_carry_another_runs_pause(self):
         paused = {"enact_control": json.dumps({"state": "paused", "epoch": "1"})}
