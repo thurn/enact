@@ -105,7 +105,7 @@ export class TicketBatch {
 
   changes(): BatchChanges {
     return {
-      seq: this.seq, tickets: this.tickets, outgoing: this.outgoing, changed: this.changed,
+      seq: this.seq, tickets: this.tickets, originals: this.originals, outgoing: this.outgoing, changed: this.changed,
       modified: new Set([...this.tickets.keys(), ...this.relatedChanges]),
       events: [...this.events],
     };

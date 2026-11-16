@@ -31,6 +31,7 @@ export function liveDescendants(live: Iterable<Ticket>, parentOf: ParentOf): Map
 export type BatchChanges = {
   seq: number;
   tickets: ReadonlyMap<string, Ticket>;
+  originals: ReadonlyMap<string, Ticket | null>;
   outgoing: ReadonlyMap<string, ReadonlyMap<string, Edge>>;
   changed: ReadonlySet<string>;
   modified: ReadonlySet<string>;

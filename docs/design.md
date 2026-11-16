@@ -2176,15 +2176,15 @@ the shared `meta.seq` row once. Excluding that row:
 | Feed connections and messages | | 500 | 0 |
 | **Total** | | **31,500 of 100,000** | **29,000 of 100,000** |
 
-The table estimates operation rows. A shared sequence write per changed
-request adds up to 13,000 rows. Exact durable request accounting can add
-another 31,500 rows, and the feed journal up to 13,000. Together that is
-about 86,500 rows before child allocation and Cloudflare's alarm scheduling
-writes. The daily counters reset at 00:00 UTC.
-The usage row itself counts toward the limit. When the row counter reaches
-the 90 percent threshold, accounting stops writing and public reads remain
-available. The server review verifies the remaining margin for both projects
-sharing the account.
+The table estimates operation rows. Each changed request can also write
+one sequence row and one feed journal row. Each project counts requests
+against a durable reservation of 32 requests at a time. A read spends a
+reserved request in memory. A mutation still persists its written-row
+count with the data change. After eviction the object assumes any unspent
+requests in the prior reservation were used. The counters reset at 00:00
+UTC. The usage row itself counts toward the limit. When the per-project row
+counter reaches its 90 percent threshold, accounting stops writing and
+public reads remain available.
 
 Rows read stay far below 5 million because live tickets are served from
 memory. Static assets are not counted as requests. The server refuses writes

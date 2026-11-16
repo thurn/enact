@@ -1,6 +1,7 @@
 import * as c from "../cirrus/components";
 import {ProjectUsage} from "../project-usage";
 import {resolveId} from "../ticket-batch";
+import {ancestors, type BatchChanges} from "../ticket-index";
 import type {TicketRow} from "../ticket-types";
 import {brand, ticketUrl} from "./common";
 import {homeData, progress, ticketData, type Progress} from "./data";
@@ -33,7 +34,6 @@ export class Dashboard {
   private home?: Page;
   private readonly status: ProjectStatus;
   private readonly pages = new Map<string, Page>();
-  private progressSeq?: string;
   private readonly counts = new Map<string, Progress | null>();
 
   constructor(private readonly sql: SqlStorage) {
@@ -47,7 +47,7 @@ export class Dashboard {
     const fragment = url.searchParams.get("fragment");
     const head = request.method === "HEAD";
     const seq = this.sql.exec<{value: string}>("SELECT value FROM meta WHERE key = 'seq'").toArray()[0]?.value ?? "0";
-    const readProgress = (ids: Iterable<string>) => this.readProgress(seq, ids);
+    const readProgress = (ids: Iterable<string>) => this.readProgress(ids);
     if (!ticket) {
       if (url.pathname !== root) return this.redirect(url, root);
       if (fragment === "status") return this.fragment(head, seq, this.status.render(root, now, usage.state()));
@@ -86,13 +86,35 @@ export class Dashboard {
     return fragment === "all" ? this.fragment(head, seq, this.regions(page)) : this.response(request, page);
   }
 
-  private readProgress(seq: string, ids: Iterable<string>): Progress[] {
-    // The home page and its prefetched detail pages usually show the same
-    // epic counts. Reuse the recursive query across all pages at a revision.
-    if (this.progressSeq !== seq) {
-      this.progressSeq = seq;
-      this.counts.clear();
+  invalidateProgress(): void {
+    this.counts.clear();
+  }
+
+  applyTicketChanges(changes: BatchChanges, parentOf: (id: string) => string | null): void {
+    if (!this.counts.size) return;
+    for (const [id, ticket] of changes.tickets) {
+      const before = changes.originals.get(id);
+      if (before && before.parent !== ticket.parent) {
+        // Moving a ticket moves all of its descendants between ancestor groups.
+        this.invalidateProgress();
+        return;
+      }
+      if (before?.status === ticket.status) continue;
+      for (const parent of ancestors(id, parentOf)) {
+        const cached = this.counts.get(parent);
+        if (cached === undefined) continue;
+        const count = cached ?? {id: parent, closed: 0, working: 0, total: 0};
+        count.total += Number(!before);
+        count.closed += Number(ticket.status === "closed") - Number(before?.status === "closed");
+        count.working += Number(ticket.status === "in_progress") - Number(before?.status === "in_progress");
+        this.counts.set(parent, count);
+      }
     }
+  }
+
+  private readProgress(ids: Iterable<string>): Progress[] {
+    // A project's archive can outlive this object's in-memory graph.
+    if (this.counts.size >= 8192) this.invalidateProgress();
     const all = [...ids];
     const missing = all.filter((id) => !this.counts.has(id));
     if (missing.length) {

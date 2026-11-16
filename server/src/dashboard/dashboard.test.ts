@@ -5,9 +5,21 @@ import {Dashboard, dashboardRoute} from "./index";
 
 const request = (path: string, init?: RequestInit) => exports.default.fetch("https://example.com/by" + path, init);
 const stub = env.TICKETS.getByName("by");
+const token = "dashboard-test-token";
+
+async function batch(op: object) {
+  const response = await request("/api/batch", {
+    method: "POST", headers: {Authorization: `Bearer ${token}`, "X-Actor": "Derek"},
+    body: JSON.stringify({ops: [op]}),
+  });
+  expect(response.status, await response.text()).toBe(200);
+}
 
 async function seed() {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  const hash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   await runInDurableObject(stub, ({store}, {storage}) => storage.transactionSync(() => {
+    store.sql.exec("INSERT INTO meta VALUES ('token_hashes', ?)", JSON.stringify([hash]));
     store.sql.exec(`
       WITH RECURSIVE numbers(n) AS (VALUES (1) UNION ALL SELECT n + 1 FROM numbers WHERE n < 4992)
       INSERT INTO tickets (id, parent, title, status, body, created_at, updated_at, created_by, version)
@@ -79,17 +91,13 @@ test("renders project pages from 5,000 tickets and revalidates them", async () =
     expect(unchanged.headers.get("etag")).toBe(tag);
   }
 
-  await runInDurableObject(stub, ({store}) => {
-    store.batch("by", "Derek", {ops: [{op: "comment", id: "q44s.7.24", text: "New dashboard comment"}]});
-  });
+  await batch({op: "comment", id: "q44s.7.24", text: "New dashboard comment"});
   expect((await request("/", {headers: {"If-None-Match": homeTag}})).status).toBe(304);
   const commented = await request("/tickets/q44s.7.24", {headers: {"If-None-Match": detailTag}});
   expect(commented.status).toBe(200);
   expect(await commented.text()).toContain("New dashboard comment");
 
-  await runInDurableObject(stub, ({store}) => {
-    store.batch("by", "Derek", {ops: [{op: "update", id: "erro", set: {title: "Renamed failure"}}]});
-  });
+  await batch({op: "update", id: "erro", set: {title: "Renamed failure"}});
   const changed = await request("/tickets/q44s.7.24", {headers: {"If-None-Match": commented.headers.get("etag")!}});
   expect(changed.status).toBe(200);
   expect(await changed.text()).toContain("Renamed failure");
@@ -100,9 +108,7 @@ test("renders project pages from 5,000 tickets and revalidates them", async () =
     expect(redirect.headers.get("location")).toBe("https://example.com/by/tickets/q44s.7.24?from=bookmark");
   }
   const homeBeforeReopen = (await request("/")).headers.get("etag")!;
-  await runInDurableObject(stub, ({store}) => {
-    store.batch("by", "Derek", {ops: [{op: "reopen", id: "q44s.999"}]});
-  });
+  await batch({op: "reopen", id: "q44s.999"});
   const progressed = await request("/", {headers: {"If-None-Match": homeBeforeReopen}});
   expect(progressed.status).toBe(200);
   expect((await progressed.text()).includes("4791/4795")).toBe(true);
@@ -111,6 +117,9 @@ test("renders project pages from 5,000 tickets and revalidates them", async () =
   expect(head.headers.get("etag")).toBe((await request("/tickets/q44s.7.24")).headers.get("etag"));
   expect(await head.text()).toBe("");
   expect((await request("/tickets/missing")).status).toBe(404);
+
+  await batch({op: "update", id: "q44s.7.24", set: {parent: null}});
+  expect(await (await request("/")).text()).toContain("4791/4793");
 
   // Run explicitly because timings in the local simulator depend on host load.
   if (import.meta.env.VITE_DASHBOARD_BUDGET_CHECK === "1") {

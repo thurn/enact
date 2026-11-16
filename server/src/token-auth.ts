@@ -1,4 +1,4 @@
-import {ProjectUsage} from "./project-usage";
+import type {ProjectUsage} from "./project-usage";
 import type {TicketStore} from "./ticket-store";
 import {ApiError, bad} from "./ticket-types";
 
@@ -33,7 +33,11 @@ const tokenRef = /^refs\/enact\/tokens\/([a-z0-9][a-z0-9_-]*)\/([a-f0-9]{64})$/;
 export class TokenRegistry {
   private pending?: Promise<void>;
 
-  constructor(private readonly storage: DurableObjectStorage, private readonly store: TicketStore) {}
+  constructor(
+    private readonly storage: DurableObjectStorage,
+    private readonly store: TicketStore,
+    private readonly usage: () => ProjectUsage,
+  ) {}
 
   async lookup(repository: string | undefined, hash: string): Promise<string | null | undefined> {
     const accepted = registeredMachine(this.store.meta("token_hashes"), hash);
@@ -78,7 +82,7 @@ export class TokenRegistry {
 
   private save(key: string, value: string): void {
     this.storage.transactionSync(() => {
-      const usage = new ProjectUsage(this.store.sql, Date.now());
+      const usage = this.usage();
       usage.check(1);
       this.store.sql.exec("INSERT OR REPLACE INTO meta VALUES (?, ?)", key, value);
       // The route accounts for the request separately from the cache writes.

@@ -4,8 +4,9 @@ import { ChangeFeed, type FeedChange } from "./change-feed";
 import { Dashboard, dashboardRoute } from "./dashboard";
 import { ProjectDeadlines } from "./project-deadlines";
 import { cutoverState, dayMilliseconds, events, leases, ProjectWrite } from "./project-state";
-import { ProjectUsage } from "./project-usage";
+import { ProjectUsage, type RequestReservation } from "./project-usage";
 import { exportTickets, importTickets } from "./ticket-transfer";
+import type { BatchChanges } from "./ticket-index";
 import { TicketStore } from "./ticket-store";
 import { ApiError, integer, object } from "./ticket-types";
 import { authorizeWrite, TokenRegistry, type Identity } from "./token-auth";
@@ -35,7 +36,12 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
 
   private readonly feed = new ChangeFeed(this.ctx, this.store);
   private readonly deadlines = new ProjectDeadlines(this.store);
-  private readonly tokens = new TokenRegistry(this.ctx.storage, this.store);
+  private readonly usageRequests: RequestReservation = {day: "", used: 0, ceiling: 0};
+  private readonly tokens = new TokenRegistry(this.ctx.storage, this.store, () => this.usage());
+
+  private usage(now = Date.now()): ProjectUsage {
+    return new ProjectUsage(this.store.sql, now, this.usageRequests);
+  }
 
   override webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
     this.feed.subscribe(socket, message);
@@ -64,13 +70,16 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
     if (path === "/batch") {
       const previous = this.store.tickets.seq;
       let change: FeedChange | undefined;
+      let committed: BatchChanges | undefined;
       const reply = this.store.batch(project, identity.actor, body, (rows, changes) => {
         if (changes.seq !== previous) {
           change = {previous, seq: changes.seq, tickets: [...changes.changed],
             native: [...changes.modified], events: changes.events};
         }
         this.record(usage, rows, change);
+        committed = changes;
       }, identity.machine);
+      if (committed) this.dashboard.applyTicketChanges(committed, (id) => this.store.tickets.parentOf(id));
       if (change) this.feed.publish(change);
       const armDeadlines = change?.tickets?.some((id) => {
         const ticket = this.store.tickets.live.get(id);
@@ -91,8 +100,10 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
       this.record(usage, write.rowsWritten, change, ceiling === undefined ? undefined : integer(ceiling, "daily_row_ceiling"));
       return reply;
     });
-    if (path === "/import" && change) this.store.invalidateIndex();
-    else this.store.advanceSequence(write.seq);
+    if (path === "/import" && change) {
+      this.store.invalidateIndex();
+      this.dashboard.invalidateProgress();
+    } else this.store.advanceSequence(write.seq);
     if (change) this.feed.publish(change);
     const armDeadlines = lease !== undefined ? write.rowsWritten > 0 : path === "/import" && change !== undefined;
     return {...(result ?? {body: this.state(usage)}), armDeadlines};
@@ -139,7 +150,7 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
           await this.scheduleAlarm();
         }
         const now = Date.now();
-        const result = this.write(project, path, lease, identity, body, now, new ProjectUsage(this.store.sql, now));
+        const result = this.write(project, path, lease, identity, body, now, this.usage(now));
         accounted = true;
         if (result.armDeadlines) {
           const at = Date.now();
@@ -149,14 +160,14 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
         return Response.json(result.body, {status: result.status ?? 200});
       }
       const now = Date.now();
-      const usage = new ProjectUsage(this.store.sql, now);
+      const usage = this.usage(now);
       usage.record();
       accounted = true;
       if (dashboard) return await this.dashboard.fetch(request, dashboard, now, usage);
       if (request.method === "GET") return this.get(project, path, request, url.searchParams, usage, now);
       return Response.json({error: "Unknown route"}, {status: 404});
     } catch (error) {
-      if (!accounted) new ProjectUsage(this.store.sql, Date.now()).record();
+      if (!accounted) this.usage().record();
       if (error instanceof ApiError) return Response.json(error.body, {status: error.status});
       if (error instanceof SyntaxError || error instanceof URIError) {
         return Response.json({error: "Malformed request"}, {status: 400});
@@ -174,7 +185,7 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
 
   override async alarm(): Promise<void> {
     const now = Date.now();
-    const usage = new ProjectUsage(this.store.sql, now);
+    const usage = this.usage(now);
     const {tickets, leases, next} = this.deadlines.scan(now);
     const write = new ProjectWrite(this.store.sql, now);
     const day = usage.state().day;

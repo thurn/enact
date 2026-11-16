@@ -5,18 +5,26 @@ const threshold = {requests: limits.requests * 0.9, rows_written: limits.rows_wr
 
 type Counts = {day: string; requests: number; rows_written: number};
 
+// Reserve request counts in groups so a run of reads does not write once per
+// request. A restart treats the unspent part of its previous group as used.
+const requestsPerReservation = 32;
+export type RequestReservation = {day: string; used: number; ceiling: number};
+
 export class ProjectUsage {
   private counts: Counts;
 
-  constructor(private readonly sql: SqlStorage, now: number) {
+  constructor(private readonly sql: SqlStorage, now: number, private readonly requests: RequestReservation) {
     const day = new Date(now).toISOString().slice(0, 10);
     const row = sql.exec<{value: string}>("SELECT value FROM meta WHERE key = 'daily_usage'").toArray()[0];
     const saved: Counts | undefined = row && JSON.parse(row.value);
     this.counts = saved?.day === day ? saved : {day, requests: 0, rows_written: 0};
+    if (requests.day !== day || requests.ceiling !== this.counts.requests) {
+      Object.assign(requests, {day, used: this.counts.requests, ceiling: this.counts.requests});
+    }
   }
 
   check(rows: number, rowCeiling = threshold.rows_written): void {
-    if (this.counts.requests + 1 > threshold.requests) {
+    if (this.requests.used + 1 > threshold.requests) {
       throw new ApiError(429, {limit: "requests"});
     }
     // Updating the usage row is itself a SQLite write.
@@ -28,9 +36,16 @@ export class ProjectUsage {
   record(rows = 0, requests = 1): void {
     // Keep serving reads after the write cutoff without consuming its reserve.
     if (this.counts.rows_written >= threshold.rows_written) return;
+    const used = this.requests.used + requests;
+    if (rows === 0 && used <= this.requests.ceiling) {
+      this.requests.used = used;
+      return;
+    }
+    const ceiling = used > this.requests.ceiling
+      ? used + requestsPerReservation - 1 : this.requests.ceiling;
     const next = {
       day: this.counts.day,
-      requests: this.counts.requests + requests,
+      requests: ceiling,
       rows_written: this.counts.rows_written + rows + 1,
     };
     this.sql.exec(
@@ -38,9 +53,10 @@ export class ProjectUsage {
       JSON.stringify(next),
     );
     this.counts = next;
+    Object.assign(this.requests, {used, ceiling});
   }
 
   state() {
-    return {...this.counts, limits};
+    return {...this.counts, requests: this.requests.used, limits};
   }
 }

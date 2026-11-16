@@ -1,5 +1,5 @@
 import {env, exports} from "cloudflare:workers";
-import {runDurableObjectAlarm, runInDurableObject} from "cloudflare:test";
+import {evictDurableObject, runDurableObjectAlarm, runInDurableObject} from "cloudflare:test";
 import {expect, test} from "vitest";
 import type {Ticket} from "./ticket-types";
 
@@ -117,9 +117,9 @@ test("counts committed rows, rejects quota-breaking batches atomically, and rese
   await json(batch("first"));
   await json(post("/leases/staging", {op: "acquire", holder: "worker", ttl_s: 180}));
   // The create writes five data rows including the sequence. The lease
-  // writes two. Both changes write one feed row, and every request writes
-  // one usage row.
-  expect(await json(get("/state"))).toMatchObject({requests: 4, rows_written: 13, seq: 2});
+  // writes two. Both changes write one feed row and one usage row. The
+  // first read writes the request reservation and the second uses it.
+  expect(await json(get("/state"))).toMatchObject({requests: 4, rows_written: 12, seq: 2});
   const seed = (rows: number, requests: number, day: string) => sql((db) => {
     db.exec("UPDATE meta SET value = ? WHERE key = 'daily_usage'", JSON.stringify({rows_written: rows, requests, day}));
   });
@@ -127,7 +127,7 @@ test("counts committed rows, rejects quota-breaking batches atomically, and rese
   await seed(89_994, 4, today);
   expect(await json(batch("rolled back"), 429)).toEqual({limit: "rows_written"});
   expect(await json<Ticket[]>(get("/tickets"))).toHaveLength(1);
-  expect(await json(get("/state"))).toMatchObject({requests: 7, rows_written: 89_997, seq: 2});
+  expect(await json(get("/state"))).toMatchObject({requests: 7, rows_written: 89_995, seq: 2});
   await seed(89_996, 7, today);
   // A lease release can use the last four rows, including the feed row.
   await json(post("/leases/staging", {op: "release", holder: "worker"}));
@@ -168,7 +168,7 @@ test("whole ticket snapshots export, replay idempotently, and reconcile changed 
   expect(first).toMatchObject({seq: 1, imported: 3});
   expect(first.rows_written).toBeGreaterThan(3);
   expect(await json(send(child, parent, other))).toEqual({seq: 1, imported: 0, rows_written: 0});
-  expect(await json(get("/state"))).toMatchObject({seq: 1, requests: 3, rows_written: first.rows_written + 4});
+  expect(await json(get("/state"))).toMatchObject({seq: 1, requests: 3, rows_written: first.rows_written + 2});
   expect(await json(get("/tickets/transfer-old"))).toMatchObject({id: "parent", children: ["parent.3"]});
   expect(await json(get("/tickets/parent.3?comments=1&history=1"))).toMatchObject({
     id: child.id, edges: child.edges, comments: child.comments, history: child.history,
@@ -196,6 +196,22 @@ test("whole ticket snapshots export, replay idempotently, and reconcile changed 
     expect((await send(imported("bad", {aliases: [alias]}))).status).toBe(400);
   }
   expect((await send(...Array.from({length: 201}, (_, n) => imported(`row${n}`)))).status).toBe(400);
+});
+
+test("read requests consume durable reservations without writing on every call", async () => {
+  const {get, json, sql, stub} = await fixture("request-reservations");
+  const before = await json<{requests: number; rows_written: number}>(get("/state"));
+  for (let n = 0; n < 8; n++) await json(get("/leases"));
+  expect(await json(get("/state"))).toMatchObject({
+    requests: before.requests + 9, rows_written: before.rows_written,
+  });
+  const ceiling = await sql((db) => db.exec<{ceiling: number}>(
+    "SELECT json_extract(value, '$.requests') AS ceiling FROM meta WHERE key = 'daily_usage'",
+  ).one().ceiling);
+  await evictDurableObject(stub);
+  expect(await json(get("/state"))).toMatchObject({
+    requests: ceiling + 1, rows_written: before.rows_written + 1,
+  });
 });
 
 test("honors an import ceiling atomically and resumes on a later UTC day", async () => {
