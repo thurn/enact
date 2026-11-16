@@ -441,7 +441,7 @@ class GraphTest(unittest.TestCase):
             {"id": "repair", "labels": ["role:steward"], "status": "open",
              "metadata": {"enact_ci_range": "a..b", "enact_commits": "c"}},
         ]
-        histories = {"a": "a", "b": "a b", "master": "a"}
+        histories = {"a": "a", "b": "a b", "master": "a", "a..b": "b"}
         calls = []
 
         def git(*args, **kwargs):
@@ -456,8 +456,28 @@ class GraphTest(unittest.TestCase):
         self.assertEqual(first["pending"], ["b", "c"])
         self.assertEqual(first["stewards"], ["repair"])
         self.assertTrue(second["complete"])
-        self.assertEqual(calls, [("rev-list", "b"), ("rev-list", "a"),
-                                 ("rev-list", "master")])
+        self.assertEqual(calls, [("rev-list", "a..b"), ("rev-list", "master")])
+
+    def test_delivery_checks_a_range_it_cannot_list_commit_by_commit(self):
+        graph = [
+            {"id": "one", "issue_type": "epic"},
+            {"id": "first", "parent": "one", "metadata": {"enact_commits": "b"}},
+            {"id": "repair", "labels": ["role:steward"], "status": "open",
+             "metadata": {"enact_ci_range": "gone..b", "enact_commits": "c"}},
+        ]
+        histories = {"gone": "", "gone..b": "", "b": "a b", "master": "a"}
+        repo = types.SimpleNamespace(
+            config=types.SimpleNamespace(master="master"), remote_ref=lambda branch: branch,
+            git=lambda *args, **kwargs: histories[args[1]])
+        delivery = enact.run_delivery(repo, graph, "one")
+        self.assertEqual(delivery["stewards"], ["repair"])
+
+    def test_bead_runs_with_an_index_matches_without(self):
+        graph = [{"id": "e", "issue_type": "epic"}, {"id": "m", "parent": "e"},
+                 {"id": "t", "parent": "m", "metadata": {"enact_runs": "x"}}]
+        by_id = {b["id"]: b for b in graph}
+        self.assertEqual(enact.bead_runs(graph[2], graph, by_id), ["x", "e"])
+        self.assertEqual(enact.bead_runs(graph[2], graph), ["x", "e"])
 
     def test_descendants_are_transitive(self):
         graph = [

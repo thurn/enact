@@ -1453,12 +1453,18 @@ def archivist_waits(run: list[dict[str, Any]]) -> bool:
     )
 
 
-def bead_runs(bead: dict[str, Any], graph: list[dict[str, Any]]) -> list[str]:
-    """Explicit run links also cover unparented Stewards; infer old runs."""
+def bead_runs(bead: dict[str, Any], graph: list[dict[str, Any]],
+              by_id: dict[str, dict[str, Any]] | None = None) -> list[str]:
+    """Explicit run links also cover unparented Stewards; infer old runs.
+    A caller that asks about many beads of one graph passes `by_id`, the
+    graph indexed by id: building it on every call made `run_delivery`
+    quadratic in the graph (3-4.5 s per `next` poll at 4,600 beads, held
+    under the ownership lock, and six minutes for `status`)."""
     runs = (meta(bead, "enact_runs") or "").split()
     if meta(bead, "enact_run"):
         runs.append(meta(bead, "enact_run"))
-    by_id = {b["id"]: b for b in graph}
+    if by_id is None:
+        by_id = {b["id"]: b for b in graph}
     current = bead
     seen = set()
     while current.get("parent") in by_id and current["id"] not in seen:
@@ -1610,8 +1616,21 @@ def run_delivery(repo: Repo, graph: list[dict[str, Any]], epic: str,
             ancestry[tip] = set(repo.git("rev-list", tip, check=False).split())
         return sha in ancestry[tip]
 
+    def in_range(sha: str, green: str, tip: str) -> bool:
+        """`sha` is reachable from `tip` but not from `green`. One small
+        `rev-list green..tip` per range: listing each tip's whole history
+        took about 2 s per call at 100 Steward ranges."""
+        key = f"{green}..{tip}"
+        if key not in ancestry:
+            ancestry[key] = set(repo.git("rev-list", key, check=False).split())
+        if not ancestry[key]:  # Empty, or failed (a `green` this clone lacks).
+            return is_ancestor(sha, tip) and not is_ancestor(sha, green)
+        return sha in ancestry[key]
+
     scope = {epic, *(b["id"] for b in descendants(graph, epic))}
-    members = [b for b in graph if b["id"] in scope or epic in bead_runs(b, graph)]
+    by_id = {b["id"]: b for b in graph}
+    members = [b for b in graph
+               if b["id"] in scope or epic in bead_runs(b, graph, by_id)]
     # Failure ranges also recover links when delivery metadata arrived after
     # CI filed the bead. Explicit run links need not be exhaustive.
     while True:
@@ -1619,13 +1638,12 @@ def run_delivery(repo: Repo, graph: list[dict[str, Any]], epic: str,
             sha for b in members for sha in (meta(b, "enact_commits") or "").split()
         ))
         legacy = []
+        member_ids = {b["id"] for b in members}
         for bead in graph:
-            if bead in members or role_of(bead) != "steward":
+            if bead["id"] in member_ids or role_of(bead) != "steward":
                 continue
             green, sep, tip = (meta(bead, "enact_ci_range") or "").partition("..")
-            if sep and any(is_ancestor(sha, tip)
-                           and not is_ancestor(sha, green)
-                           for sha in commits):
+            if sep and any(in_range(sha, green, tip) for sha in commits):
                 legacy.append(bead)
         if not legacy:
             break
@@ -4134,12 +4152,13 @@ def report_ci_failure(repo: Repo, tip: str, green: str, log_tail: str) -> str:
     sync(repo)
     os_name = ci_os()
     graph = beads.all()
+    by_id = {b["id"]: b for b in graph}
     runs = list(dict.fromkeys(
         run_id for bead in graph
         if any(repo.git_ok("merge-base", "--is-ancestor", sha, tip)
                and not repo.git_ok("merge-base", "--is-ancestor", sha, green)
                for sha in (meta(bead, "enact_commits") or "").split())
-        for run_id in bead_runs(bead, graph)
+        for run_id in bead_runs(bead, graph, by_id)
     ))
     open_stewards = [
         b
@@ -4522,11 +4541,13 @@ def spawned_here(bead: dict[str, Any], host: str, host_provider: str) -> bool:
 
 def vizier_routes(bead: dict[str, Any], graph: list[dict[str, Any]]) -> list[dict[str, Any]]:
     routes = run_routes(bead)
+    by_id = {b["id"]: b for b in graph}
     # Old runs can be inspected safely, but recovery needs registration
     # carrying authorization. Include closed assignments for final CI.
     for worker in graph:
         session = meta(worker, "enact_vizier")
-        if session and routed_here(worker) and bead["id"] in bead_runs(worker, graph) and not any(
+        if session and routed_here(worker) and bead["id"] in bead_runs(
+                worker, graph, by_id) and not any(
                 route.get("session") == session for route in routes):
             routes.append({"session": session, "authorized": False,
                            **{key: meta(worker, "enact_spawn_" + key)
