@@ -28,6 +28,8 @@ RULES = (
     "relative list order among tickets with equal creation time and priority",
     "unordered raw dependency records",
     "platform line endings",
+    "terminal padding and generated fixture dates in human bd show",
+    "order within equally ranked ready explanations and their blocker lists",
 )
 
 
@@ -151,6 +153,35 @@ def verify_write(address, args, recorded):
             assert native["status"] == "closed" and native["close_reason"] == recorded["reason"]
 
 
+def rank_order(rows):
+    # Beads leaves the order among equal priority and creation time unspecified.
+    rows[:] = [
+        row for _, tied in groupby(rows, key=lambda row: (row["priority"], row["created_at"]))
+        for row in sorted(tied, key=lambda row: row["id"])
+    ]
+
+
+def show_text(text):
+    # Beads pads its Markdown rendering to the terminal width. The simulator
+    # creates the compatibility fixtures on the day the replay runs.
+    text = re.sub(r"(?<=: )\d{4}-\d{2}-\d{2}(?= ·|$)", "<fixture date>", text, flags=re.M)
+    text = re.sub(r"^  \d{4}-\d{2}-\d{2} \d{2}:\d{2} ", "  <fixture minute> ", text, flags=re.M)
+    return [line.rstrip() for line in text.splitlines() if line.strip()]
+
+
+def retired_export(bd, args, cwd, env, address, project):
+    endpoint = f"/{project}/api/state"
+    files = (set(cwd.iterdir()), set((cwd / "workspace").iterdir()) if (cwd / "workspace").is_dir() else set())
+    requests_before = request(address, endpoint)["requests"]
+    reply = run(bd, args, cwd, env)
+    assert (reply.returncode, reply.stdout, reply.stderr) == (1, "", EXPORT_ERROR), reply
+    assert files[0] == set(cwd.iterdir()), args
+    if (cwd / "workspace").is_dir():
+        assert files[1] == set((cwd / "workspace").iterdir()), args
+    # Reading the counter itself accounts for the sole additional request.
+    assert request(address, endpoint)["requests"] == requests_before + 1, args
+
+
 def replay(tk, bd, directory, env, address):
     rows = read_gzip(CORPUS / "start.jsonl.gz")
     # A ticket due after the recording was snoozed for every captured call.
@@ -179,18 +210,26 @@ def replay(tk, bd, directory, env, address):
     calls = read_gzip(CORPUS / "calls.jsonl.gz")
     problems = []
     expected_ids, actual_ids = {}, {}
+    # The first read observes cutover and saves the permanent local marker.
+    ok(bd, ["list", "--id", "by-r61mr", "--json"], directory, env)
+    retired = 0
     for call in calls:
         args = call["argv"]
-        reply = run(bd, args, directory, env, call["stdin"])
-        if args == EXPORT_ARGS and call["returncode"] == 0:
-            # Scotty polls this command. Its replacement is the live dashboard.
-            assert (reply.returncode, reply.stdout, reply.stderr) == (1, "", EXPORT_ERROR), reply
-            print("Recorded Scotty export rejected after cutover as expected.")
+        cwd = directory / call["cwd"]
+        if call["command"] == ["export"]:
+            retired_export(bd, args, cwd, env, address, "by")
+            retired += 1
             continue
+        if "--readonly" in args and call["command"] == ["update"]:
+            before = request(address, "/by/api/state")["seq"]
+        reply = run(bd, args, cwd, env, call["stdin"])
+        if "--readonly" in args and call["command"] == ["update"]:
+            assert request(address, "/by/api/state")["seq"] == before, args
         want = call["stdout"]
         got = reply.stdout
         if reply.returncode != call["returncode"]:
             problems.append(f"{args}: exit {reply.returncode}, expected {call['returncode']} ({reply.stderr.strip()})")
+            continue
         if reply.stderr != (call["stderr"] or ""):
             problems.append(f"{args}: stderr {reply.stderr!r}, expected {call['stderr']!r}")
         if "--json" in args and want and got:
@@ -203,13 +242,20 @@ def replay(tk, bd, directory, env, address):
                 if isinstance(row, dict) and row.get("id") in snoozes and row.get("defer_until") == future:
                     row["defer_until"] = snoozes[row["id"]]
             if call["command"][0] in {"list", "ready"}:
-                # Beads and SQLite do not promise an order among equal rank.
                 for listing in (want, got):
-                    listing[:] = [
-                        row for _, tied in groupby(listing, key=lambda row: (row["priority"], row["created_at"]))
-                        for row in sorted(tied, key=lambda row: row["id"])
-                    ]
+                    if "--explain" in args:
+                        for field in ("ready", "blocked"):
+                            rank_order(listing[field])
+                        for row in listing["ready"]:
+                            if row["resolved_blockers"]:
+                                row["resolved_blockers"].sort()
+                        for row in listing["blocked"]:
+                            row["blocked_by"].sort(key=lambda blocker: blocker["id"])
+                    else:
+                        rank_order(listing)
             mismatch = difference(normalize(want, expected_ids), normalize(got, actual_ids))
+        elif call["command"] == ["show"] and args[1:3] == ["by-corpus.2", "by-corpus.1"]:
+            mismatch = difference(show_text(want), show_text(got))
         else:
             mismatch = difference(want or "", got)
         if mismatch:
@@ -219,12 +265,13 @@ def replay(tk, bd, directory, env, address):
                 verify_write(address, args, json.loads(call["stdout"]))
             except AssertionError as error:
                 problems.append(f"{args}: persisted ticket differs ({error})")
-        elif call["returncode"] == 0 and call["command"] == ["comments", "add"]:
+        elif call["returncode"] == 0 and call["command"] == ["comments", "add"] and "--help" not in args:
             author, fields = (args[1], args[2:]) if args[0] == "--actor" else ("Derek Thurn", args)
             comments = request(address, f"/by/api/tickets/{fields[2]}?comments=1")["comments"]
             assert (comments[-1]["author"], comments[-1]["text"]) == (author, fields[3])
     assert not problems, "\n".join(problems)
-    print(f"{len(calls)} recorded calls, zero unexplained differences.")
+    print(f"{len(calls)} recorded calls, zero unexplained exit, stdout or stderr differences.")
+    print(f"{retired} retired export shapes wrote no file and sent no ticket-server request after observing cutover.")
     print("Normalization rules: " + "; ".join(RULES))
 
 
@@ -238,7 +285,9 @@ def cutover(bd, directory, env, address):
         17, "export|--json\n", "legacy stderr\n"
     ), legacy_export
     request(address, "/gate/api/state", {"cutover": "paused"})
-    paused = subprocess.Popen([bd, "epic", "close-eligible", "--json"], cwd=directory, env=env,
+    caller = directory / "caller"
+    caller.mkdir()
+    paused = subprocess.Popen([bd, "-C", "..", "epic", "close-eligible", "--json"], cwd=caller, env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         # Wait until the Worker acknowledges the drain before completing the
@@ -263,17 +312,7 @@ def cutover(bd, directory, env, address):
             paused.kill()
             paused.wait()
     assert (directory / "synced").read_text() == "sync\n"
-    requests_before = request(address, "/gate/api/state")["requests"]
-    for args in (EXPORT_ARGS, ["export"], EXPORT_ARGS):
-        retired = run(bd, args, directory, env)
-        assert (retired.returncode, retired.stdout, retired.stderr) == (1, "", EXPORT_ERROR), retired
-    # Only the observation request itself should reach the ticket server.
-    assert request(address, "/gate/api/state")["requests"] == requests_before + 1
-    output_export = run(bd, ["export", "-o", "backup.jsonl"], directory, env)
-    assert (output_export.returncode, output_export.stdout, output_export.stderr) == (
-        1, "", EXPORT_ERROR
-    ), output_export
-    assert not (directory / "backup.jsonl").exists()
+    retired_export(bd, ["export", "-o", "backup.jsonl"], directory, env, address, "gate")
     with socket.socket() as offline:
         offline.bind(("127.0.0.1", 0))
         config.write_text(f'[tickets]\nproject = "gate"\nurl = "http://127.0.0.1:{offline.getsockname()[1]}"\n')
@@ -346,11 +385,22 @@ def main():
         directory = Path(scratch)
         bd = directory / f"bd{tk.suffix}"
         fake = directory / f"legacy{tk.suffix}"
+        help_output = directory / "help"
+        help_output.mkdir()
+        for case in read_gzip(CORPUS / "calls.jsonl.gz"):
+            if case["argv"][-1:] == ["--help"] and case["command"] != ["export"]:
+                (help_output / "_".join(case["argv"][:-1])).write_text(case["stdout"], encoding="utf-8")
         source = directory / "legacy.rs"
         source.write_text("""
 use std::io::Read;
 fn main() {
-    println!("{}", std::env::args().skip(1).collect::<Vec<_>>().join("|"));
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    if args.last().is_some_and(|arg| arg == "--help") {
+        let file = std::path::PathBuf::from(std::env::var_os("SHIM_TEST_HELP").unwrap()).join(args[..args.len()-1].join("_"));
+        print!("{}", std::fs::read_to_string(file).unwrap());
+        return;
+    }
+    println!("{}", args.join("|"));
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input).unwrap();
     print!("{input}");
@@ -371,7 +421,7 @@ fn main() {
         )
         env = {**os.environ, "HOME": scratch, "APPDATA": scratch,
                "GIT_CONFIG_GLOBAL": str(directory / "gitconfig"),
-               "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_CONFIG_NOSYSTEM": "1", "SHIM_TEST_HELP": str(help_output),
                "ENACT_SHIM_HELPER": str(sync_script), "ENACT_SHIM_PYTHON": sys.executable}
         env.pop("ENACT_REAL_BD", None)
         tokens = directory / ("enact" if os.name == "nt" else ".config/enact")
@@ -387,8 +437,11 @@ fn main() {
                 request(address, f"/test-token/{project}")
             (directory / ".enact.toml").write_text(f'[tickets]\nproject = "by"\nurl = "{address}"\n')
             cutover(bd, directory, env, address)
-            (directory / ".enact.toml").write_text(f'[tickets]\nproject = "by"\nurl = "{address}"\n')
-            replay(tk, bd, directory, env, address)
+            (directory / ".enact.toml").unlink()
+            workspace = directory / "workspace"
+            workspace.mkdir()
+            (workspace / ".enact.toml").write_text(f'[tickets]\nproject = "by"\nurl = "{address}"\n')
+            replay(tk, bd, workspace, env, address)
             dated_deferrals(tk, bd, directory, env, address)
         finally:
             worker.stdin.close()

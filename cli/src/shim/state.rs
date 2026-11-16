@@ -15,19 +15,27 @@ const CACHE_FOR: Duration = Duration::from_secs(5);
 pub(super) fn dispatch(
     args: &[OsString],
     reads: bool,
+    directory: Option<&Path>,
     options: impl FnOnce() -> Result<Options>,
 ) -> Result<u8> {
     if env::var_os("ENACT_SHIM_DRAINING").is_some() {
         return real(args);
     }
     let here = env::current_dir().map_err(usage)?;
-    let Ok((_, config)) = read_config(&here) else {
+    let selected = match directory {
+        Some(path) => match fs::canonicalize(here.join(path)) {
+            Ok(selected) => selected,
+            Err(_) => return real(args),
+        },
+        None => here,
+    };
+    let Ok((_, config)) = read_config(&selected) else {
         return real(args);
     };
     if config.get("tickets").is_none() {
         return real(args);
     }
-    let initial = Client::load(None, "bd-shim".into(), Duration::from_secs(120))?;
+    let initial = Client::load_from(&selected, None, "bd-shim".into(), Duration::from_secs(120))?;
     let mut gate = Gate::open(initial)?;
     loop {
         // Keep the write lock until legacy bd exits, so a drain includes any
@@ -44,6 +52,9 @@ pub(super) fn dispatch(
             Some("after") => {
                 drop(write_lock);
                 let options = options()?;
+                if directory.is_some() {
+                    env::set_current_dir(&selected).map_err(usage)?;
+                }
                 if !reads {
                     gate.client.actor = options
                         .actor
@@ -58,7 +69,7 @@ pub(super) fn dispatch(
             Some("paused") if in_enact => return real(args),
             Some("paused") => {
                 drop(write_lock);
-                gate.drain(&snapshot)?;
+                gate.drain(&snapshot, &selected)?;
                 let seq = snapshot["seq"]
                     .as_u64()
                     .ok_or_else(|| usage("cutover state has no sequence"))?;
@@ -192,7 +203,7 @@ impl Gate {
         Ok(())
     }
 
-    fn drain(&self, snapshot: &Value) -> Result<()> {
+    fn drain(&self, snapshot: &Value, workspace: &Path) -> Result<()> {
         let lock = self.lock("writers.lock", true)?;
         let at = snapshot["cutover_at"]
             .as_str()
@@ -211,6 +222,7 @@ impl Gate {
             .ok_or_else(|| usage("cannot locate enact.py for the cutover drain"))?;
         let python = env::var_os("ENACT_SHIM_PYTHON").unwrap_or_else(|| "python3".into());
         let sync = Command::new(python)
+            .current_dir(workspace)
             .arg(helper)
             .arg("sync")
             .env("ENACT_SYNC_NOW", "1")
@@ -282,7 +294,7 @@ pub(crate) fn real_binary() -> Result<PathBuf> {
         .ok_or_else(|| usage("bd: cannot find the real Beads binary; set ENACT_REAL_BD"))
 }
 
-fn real(args: &[impl AsRef<OsStr>]) -> Result<u8> {
+pub(super) fn real(args: &[impl AsRef<OsStr>]) -> Result<u8> {
     let status = Command::new(real_binary()?)
         .args(args)
         .status()

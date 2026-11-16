@@ -78,6 +78,9 @@ export class TicketStore {
     const readyOnly = flag(filter, "ready");
     const beads = flag(filter, "beads");
     const epicCounts = flag(filter, "epic_counts");
+    const explain = beads && flag(filter, "explain");
+    const title = filter.get("title")?.toLowerCase();
+    const ids = new Set(filter.getAll("id").map((id) => resolveId(this.sql, project, id)));
     const limitValue = filter.get("limit");
     if (limitValue !== null && !/^\d+$/.test(limitValue)) bad("limit must be a nonnegative integer");
     const limit = limitValue === null ? Infinity : integer(Number(limitValue), "limit");
@@ -85,24 +88,30 @@ export class TicketStore {
 
     const tickets = this.tickets;
     const archived = includeClosed && !readyOnly;
-    const candidates = archived
-      ? this.archivedCandidates(status, type, assignee, parent, ancestor)
-      : [...tickets.live.values()].sort(byId);
+    const candidates = ids.size !== 0
+      ? [...ids].map((id) => tickets.lookup(id)).filter((ticket): ticket is Ticket => ticket !== null && (archived || ticket.status !== "closed"))
+      : archived
+        ? this.archivedCandidates(status, type, assignee, parent, ancestor)
+        : [...tickets.live.values()].sort(byId);
     const now = Date.now();
     const results: object[] = [];
     for (const ticket of candidates) {
       if (status !== null && ticket.status !== status || type !== null && ticket.type !== type
         || assignee !== null && ticket.assignee !== assignee || parent !== null && ticket.parent !== parent
         || unassigned && ticket.assignee !== null || excludedTypes.includes(ticket.type)
+        || title !== undefined && !ticket.title.toLowerCase().includes(title)
         || !labels.every((label) => ticket.labels.includes(label))) continue;
 
-      if (ancestor !== null && !archived) {
+      if (ancestor !== null && (!archived || ids.size !== 0)) {
         let current = ticket.parent;
         while (current !== null && current !== ancestor) current = tickets.parentOf(current);
         if (current === null) continue;
       }
       const readiness = tickets.readiness(ticket, now);
-      if (readyOnly && !(beads ? this.beadsReady(ticket, now) : readiness.ready)) continue;
+      const blockers = beads && (readyOnly || explain) ? this.beadsBlockers(ticket) : [];
+      const beadsReady = ticket.status === "open" && (!ticket.defer_until || Date.parse(ticket.defer_until) < now)
+        && blockers.length === 0;
+      if (readyOnly && !(beads ? beadsReady : readiness.ready)) continue;
       const counts = beads ? {
         ...this.beadsCounts(ticket.id, archived),
         edges: [...tickets.edgesFrom(ticket.id).values()],
@@ -111,7 +120,8 @@ export class TicketStore {
         "SELECT count(*) AS total_children, count(*) FILTER (WHERE status = 'closed') AS closed_children FROM tickets WHERE parent = ?",
         ticket.id,
       ).one() : {};
-      results.push({...ticket, ...readiness, ...counts, ...children});
+      const explanation = explain ? {beads_ready: beadsReady, beads_blockers: blockers} : {};
+      results.push({...ticket, ...readiness, ...counts, ...children, ...explanation});
       if (results.length === limit) break;
     }
     return results;
@@ -127,16 +137,17 @@ export class TicketStore {
     ).one();
   }
 
-  private beadsReady(ticket: Ticket, now: number): boolean {
-    if (ticket.status !== "open" || ticket.defer_until && Date.parse(ticket.defer_until) >= now) return false;
-    // Beads excludes tasks inside a blocked epic from ready listings.
+  private beadsBlockers(ticket: Ticket): string[] {
+    // Beads reports direct active blockers first and names the immediate
+    // parent when a blocker is inherited from higher in the hierarchy.
     for (let id: string | null = ticket.id; id !== null; id = this.tickets.parentOf(id)) {
-      for (const edge of this.tickets.edgesFrom(id).values()) {
-        if (["blocks", "conditional-blocks", "waits-for"].includes(edge.kind)
-          && this.tickets.lookup(edge.dst)?.status !== "closed") return false;
-      }
+      const blockers = [...this.tickets.edgesFrom(id).values()]
+        .filter((edge) => ["blocks", "conditional-blocks", "waits-for"].includes(edge.kind)
+          && this.tickets.live.has(edge.dst))
+        .map((edge) => edge.dst);
+      if (blockers.length !== 0) return id === ticket.id ? blockers : [ticket.parent!];
     }
-    return true;
+    return [];
   }
 
   private *archivedCandidates(

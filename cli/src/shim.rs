@@ -1,3 +1,4 @@
+mod diagnostics;
 mod output;
 pub(crate) mod state;
 
@@ -7,7 +8,7 @@ use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 use std::ffi::OsString;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::{env, fs, io};
 
@@ -20,6 +21,13 @@ struct Options {
     quiet: bool,
     #[arg(long, global = true)]
     actor: Option<String>,
+    #[arg(long, short = 'C', global = true)]
+    directory: Option<PathBuf>,
+    #[arg(long, global = true)]
+    readonly: bool,
+    // Sandbox disables Beads' Dolt auto-push. Ticket reads have no auto-push.
+    #[arg(long, global = true)]
+    sandbox: bool,
     #[command(subcommand)]
     action: Action,
 }
@@ -41,10 +49,26 @@ enum Action {
         limit: Option<usize>,
         #[arg(long)]
         all: bool,
+        #[arg(long)]
+        brief: bool,
+        #[arg(long)]
+        flat: bool,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        id: Vec<String>,
     },
     Ready {
         #[arg(long)]
         label: Vec<String>,
+        #[arg(long)]
+        parent: Option<String>,
+        #[arg(long = "type", short = 't')]
+        kind: Option<String>,
+        #[arg(long)]
+        brief: bool,
+        #[arg(long)]
+        explain: bool,
         #[arg(long, value_delimiter = ',')]
         exclude_type: Vec<String>,
         #[arg(long, short = 'u')]
@@ -55,7 +79,24 @@ enum Action {
     Show {
         ids: Vec<String>,
     },
-    Export,
+    Export {
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+        #[arg(long, short = 'h')]
+        help: bool,
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        exclude_owner: Vec<String>,
+        #[arg(long)]
+        include_infra: bool,
+        #[arg(long)]
+        include_memories: bool,
+        #[arg(long)]
+        scrub: bool,
+        #[arg(long)]
+        verbose: bool,
+    },
     Create {
         #[arg(long)]
         id: Option<String>,
@@ -136,9 +177,14 @@ enum Dependency {
         on: String,
     },
     List {
-        id: String,
+        ids: Vec<String>,
         #[arg(long, default_value = "down", value_parser = ["up", "down"])]
         direction: String,
+        #[arg(long = "type", short = 't')]
+        kind: Option<String>,
+    },
+    Tree {
+        id: String,
     },
 }
 
@@ -169,14 +215,29 @@ enum Remote {
 }
 
 impl Action {
+    fn write_name(&self) -> &str {
+        match self {
+            Self::Create { .. } => "create",
+            Self::Update { .. } => "update",
+            Self::Close { .. } => "close",
+            Self::Dep { .. } => "dep",
+            Self::Label { .. } => "label",
+            Self::Comments { .. } => "comments",
+            Self::Epic { .. } => "epic",
+            Self::Defer { .. } => "defer",
+            Self::Undefer { .. } => "undefer",
+            _ => unreachable!("read-only commands are already accepted"),
+        }
+    }
+
     fn reads_only(&self) -> bool {
         match self {
             Self::List { .. }
             | Self::Ready { .. }
             | Self::Show { .. }
-            | Self::Export
+            | Self::Export { .. }
             | Self::Dep {
-                operation: Dependency::List { .. },
+                operation: Dependency::List { .. } | Dependency::Tree { .. },
             }
             | Self::Label {
                 operation: Label::List { .. },
@@ -204,17 +265,40 @@ pub fn main() -> ExitCode {
     let options = Options::try_parse_from(&args);
     let reads = options
         .as_ref()
-        .is_ok_and(|parsed| parsed.action.reads_only());
-    let result = state::dispatch(&args[1..], reads, || {
-        let options = options.map_err(|_| unsupported(&args[1..]))?;
-        Ok(options)
-    });
+        .is_ok_and(|parsed| parsed.readonly || parsed.action.reads_only());
+    let directory = options
+        .as_ref()
+        .ok()
+        .and_then(|parsed| parsed.directory.clone());
+    let result = if legacy_help(&args[1..]) {
+        // The installed Beads binary owns its static usage and flag descriptions.
+        state::real(&args[1..])
+    } else {
+        state::dispatch(&args[1..], reads, directory.as_deref(), || {
+            options.map_err(|_| unsupported(&args[1..]))
+        })
+    };
     match result {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
             eprintln!("{}", error.message);
             ExitCode::from(error.code)
         }
+    }
+}
+
+fn legacy_help(args: &[OsString]) -> bool {
+    match args {
+        [command, help] if help == "--help" || help == "-h" => {
+            ["comments", "list", "ready", "undefer"]
+                .iter()
+                .any(|name| command == *name)
+        }
+        [command, subcommand, help] if help == "--help" || help == "-h" => {
+            (command == "dep" && (subcommand == "list" || subcommand == "remove"))
+                || (command == "comments" && subcommand == "add")
+        }
+        _ => false,
     }
 }
 
@@ -282,6 +366,12 @@ fn update(client: &Client, id: &str, fields: Value) -> Result<Value> {
 }
 
 fn run(client: &Client, options: Options) -> Result<u8> {
+    if options.readonly && !options.action.reads_only() {
+        let command = options.action.write_name();
+        return Err(usage(format!(
+            "Error: operation '{command}' is not allowed in read-only mode"
+        )));
+    }
     let mut rendered = None;
     let answer = match options.action {
         Action::List {
@@ -292,6 +382,10 @@ fn run(client: &Client, options: Options) -> Result<u8> {
             parent,
             limit,
             all,
+            brief,
+            flat: _,
+            title,
+            id,
         } => {
             let mut query = vec![("beads", "1".into())];
             for (key, value) in [
@@ -299,6 +393,7 @@ fn run(client: &Client, options: Options) -> Result<u8> {
                 ("type", kind),
                 ("assignee", assignee),
                 ("parent", parent),
+                ("title", title),
             ] {
                 if let Some(value) = value {
                     query.push((key, value));
@@ -307,6 +402,7 @@ fn run(client: &Client, options: Options) -> Result<u8> {
             for value in label {
                 query.push(("label", value));
             }
+            query.extend(id.into_iter().map(|id| ("id", id)));
             if all {
                 query.push(("all", "1".into()));
             }
@@ -316,6 +412,7 @@ fn run(client: &Client, options: Options) -> Result<u8> {
                 limit.unwrap_or(0),
                 false,
                 options.quiet || options.json,
+                brief,
             )?
         }
         Action::Ready {
@@ -323,7 +420,14 @@ fn run(client: &Client, options: Options) -> Result<u8> {
             exclude_type,
             unassigned,
             limit,
+            parent,
+            kind,
+            brief,
+            explain,
         } => {
+            if explain {
+                return diagnostics::explain(client, options.json);
+            }
             let mut query = vec![("beads", "1".into()), ("ready", "1".into())];
             query.extend(label.into_iter().map(|value| ("label", value)));
             query.extend(
@@ -334,10 +438,12 @@ fn run(client: &Client, options: Options) -> Result<u8> {
             if unassigned {
                 query.push(("unassigned", "1".into()));
             }
-            output::listing(client, query, limit, true, options.quiet)?
+            query.extend(parent.map(|parent| ("ancestor", parent)));
+            query.extend(kind.map(|kind| ("type", kind)));
+            output::listing(client, query, limit, true, options.quiet, brief)?
         }
         Action::Show { ids } => return output::show(client, &ids, options.json),
-        Action::Export => return Err(retired_export()),
+        Action::Export { .. } => return Err(retired_export()),
         Action::Create {
             id,
             parent,
@@ -551,10 +657,24 @@ fn run(client: &Client, options: Options) -> Result<u8> {
 
 fn dependency(client: &Client, operation: Dependency) -> Result<Value> {
     let (id, on, kind) = match operation {
-        Dependency::List { id, direction } => {
-            let source = ticket(client, &id, &[])?;
-            return Ok(json!(output::related(client, &source, direction == "up")?));
+        Dependency::List {
+            ids,
+            direction,
+            kind,
+        } => {
+            let mut rows = Vec::new();
+            for id in ids {
+                let source = ticket(client, &id, &[])?;
+                rows.extend(output::related(
+                    client,
+                    &source,
+                    direction == "up",
+                    kind.as_deref(),
+                )?);
+            }
+            return Ok(json!(rows));
         }
+        Dependency::Tree { id } => return output::tree(client, &id),
         Dependency::Add { id, on, kind } => (id, on, Some(kind)),
         Dependency::Remove { id, on } => (id, on, None),
     };

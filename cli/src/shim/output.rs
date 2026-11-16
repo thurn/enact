@@ -2,6 +2,7 @@ use super::{array, string, ticket};
 use crate::client::{Client, Result, usage};
 use crate::commands;
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::io::{self, Write};
 
 pub fn legacy_id(client: &Client, id: &str) -> String {
@@ -65,6 +66,7 @@ pub fn listing(
     limit: usize,
     ready: bool,
     quiet: bool,
+    brief: bool,
 ) -> Result<Value> {
     let reply = commands::read(client, &["tickets"], &query)?;
     let mut rows: Vec<_> = array(&reply)
@@ -81,19 +83,23 @@ pub fn listing(
             for field in ["dependency_count", "dependent_count", "comment_count"] {
                 row[field] = ticket[field].clone();
             }
+            if brief {
+                let fields = row.as_object_mut().expect("ticket row");
+                for field in [
+                    "description",
+                    "design",
+                    "acceptance_criteria",
+                    "notes",
+                    "payload",
+                    "waiters",
+                ] {
+                    fields.remove(field);
+                }
+            }
             row
         })
         .collect();
-    rows.sort_by(|a, b| {
-        a["priority"]
-            .as_u64()
-            .cmp(&b["priority"].as_u64())
-            .then_with(|| {
-                let (a, b) = (string(&a["created_at"]), string(&b["created_at"]));
-                if ready { a.cmp(b) } else { b.cmp(a) }
-            })
-            .then_with(|| string(&a["id"]).cmp(string(&b["id"])))
-    });
+    sort_rows(&mut rows, ready);
     if limit != 0 && rows.len() > limit {
         if !quiet {
             let kind = if ready { "ready issues" } else { "issues" };
@@ -105,6 +111,19 @@ pub fn listing(
         rows.truncate(limit);
     }
     Ok(json!(rows))
+}
+
+pub(super) fn sort_rows(rows: &mut [Value], ready: bool) {
+    rows.sort_by(|a, b| {
+        a["priority"]
+            .as_u64()
+            .cmp(&b["priority"].as_u64())
+            .then_with(|| {
+                let (a, b) = (string(&a["created_at"]), string(&b["created_at"]));
+                if ready { a.cmp(b) } else { b.cmp(a) }
+            })
+            .then_with(|| string(&a["id"]).cmp(string(&b["id"])))
+    });
 }
 
 fn listed_dependencies(client: &Client, ticket: &Value) -> Vec<Value> {
@@ -137,13 +156,22 @@ pub fn comment(client: &Client, comment: &Value) -> Value {
     json!({"id": id, "issue_id": ticket, "author": comment["author"], "text": comment["text"], "created_at": comment["at"]})
 }
 
-pub fn related(client: &Client, source: &Value, up: bool) -> Result<Vec<Value>> {
+fn relations(source: &Value, up: bool) -> Vec<(&str, &str)> {
     let id = &source["id"];
+    let (from, to) = if up { ("dst", "src") } else { ("src", "dst") };
     let mut relations: Vec<_> = array(&source["edges"])
         .iter()
-        .filter_map(|edge| {
-            let (from, to) = if up { ("dst", "src") } else { ("src", "dst") };
-            (edge[from] == *id).then(|| (string(&edge[to]), string(&edge["kind"])))
+        .filter(|edge| edge[from] == *id)
+        .map(|edge| {
+            let kind = string(&edge["kind"]);
+            (
+                string(&edge[to]),
+                if kind == "related" {
+                    "relates-to"
+                } else {
+                    kind
+                },
+            )
         })
         .collect();
     if up {
@@ -157,17 +185,57 @@ pub fn related(client: &Client, source: &Value, up: bool) -> Result<Vec<Value>> 
     }
     relations.sort_unstable();
     relations
+}
+
+pub fn related(
+    client: &Client,
+    source: &Value,
+    up: bool,
+    kind: Option<&str>,
+) -> Result<Vec<Value>> {
+    relations(source, up)
         .into_iter()
+        .filter(|(_, relation)| kind.is_none_or(|kind| kind == *relation))
         .map(|(id, kind)| {
             let mut output = row(client, &ticket(client, id, &[])?);
-            output["dependency_type"] = json!(if kind == "related" {
-                "relates-to"
-            } else {
-                kind
-            });
+            output["dependency_type"] = json!(kind);
             Ok(output)
         })
         .collect()
+}
+
+pub fn tree(client: &Client, root: &str) -> Result<Value> {
+    let mut rows = Vec::new();
+    let mut visited = HashSet::new();
+    let mut pending = vec![(root.to_owned(), String::new(), String::new(), 0)];
+    while let Some((id, parent, edge, depth)) = pending.pop() {
+        let source = ticket(client, &id, &[])?;
+        let id = string(&source["id"]);
+        if !visited.insert(id.to_owned()) {
+            continue;
+        }
+        let mut node = row(client, &source);
+        node["depth"] = json!(depth);
+        node["parent_id"] = json!(parent);
+        node["truncated"] = json!(false);
+        if !edge.is_empty() {
+            node["edge_from_parent"] = json!(edge);
+        }
+        rows.push(node);
+        if depth + 1 < 50 {
+            let parent = legacy_id(client, id);
+            let mut dependencies = relations(&source, false);
+            dependencies.sort_by_key(|(_, kind)| *kind == "parent-child");
+            pending.extend(
+                dependencies
+                    .into_iter()
+                    .rev()
+                    .filter(|(id, kind)| *kind != "relates-to" && !visited.contains(*id))
+                    .map(|(id, kind)| (id.to_owned(), parent.clone(), kind.to_owned(), depth + 1)),
+            );
+        }
+    }
+    Ok(json!(rows))
 }
 
 pub fn show(client: &Client, ids: &[String], as_json: bool) -> Result<u8> {
@@ -190,8 +258,8 @@ pub fn show(client: &Client, ids: &[String], as_json: bool) -> Result<u8> {
             response => response?,
         };
         let mut row = row(client, &raw);
-        let dependencies = related(client, &raw, false)?;
-        let dependents = related(client, &raw, true)?;
+        let dependencies = related(client, &raw, false, None)?;
+        let dependents = related(client, &raw, true, None)?;
         for (field, values) in [("dependencies", &dependencies), ("dependents", &dependents)] {
             if !values.is_empty() {
                 row[field] = json!(values);
@@ -226,7 +294,7 @@ pub fn show(client: &Client, ids: &[String], as_json: bool) -> Result<u8> {
     if as_json {
         json(&json!(rows))?;
     } else {
-        human(&json!(rows))?;
+        super::diagnostics::show_text(&rows);
     }
     Ok(0)
 }

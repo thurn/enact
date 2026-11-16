@@ -2087,8 +2087,10 @@ idle connection costs nothing.
   and stop any Scotty instance serving Beryl. Scotty polls `bd export --json`,
   and forwarding those exports would exhaust the daily SQLite read quota.
   Use the live ticket dashboard. The shim rejects legacy exports in `after`,
-  and the compatibility replay expects that rejection for Scotty's recorded
-  command. Native `tk export` serves the scheduled backup.
+  including requests to write the export to a file. Once the shim has observed
+  `after` for the project, it rejects every recorded export form locally with
+  exit 1, empty stdout, and migration guidance on stderr. Native `tk export`
+  serves the scheduled backup.
 - One hour later it pulls the bead store's remote once more and imports any
   bead changed after `cutover_at`, to catch a write that was in flight on a
   machine that was asleep during the pause. The server rejects that import
@@ -2338,9 +2340,12 @@ come from real Beads 1.3.4 in an isolated Git clone seeded by that export.
 Replay them in file order against a fresh import. The tests use child IDs
 allocated from a fixture epic and include cases for stdin and invalid
 invocations. To incorporate live calls, reproduce their state and file inputs
-against an isolated import. The recorded export case compares the legacy
-success with the deliberate after-cutover refusal, so its response body is
-already covered by the snapshot.
+against an isolated import. The export cases compare each legacy form with the
+after-cutover refusal and check both the output paths and the simulator's
+request count. The snapshot already covers the exported rows. For human
+`bd show`, the shim prints the ticket's sections as plain text and the replay
+ignores Beads' terminal padding. Readiness explanations retain the Beads
+readiness rules so they can be used to compare a rehearsal with the old store.
 
 ### Install the cutover shim
 

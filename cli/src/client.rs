@@ -56,7 +56,16 @@ impl Reply {
 impl Client {
     pub fn load(project: Option<&str>, actor: String, retry_for: Duration) -> Result<Self> {
         let here = env::current_dir().map_err(usage)?;
-        let (path, config) = read_config(&here)?;
+        Self::load_from(&here, project, actor, retry_for)
+    }
+
+    pub(crate) fn load_from(
+        here: &Path,
+        project: Option<&str>,
+        actor: String,
+        retry_for: Duration,
+    ) -> Result<Self> {
+        let (path, config) = read_config(here)?;
         let tickets = config.get("tickets").and_then(toml::Value::as_table);
         let field = |name| {
             tickets
