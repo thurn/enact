@@ -166,6 +166,7 @@
       "state": "[--set-cutover before|paused|after]",
       "export": "",
       "import": "<bd-export.jsonl> [--history-dir D] [--row-budget N]",
+      "restore": "<tickets.jsonl> [--row-budget N]",
       "compare": "[--history-dir D]",
       "register": "",
       "bench": "",

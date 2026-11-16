@@ -478,7 +478,7 @@ def ticket_binary() -> Path:
         if not path.is_absolute() or not path.is_file():
             raise Fail("ENACT_TK must be the absolute path to a tk executable")
         return path
-    crate = ENACT_ROOT / "cli"
+    crate = Path(os.environ.get("ENACT_TK_SOURCE", ENACT_ROOT)) / "cli"
     cache = ticket_cache_dir()
     executable = "tk.exe" if WINDOWS else "tk"
     try:
@@ -4828,7 +4828,10 @@ def start_ci(repo: Repo, runner: Path | None = None,
     if source is None and here.parent != repo.state.resolve():
         source = str(here)
     cmd = [sys.executable, str(runner), "ci", *(["--source", source] if source else [])]
-    kwargs: dict[str, Any] = {}
+    # The copied runner lives in Git's state directory, and its original
+    # worktree may be gone. Build tk from the stable Enact checkout.
+    ticket_source = os.environ.get("ENACT_TK_SOURCE", str(enact_checkout()))
+    kwargs: dict[str, Any] = {"env": {**os.environ, "ENACT_TK_SOURCE": ticket_source}}
     if WINDOWS:
         kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED | NEW_PROCESS_GROUP
     else:
@@ -5042,6 +5045,61 @@ def retry_ci_ticket_operation(operation: Callable[[], CIResult]) -> CIResult:
             time.sleep(delay)
 
 
+TICKET_BACKUP_REF = "refs/heads/ticket-backups"
+TICKET_BACKUP_FILE = "tickets.jsonl"
+
+
+def ticket_backup_tip(repo: Repo) -> tuple[str, str]:
+    listing = repo.git("ls-remote", "--refs", repo.config.remote, TICKET_BACKUP_REF)
+    if not listing:
+        return "", ""
+    tip = listing.split()[0]
+    if not repo.git_ok("cat-file", "-e", tip):
+        repo.git("fetch", "-q", "--no-write-fetch-head", repo.config.remote, TICKET_BACKUP_REF)
+    subject = repo.git("show", "-s", "--format=%s", tip)
+    if not re.fullmatch(r"Ticket backup \d{4}-\d{2}-\d{2}", subject):
+        raise Fail(f"{TICKET_BACKUP_REF} must point to a ticket backup commit")
+    return tip, subject.removeprefix("Ticket backup ")
+
+
+def backup_tickets(repo: Repo) -> dict[str, Any]:
+    if not uses_ticket_server(repo):
+        return {"backed_up": False, "reason": "legacy ticket backend"}
+    day = now()[:10]
+    parent, last_day = ticket_backup_tip(repo)
+    if last_day >= day:
+        return {"backed_up": False, "commit": parent, "day": last_day}
+
+    sequence = ticket_reply(ticket_process(repo, "--retry-for", "0", "state"))["seq"]
+    export = ticket_process(repo, "--retry-for", "0", "export")
+    if export.returncode:
+        ticket_reply(export)
+    # A concurrent insert can sort before the export's pagination cursor.
+    # Publish only when the project sequence stayed stable across every page.
+    if ticket_reply(ticket_process(repo, "--retry-for", "0", "state"))["seq"] != sequence:
+        raise Fail("ticket project changed during export; retry the backup", code=3)
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / TICKET_BACKUP_FILE
+        path.write_bytes(export.stdout.encode("utf-8"))
+        blob = repo.git("hash-object", "-w", "--no-filters", str(path))
+    tree = run(["git", "mktree", "-z"], repo.top,
+               input_text=f"100644 blob {blob}\t{TICKET_BACKUP_FILE}\0").stdout.strip()
+    parents = ["-p", parent] if parent else []
+    commit = repo.git("commit-tree", tree, *parents, "-m", f"Ticket backup {day}")
+    if compare_and_swap_ref(repo, commit, parent, TICKET_BACKUP_REF):
+        return {"backed_up": True, "commit": commit, "day": day}
+    # Another machine may have published the day, or our push may have landed
+    # before its connection failed. The remote commit is the success marker.
+    tip, last_day = ticket_backup_tip(repo)
+    if last_day >= day:
+        return {"backed_up": False, "commit": tip, "day": last_day}
+    raise Fail(f"could not push {TICKET_BACKUP_REF} to {repo.config.remote}")
+
+
+def cmd_ticket_backup(_args: argparse.Namespace) -> dict[str, Any]:
+    return backup_tickets(find_repo())
+
+
 def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     cfg = repo.config
@@ -5065,6 +5123,10 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
             return {"ran": results, "reason": "another runner holds the lock"}
         try:
             fetch(repo)
+            try:
+                backup_tickets(repo)
+            except (Fail, OSError) as error:
+                log(f"ticket backup failed: {error}")
             # No check can be live under the lock, so stale CI trees go too.
             # Cleanup must never cost a check, so failures are only logged.
             try:
@@ -5907,6 +5969,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--check-worker", help=argparse.SUPPRESS)
     p.add_argument("--coordinator", type=int, default=0, help=argparse.SUPPRESS)
     p.add_argument("--source", help=argparse.SUPPRESS)
+
+    add("ticket-backup", cmd_ticket_backup, "Back up server tickets to Git once per UTC day.")
 
     p = add("worktree", cmd_worktree,
             "Create or remove a bead worktree cut from staging, or prune dead ones.")

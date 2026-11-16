@@ -2144,6 +2144,7 @@ tk wait ready [--ancestor ID] [--label L]... | ticket <id> [--status S]
 tk state [--set-cutover before|paused|after]
 tk export
 tk import <bd-export.jsonl> [--history-dir D] [--row-budget N]
+tk restore <tickets.jsonl> [--row-budget N]
 tk compare [--history-dir D]
 tk register | tk bench | tk version
 ```
@@ -2169,6 +2170,39 @@ client-chosen request key that the server remembers for a day, so a retry
 never creates twice.
 
 Invoked as `bd`, the binary is the shim (section 7).
+
+#### Daily backups and restore
+
+At startup, the slow-CI runner checks whether the active ticket backend is
+the server and whether the project's configured Git remote already has a
+backup for the UTC day. Run `enact ticket-backup` from the project to make the
+same check on days with no slow CI or to retry a failure. Backup failures are
+logged separately from the slow check.
+
+The `ticket-backups` branch contains only `tickets.jsonl`, with one ticket per
+line in ID order. The new commit names its UTC day and extends the previous
+backup. Git accepts the push only if the branch tip still matches the one
+the exporter read. If the server sequence changes during pagination, retry
+the export so all pages come from the same project state.
+
+To restore, configure a checkout to reach an isolated Worker with a fresh
+project key. Give the client a write token registered for that project and
+keep other writers out until verification finishes. With `origin` as the
+backup remote, run:
+
+```sh
+git fetch origin refs/heads/ticket-backups
+git show FETCH_HEAD:tickets.jsonl > tickets.jsonl
+tk --project recovery restore tickets.jsonl
+tk --project recovery export > restored.jsonl
+```
+
+Use a byte-preserving shell for the Git redirect, such as Git Bash on
+Windows. Repeat `restore` with the same file if it exits 5 for the daily
+write budget. Compare the exported tickets and their related records by ID.
+The destination assigns new ticket versions. The backup covers ticket data,
+including dependencies, comments, history and aliases. Leases, events,
+tokens and cutover state are maintained separately by the Worker.
 
 ### 10. Budget
 

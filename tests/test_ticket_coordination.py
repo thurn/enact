@@ -93,6 +93,82 @@ if sys.argv[1] == "slow" and (os.environ.get("TEST_FAIL_SLOW") or Path("SLOW").e
         self.tk(self.hosts[0], "state", "--set-cutover", "paused")
         self.tk(self.hosts[0], "state", "--set-cutover", "after")
 
+    def test_daily_backup_and_restore(self):
+        a, b = self.hosts
+        ref = "refs/heads/ticket-backups"
+        self.assertEqual(self.enact(a, "ticket-backup")["reason"], "legacy ticket backend")
+        self.assertEqual(sh(["git", "for-each-ref", ref], self.origin), "")
+        self.cutover()
+        parent, closed, changed = (item["id"] for item in self.tk(a, "batch", data={"ops": [
+            {"op": "create", "fields": {"title": "Epic", "type": "epic"}},
+            {"op": "create", "parent": "$0", "fields": {"title": "Closed"}},
+            {"op": "create", "parent": "$0", "deps": ["$1"],
+             "fields": {"title": "Ticket", "labels": ["test"]}},
+        ]})["results"])
+        self.tk(a, "close", closed, "--reason", "Verified")
+        self.tk(a, "comment", changed, "Résumé\nSecond line")
+
+        def on_day(host, day, command):
+            driver = """from scripts import enact
+import sys
+enact.now = lambda: sys.argv[1] + "T00:00:01Z"
+sys.exit(enact.main(sys.argv[2:]))
+"""
+            return self.call(host, [sys.executable, "-c", driver, day, command],
+                             extra={"PYTHONPATH": str(SCRIPT.parent.parent)})
+
+        def backup_lines():
+            return subprocess.check_output(["git", "show", f"{ref}:tickets.jsonl"],
+                                           cwd=self.origin, encoding="utf-8").splitlines()
+
+        self.assertTrue(on_day(a, "2026-11-15", "ci")["ran"][-1]["passed"])
+        first = sh(["git", "rev-parse", ref], self.origin)
+        lines = backup_lines()
+        self.assertEqual([json.loads(line)["id"] for line in lines],
+                         sorted([parent, closed, changed]))
+        self.tk(a, "update", changed, "--title", "Edited ticket")
+        repeat = on_day(b, "2026-11-15", "ticket-backup")
+        self.assertFalse(repeat["backed_up"])
+        self.assertEqual(repeat["commit"], first)
+        self.assertEqual(backup_lines(), lines)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda host: on_day(host, "2026-11-16", "ticket-backup"),
+                                    self.hosts))
+        self.assertTrue(any(result["backed_up"] for result in results))
+        self.assertEqual(results[0]["commit"], results[1]["commit"])
+        self.assertEqual(sh(["git", "rev-list", "--count", ref], self.origin), "2")
+        updated = backup_lines()
+        self.assertEqual(len(updated), len(lines))
+        self.assertEqual([json.loads(after)["id"] for before, after in zip(lines, updated)
+                          if before != after], [changed])
+
+        path = self.root / "tickets.jsonl"
+        path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+        original = self.project
+        self.project = "restore-" + uuid4().hex
+        self.addCleanup(setattr, self, "project", original)
+        self.fixture("seed", {hashlib.sha256(self.tokens[a].encode()).hexdigest(): a})
+        target = ["--project", self.project]
+        result = self.tk(a, *target, "restore", str(path))
+        self.assertEqual((result["imported"], result["remaining"]), (3, 0))
+        self.assertEqual(self.tk(a, *target, "restore", str(path))["imported"], 0)
+        restored = subprocess.check_output([os.environ["ENACT_TEST_TK"], *target, "export"],
+                                           cwd=self.clones[a], env=self.envs[a], encoding="utf-8")
+
+        def ticket_data(rows):
+            return [{key: value for key, value in json.loads(row).items() if key != "version"}
+                    for row in rows]
+
+        self.assertEqual(ticket_data(restored.splitlines()), ticket_data(updated))
+        self.tk(a, *target, "update", changed, "--title", "Edited after restore")
+        failure = subprocess.run([os.environ["ENACT_TEST_TK"], *target, "restore", str(path)],
+                                 cwd=self.clones[a], env=self.envs[a], text=True,
+                                 capture_output=True, timeout=30)
+        self.assertEqual(failure.returncode, 1, failure.stdout + failure.stderr)
+        self.assertIn(changed, failure.stderr)
+        self.assertEqual(self.tk(a, *target, "show", changed)["title"], "Edited after restore")
+
     def assert_no_enact_refs(self):
         for path in [self.origin, *self.clones.values()]:
             self.assertEqual(sh(["git", "for-each-ref", "refs/enact/"], path), "")

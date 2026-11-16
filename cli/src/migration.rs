@@ -22,10 +22,44 @@ pub fn import(
     history_dir: Option<PathBuf>,
     row_budget: Option<u64>,
 ) -> Result<Value> {
-    let input = File::open(file).map_err(|error| usage(format!("{}: {error}", file.display())))?;
-    let source = lines(BufReader::new(input))?;
+    let source = read_file(file)?;
     let expected = snapshots(&source, history_dir, &client.project)?;
     let actual = server_snapshots(client)?;
+    upload(client, expected, &actual, row_budget)
+}
+
+pub fn restore(client: &Client, file: &Path, row_budget: Option<u64>) -> Result<Value> {
+    let mut expected = read_file(file)?;
+    let mut actual = server_snapshots(client)?;
+    for ticket in expected.values_mut().chain(actual.values_mut()) {
+        // Import allocates new versions. Compare the ticket and all related
+        // records so a partially restored backup can be resumed safely.
+        ticket
+            .as_object_mut()
+            .expect("ticket with ID")
+            .remove("version");
+    }
+    for (id, ticket) in &actual {
+        if expected.get(id) != Some(ticket) {
+            return Err(usage(format!(
+                "{id}: target contains tickets outside this restore. Use a fresh project."
+            )));
+        }
+    }
+    upload(client, expected, &actual, row_budget)
+}
+
+fn read_file(file: &Path) -> Result<Tickets> {
+    let input = File::open(file).map_err(|error| usage(format!("{}: {error}", file.display())))?;
+    lines(BufReader::new(input))
+}
+
+fn upload(
+    client: &Client,
+    expected: Tickets,
+    actual: &Tickets,
+    row_budget: Option<u64>,
+) -> Result<Value> {
     let mut pending = Vec::new();
     for (id, mut ticket) in expected {
         let previous = actual.get(&id).unwrap_or(&Value::Null);
@@ -87,7 +121,7 @@ pub fn import(
                 let id = field(ticket, "id")?;
                 if !difference(ticket, current.get(id).unwrap_or(&Value::Null)).is_empty() {
                     return Err(usage(format!(
-                        "{id}: server ticket changed during import or is newer than the Beads export"
+                        "{id}: server ticket changed during import or is newer than the input"
                     )));
                 }
             }
@@ -115,7 +149,7 @@ pub fn import(
         let mut failure = Failure::new(
             5,
             format!(
-                "import paused after {imported} tickets and {written} rows. {tickets} tickets remain, {remaining}. Rerun import to resume."
+                "import paused after {imported} tickets and {written} rows. {tickets} tickets remain, {remaining}. Rerun the command to resume."
             ),
         );
         failure.body = Some(result);

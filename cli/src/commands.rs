@@ -169,6 +169,9 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
             history_dir,
             row_budget,
         } => crate::migration::import(client, &file, history_dir, row_budget),
+        Command::Restore { file, row_budget } => {
+            crate::migration::restore(client, &file, row_budget)
+        }
         Command::Compare { history_dir } => crate::migration::compare(client, history_dir),
         Command::Bench { .. } | Command::Export | Command::Register { .. } | Command::Version => {
             unreachable!("handled by main")

@@ -117,6 +117,13 @@ pub enum Command {
         #[arg(long)]
         row_budget: Option<u64>,
     },
+    /// Restore a ticket backup into a fresh project, or resume its restore.
+    Restore {
+        file: std::path::PathBuf,
+        /// Lower the daily write ceiling.
+        #[arg(long)]
+        row_budget: Option<u64>,
+    },
     /// Check the legacy Beads store against the ticket server.
     Compare {
         #[arg(long)]
