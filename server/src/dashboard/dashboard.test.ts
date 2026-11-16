@@ -36,7 +36,8 @@ async function seed() {
       UPDATE tickets SET assignee = 'local_ff743711' WHERE id = 'q44s.7.24';
       INSERT INTO edges VALUES ('q44s.7.24', 'erro', 'blocks'), ('path', 'q44s.7.24', 'waits-for');
       INSERT INTO aliases VALUES ('old', 'q44s.7.24');
-      INSERT INTO comments VALUES ('q44s.7.24', 1, 'Derek', '2026-11-16T20:00:00Z', 'See by-path.');
+      INSERT INTO comments (ticket, n, author, at, text)
+      VALUES ('q44s.7.24', 1, 'Derek', '2026-11-16T20:00:00Z', 'See by-path.');
       INSERT INTO history VALUES ('q44s.7.24', 4993, 'Derek', '2026-11-16T19:30:00Z',
                                   '{"title":["Render tickets","Render live tickets <safely>"]}');
       INSERT INTO history VALUES ('q44s.7.24', 0, 'Derek', '2026-11-16T19:30:00Z',
