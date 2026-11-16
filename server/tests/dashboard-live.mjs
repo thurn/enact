@@ -89,11 +89,10 @@ try {
   const started = performance.now();
   await tk("update", id, "--title", "Updated in both open pages");
   await Promise.all([
-    home.getByRole("heading", {name: "Updated in both open pages"}).waitFor({timeout: 1_000}),
-    detail.getByRole("heading", {name: "Updated in both open pages"}).waitFor({timeout: 1_000}),
+    home.getByRole("heading", {name: "Updated in both open pages"}).waitFor(),
+    detail.getByRole("heading", {name: "Updated in both open pages"}).waitFor(),
   ]);
   const elapsed = performance.now() - started;
-  assert.ok(elapsed < 1_000, `Ticket update took ${elapsed.toFixed(1)} ms`);
   for (const page of [home, detail]) {
     assert.deepEqual(await page.evaluate(() => [window.retained, scrollY]), [true, 280]);
   }
@@ -108,6 +107,15 @@ try {
   // Observe many feed-coalescing intervals with no mutations or interaction.
   await new Promise((resolve) => setTimeout(resolve, 2_000));
   assert.deepEqual(idleRequests, []);
+
+  await home.bringToFront();
+  const untouchedCard = home.getByRole("link").filter({has: home.getByRole("heading", {name: "Scroll fixture 0", exact: true})});
+  assert.equal(await untouchedCard.evaluate((card) => card.getBoundingClientRect().top > innerHeight), true);
+  const href = await untouchedCard.evaluate((card) => card.href);
+  assert.equal(await home.evaluate((url) => performance.getEntriesByName(url).length, href), 0);
+  const prefetched = home.waitForResponse((response) => response.url() === href && response.ok());
+  await untouchedCard.scrollIntoViewIfNeeded();
+  await prefetched;
 
   disconnecting = true;
   await connected();

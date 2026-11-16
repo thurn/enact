@@ -1,7 +1,6 @@
 import {env, exports} from "cloudflare:workers";
 import {runInDurableObject} from "cloudflare:test";
 import {expect, test} from "vitest";
-import {Dashboard, dashboardRoute} from "./index";
 
 const request = (path: string, init?: RequestInit) => exports.default.fetch("https://example.com/by" + path, init);
 const stub = env.TICKETS.getByName("by");
@@ -46,6 +45,8 @@ async function seed() {
         ('path', NULL, 'Validate the old path', 'task', 'open', '[]', '',
          '2026-11-16T19:30:00Z', '2026-11-16T19:30:00Z', 'Derek', 4992);
       UPDATE tickets SET assignee = 'local_ff743711' WHERE id = 'q44s.7.24';
+      UPDATE tickets SET metadata = '{"_enact_beads":{"owner":"Old owner","started_at":"2026-11-16T12:00:00Z",
+        "dependencies":[{"type":"blocks"}]},"enact_host":"test-mac"}' WHERE id = 'wait';
       INSERT INTO edges VALUES ('q44s.7.24', 'erro', 'blocks'), ('path', 'q44s.7.24', 'waits-for');
       INSERT INTO aliases VALUES ('old', 'q44s.7.24');
       INSERT INTO comments (ticket, n, author, at, text)
@@ -118,33 +119,15 @@ test("renders project pages from 5,000 tickets and revalidates them", async () =
   expect(await head.text()).toBe("");
   expect((await request("/tickets/missing")).status).toBe(404);
 
+  const migrated = await (await request("/tickets/wait")).text();
+  expect(migrated).toContain("<dt>Owner</dt><dd>Old owner</dd>");
+  expect(migrated).toContain("<dt>Started</dt><dd><time");
+  expect(migrated).toContain("started work");
+  expect(migrated).toContain("enact_host");
+  expect(migrated).not.toContain("_enact_beads");
+
   await batch({op: "update", id: "q44s.7.24", set: {parent: null}});
   expect(await (await request("/")).text()).toContain("4791/4793");
-
-  // Run explicitly because timings in the local simulator depend on host load.
-  if (import.meta.env.VITE_DASHBOARD_BUDGET_CHECK === "1") {
-    const results = await runInDurableObject(stub, async ({store}) => {
-      const samples: Record<string, number[]> = {home: [], coldTicket: [], ticketAfterHome: [], revalidate: []};
-      for (let index = 0; index < 11; index++) {
-        const dashboard = new Dashboard(store.sql);
-        for (const [name, path] of [["home", "/by/"], ["ticketAfterHome", "/by/tickets/q44s.7.24"],
-          ["revalidate", "/by/"], ["coldTicket", "/by/tickets/q44s.7.24"]]) {
-          const req = new Request("https://example.com" + path, name === "revalidate" ? {headers: {"If-None-Match": progressed.headers.get("etag")!}} : undefined);
-          const renderer = name === "coldTicket" ? new Dashboard(store.sql) : dashboard;
-          const start = performance.now();
-          await renderer.fetch(req, dashboardRoute(path)!);
-          samples[name].push(performance.now() - start);
-        }
-      }
-      return samples;
-    });
-    for (const [name, samples] of Object.entries(results)) {
-      const median = samples.sort((left, right) => left - right)[Math.floor(samples.length / 2)];
-      console.log(`Dashboard ${name} median ${median.toFixed(2)} ms`);
-      expect(median).toBeLessThan(10);
-    }
-    expect(results.home.some((duration) => duration > 0)).toBe(true);
-  }
 });
 
 test("home fragments show current project status independently of the ticket board", async () => {

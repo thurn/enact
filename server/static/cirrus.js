@@ -118,6 +118,7 @@
     // Cards in view are prefetched while the browser is idle, two at a time.
     const idle = window.requestIdleCallback || ((f) => setTimeout(f, 200));
     const queue = [];
+    const skipInitialPrefetch = new WeakSet();
     let running = 0;
     function pump() {
         while (running < 2 && queue.length) {
@@ -136,6 +137,9 @@
         "IntersectionObserver" in window && !navigator.connection?.saveData
             ? new IntersectionObserver((entries) => {
                   for (const entry of entries) {
+                      // A live replacement must not re-prefetch cards already
+                      // in view. Keep watching them for a later scroll.
+                      if (skipInitialPrefetch.delete(entry.target)) continue;
                       if (entry.isIntersecting) {
                           watcher.unobserve(entry.target);
                           queue.push(entry.target);
@@ -219,7 +223,7 @@
             current.replaceWith(document.adoptNode(next));
         }
         hidePopover();
-        enhance(document, !quiet);
+        enhance(document, quiet);
     }
 
     document.addEventListener("click", (e) => {
@@ -341,7 +345,7 @@
                 panel.removeAttribute("data-include");
                 panel.removeAttribute("data-include-loading");
                 panel.replaceChildren(...content.childNodes);
-                enhance(panel, false);
+                enhance(panel);
             }
         } catch {
             // A failed read leaves the displayed page in place. Catch up with
@@ -677,13 +681,15 @@
 
     // ---- Wiring --------------------------------------------------------------
 
-    function enhance(scope, prefetchCards = true) {
+    function enhance(scope, quiet = false) {
         times(scope);
         includes(scope);
         requestAnimationFrame(spyToc);
-        if (watcher && prefetchCards) {
-            for (const a of scope.querySelectorAll("a[data-prefetch]"))
+        if (watcher) {
+            for (const a of scope.querySelectorAll("a[data-prefetch]")) {
+                if (quiet) skipInitialPrefetch.add(a);
                 watcher.observe(a);
+            }
         }
     }
 

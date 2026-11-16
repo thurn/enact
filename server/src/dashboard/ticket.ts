@@ -68,10 +68,14 @@ export function ticketPage(root: string, project: string, data: ReturnType<typeo
 
   if (comments.length) add("Comments", comments.map(({author, at, text}) =>
     c.comment(author, person(author), c.time(at), render(text, linkText))).join(""), comments.length);
-  add("Changelog", timeline(ticket, history, linkText));
-
+  const {_enact_beads: imported, ...metadata} = ticket.metadata;
+  const legacy = imported as {owner?: unknown; started_at?: unknown} | undefined;
+  const started = typeof legacy?.started_at === "string" ? legacy.started_at : "";
+  add("Changelog", timeline(ticket, history, linkText, started));
   const details: [string, string][] = ticket.created_by ? [["Created by", c.esc(ticket.created_by)]] : [];
-  for (const [key, value] of Object.entries(ticket.metadata).sort(([left], [right]) => left.localeCompare(right))) {
+  if (typeof legacy?.owner === "string" && legacy.owner) details.push(["Owner", c.esc(legacy.owner)]);
+  if (started) details.push(["Started", c.time(started)]);
+  for (const [key, value] of Object.entries(metadata).sort(([left], [right]) => left.localeCompare(right))) {
     details.push([key, c.mono(typeof value === "string" ? value : JSON.stringify(value))]);
   }
   if (details.length) main.push(c.section("", c.disclosure("Details", c.meta(details))));

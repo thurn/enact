@@ -99,7 +99,7 @@ function describeImported(event: ImportedEvent): Entry {
   }
 }
 
-export function timeline(ticket: Ticket, history: History[], link: (escaped: string) => string): string {
+export function timeline(ticket: Ticket, history: History[], link: (escaped: string) => string, started: string): string {
   const entries = history.flatMap((row) => {
     const change = JSON.parse(row.change) as Record<string, unknown> | ImportedEvent[];
     return Array.isArray(change)
@@ -109,6 +109,7 @@ export function timeline(ticket: Ticket, history: History[], link: (escaped: str
   const recorded = entries.length > 0;
   if (!recorded) {
     if (ticket.closed_at) entries.push({actor: "", at: ticket.closed_at, what: "closed this", detail: ticket.close_reason ?? ""});
+    if (started) entries.push({actor: "", at: started, what: "started work"});
     entries.push({actor: ticket.created_by, at: ticket.created_at, what: "created this"});
   }
   const lines: string[] = [];
