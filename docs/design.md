@@ -1707,3 +1707,13 @@ instead of adopting it needs the plan's context.
 - Closed and deferred beads do not lengthen a chain. Lanes are not counted
   as chains: lane beads already run one after another in one session, and
   only edges express a real ordering.
+
+## Pool limit per message (2026-11-15)
+
+- The pool cap is ten starts per user message, not ten over a session's
+  life: a Beryl vizier started thirteen sessions across two user messages.
+  `pool add` refused once ten had ever been added, so a vizier that lost
+  members could not refill its pool. Enact cannot tell user turns apart,
+  so `pool add` now refuses only more than ten members in one call (one
+  message's starts) and `started` is kept for reporting. `pool-empty` no
+  longer sends the user to a new session at the cap.

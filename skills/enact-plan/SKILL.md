@@ -111,7 +111,7 @@ the event wait below. Do not inspect healthy worker chats in the loop.
 ### Claude Desktop session pool
 
 Claude Desktop lets a session start other sessions **only in a turn the user
-started**, and **at most ten over its whole life**. Clearing, re-modelling
+started**, and **at most ten per user message**. Clearing, re-modelling
 and messaging a session it started work from any turn. So in Claude Desktop
 you start a fixed **pool** once, in the turn the user invoked you, and hand
 every bead to an idle member: `clear_session` empties it,
@@ -398,14 +398,15 @@ task-prompt run or a light run gets none.
    Automatic recovery must never invoke resume.
 3. **Start the pool (Claude Desktop).** Run `enact pool status`. Unless it
    already lists members (you are resuming), start `parallel + 1` sessions
-   (the spare serves a Justiciar), at most `limit - started`: each with
-   `start_session`, `initiation: "user_asked"`, `context: "fresh"`,
+   (the spare serves a Justiciar), at most `limit` (the per-message cap):
+   each with `start_session`, `initiation: "user_asked"`, `context: "fresh"`,
    `use_worktree: false`, title `🔮 Enact pool <n>`, prompt "Enact pool
    session: reply only `ready`." and `background` exactly "Enact pool
    member, epic `<epic>`." Do not pass `permission_mode`, so members
    inherit yours.
-   Record them all: `enact pool add <id>...`. If the limit leaves fewer
-   than `parallel + 1`, run with what you have.
+   Record them all in one call: `enact pool add <id>...`. If the limit
+   leaves fewer than `parallel + 1`, run with what you have; a later user
+   message may start more.
 4. Title yourself `🔮 [<epic>] <short summary>`.
 5. Give the user a short summary: the epic, bead count, milestones,
    parallelism, pool size (Claude Desktop), and what would make you stop.
@@ -503,11 +504,10 @@ action or when the wait runs out. Handle the JSON:
    and created-chat receipt. There is no bead to record.
 4. **`action: pool-empty`** (Claude Desktop): every member is lost and only
    a turn the user starts may start more. Retitle `🔍 [<epic>] <summary>`,
-   tell the user `started` of `limit` sessions are used, and end the turn.
-   When they write, start up to `limit - started` new members as in
-   pre-flight, `enact pool add` them, retitle 🔮 and restart the loop. At
-   the limit, ask them to run `/enact-plan <epic>` in a new session, which
-   joins this epic with a fresh pool.
+   tell the user the pool is empty and any message from them lets you
+   start new members, and end the turn. When they write, start up to
+   `limit` new members (the cap is per user message) as in pre-flight,
+   `enact pool add` them, retitle 🔮 and restart the loop.
 5. **`action: wait`**: nothing to do yet. In Claude Desktop, run `enact next`
    again in the background. In Codex, follow its wait path above.
 6. **`action: deadlock`**: open beads remain but nothing can ever become

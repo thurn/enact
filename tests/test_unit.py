@@ -2071,14 +2071,17 @@ class CommandPolicyTest(unittest.TestCase):
                                            {"bead": second, "session": "worker"}])
 
     def test_pool_vizier_reuses_members_instead_of_starting_sessions(self):
-        # Claude Desktop caps a session at ten starts, all in user-started
-        # turns, so a pool vizier hands beads to idle members it started.
+        # Claude Desktop caps a session at ten starts per user message, all
+        # in user-started turns, so a pool vizier hands beads to idle members.
         epic = self.a.create("pool", type="epic")
         beads = [self.a.create(f"b{i}", parent=epic, priority=i) for i in range(3)]
         self.a.enact("pool", "add", *[f"local_{i}" for i in range(11)], code=3)
         pool = self.a.enact("pool", "add", "local_a", "local_b", "local_c")
         self.assertEqual((pool["started"], pool["idle"]), (3, ["local_a", "local_b", "local_c"]))
-        self.a.enact("pool", "add", *[f"local_{i}" for i in range(8)], code=3)
+        # A later message may start ten more: the cap is not over the pool's life.
+        pool = self.a.enact("pool", "add", *[f"local_{i}" for i in range(10)])
+        self.assertEqual(pool["started"], 13)
+        self.a.enact("pool", "drop", *[f"local_{i}" for i in range(10)])
 
         def desktop(session):
             return {"ENACT_SESSION": "", "CLAUDE_CODE_SESSION_ID": f"cli-{session}",

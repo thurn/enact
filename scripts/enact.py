@@ -1498,9 +1498,11 @@ def busy_sessions(graph: list[dict[str, Any]]) -> set[str]:
 # ---------------------------------------------------------------------------
 # Session pool (Claude Desktop)
 #
-# Claude Desktop lets one session start at most POOL_LIMIT sessions over its
-# whole life, and only in a turn the user started. A vizier therefore starts
-# a fixed pool in its first turn and hands every bead to an idle member with
+# Claude Desktop lets one session start at most POOL_LIMIT sessions per user
+# message, and only in a turn the user started. Enact cannot tell turns
+# apart, so `pool add`, which records one turn's starts, refuses more than
+# POOL_LIMIT at once; `started` counts every member ever added, for
+# reporting only. A vizier therefore starts a fixed pool in its first turn and hands every bead to an idle member with
 # clear_session and send_message, which work from any turn. The pool is
 # machine-local state per vizier; which members are busy comes from the graph.
 
@@ -1553,9 +1555,10 @@ def cmd_pool(args: argparse.Namespace) -> dict[str, Any]:
     sessions = args.sessions or []
     if args.action == "add":
         new = [s for s in dict.fromkeys(sessions) if s not in pool["sessions"]]
-        if pool["started"] + len(new) > POOL_LIMIT:
-            raise Fail(f"a vizier may start at most {POOL_LIMIT} sessions; "
-                       f"{pool['started']} already started", code=3, pool=pool)
+        if len(new) > POOL_LIMIT:
+            raise Fail(f"a vizier may start at most {POOL_LIMIT} sessions per user message; "
+                       f"record each message's starts with its own pool add",
+                       code=3, pool=pool)
         pool["sessions"] += new
         pool["started"] += len(new)
     elif args.action == "drop":
