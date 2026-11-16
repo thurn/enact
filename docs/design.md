@@ -1937,7 +1937,8 @@ transaction or none of it.
 
 Enact uses the `all=1` projection to keep closed worker assignments visible
 for archiving and to track their commits through slow CI. Cache each graph
-projection separately by project and query. For `wait change --since SEQ`,
+projection separately by URL, project and query. `tk graph --if-none-match`
+returns `{"unchanged": true}` on HTTP 304. For `wait change --since SEQ`,
 use that sequence in the first feed message so a change between the previous
 read and subscription wakes the caller.
 
@@ -2045,7 +2046,7 @@ tk show <id> [--comments] [--history]
 tk list [--status S] [--type T] [--parent ID] [--ancestor ID] [--label L]...
         [--assignee A] [--all] [--limit N]
 tk ready [--ancestor ID] [--label L]...
-tk graph [--all]
+tk graph [--all] [--if-none-match SEQ]
 tk create --title T [--type T] [-p N] [--parent ID] [--labels a,b]
           [--body-file F] [--acceptance A] [--design-file F] [--dep ID]... [--last]
 tk update <id> [--title T] [--status S] [-p N] [--assignee A] [--parent ID]

@@ -146,7 +146,7 @@
       "show": "<id> [--comments] [--history]",
       "list": "[--status S] [--type T] [--parent ID] [--ancestor ID] [--label L]... [--assignee A] [--all] [--limit N]",
       "ready": "[--ancestor ID] [--label L]...",
-      "graph": "[--all]",
+      "graph": "[--all] [--if-none-match SEQ]",
       "create": "--title T [--type T] [-p N] [--parent ID] [--labels a,b] [--body-file F] [--acceptance A] [--design-file F] [--dep ID]... [--last]",
       "update": "<id> [--title T] [--status S] [-p N] [--assignee A] [--parent ID] [--body-file F] [--acceptance A] [--notes N] [--add-label L]... [--remove-label L]... [--set k=v]... [--unset k]... [--last|--no-last] [--if-version N] [--if-assignee A]",
       "claim": "<id>",

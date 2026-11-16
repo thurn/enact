@@ -29,6 +29,21 @@ spec.loader.exec_module(enact)
 
 
 class TicketContractTests(unittest.TestCase):
+    def test_ticket_graph_revalidates_the_cached_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = enact.Config.parse('[tickets]\nbackend = "server"\nproject = "by"\nurl = "http://example.test"')
+            repo = enact.Repo(root, root, root, config)
+            snapshot = {"seq": 1, "tickets": [], "edges": []}
+            changed = {**snapshot, "seq": 2}
+            with mock.patch.object(enact.Beads, "ticket", side_effect=[snapshot, {"unchanged": True}, changed]) as tk:
+                self.assertEqual(enact.Beads(repo).ticket_graph(), ([], 1))
+                self.assertEqual(enact.Beads(repo).ticket_graph(), ([], 1))
+                self.assertEqual(enact.Beads(repo).ticket_graph(), ([], 2))
+            self.assertEqual(tk.call_args_list, [mock.call("graph", "--all"),
+                                                 mock.call("graph", "--all", "--if-none-match", "1"),
+                                                 mock.call("graph", "--all", "--if-none-match", "1")])
+
     def test_schema_and_api_cover_the_design(self):
         root = SCRIPT.parents[1]
         contract = (root / "docs" / "design.md").read_text(encoding="utf-8").split(

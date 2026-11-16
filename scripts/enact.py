@@ -293,6 +293,7 @@ class Config:
     tiers: dict[str, Any] = field(default_factory=dict)
     ticket_backend: str = "beads"
     ticket_project: str | None = None
+    ticket_url: str | None = None
 
     @staticmethod
     def parse(text: str) -> Config:
@@ -324,6 +325,7 @@ class Config:
             tiers=data.get("tiers", {}),
             ticket_backend=backend,
             ticket_project=tickets.get("project"),
+            ticket_url=tickets.get("url"),
         )
 
     def role_settings(self, role: str, host_provider: str,
@@ -412,7 +414,7 @@ def find_repo(cwd: Path | None = None) -> Repo:
 
 def ticket_process(repo: Repo, *args: str, actor: str | None = None,
                    input_text: str | None = None) -> subprocess.CompletedProcess[str]:
-    cmd = ["tk", "--json"]
+    cmd = [shutil.which("tk") or "tk", "--json"]
     if repo.config.ticket_project:
         cmd += ["--project", repo.config.ticket_project]
     if actor := actor or session_actor():
@@ -502,7 +504,25 @@ class Beads:
                                            input_text=json.dumps(request)))
 
     def ticket_graph(self) -> tuple[list[dict[str, Any]], int]:
-        graph = self.ticket("graph", "--all")
+        config = self.repo.config
+        cache_key = hashlib.sha256(json.dumps([config.ticket_url, config.ticket_project,
+                                                "all"]).encode()).hexdigest()[:16]
+        path = self.repo.state / f"ticket-graph-{cache_key}.json"
+        cached = None
+        with contextlib.suppress(OSError, ValueError):
+            snapshot = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(snapshot, dict) and isinstance(snapshot.get("seq"), int) and \
+                    isinstance(snapshot.get("tickets"), list) and isinstance(snapshot.get("edges"), list):
+                cached = snapshot
+        options = ["--if-none-match", str(cached["seq"])] if cached is not None else []
+        graph = self.ticket("graph", "--all", *options)
+        if graph.get("unchanged"):
+            if cached is None:
+                raise Fail("tk graph reported an unchanged snapshot without a cache")
+            graph = cached
+        else:
+            with contextlib.suppress(OSError):
+                write_json(path, graph)
         edges: dict[str, list[dict[str, Any]]] = {}
         for edge in graph["edges"]:
             edges.setdefault(edge["src"], []).append(edge)

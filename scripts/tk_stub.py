@@ -180,6 +180,8 @@ class Store:
         return results[:args.limit]
 
     def graph(self, args):
+        if args.if_none_match == self.seq():
+            return {"unchanged": True}
         tickets = self.db.execute("SELECT * FROM tickets WHERE ? OR status != 'closed' ORDER BY id",
                                   (args.all,))
         omit = {"body", "design", "notes"}
@@ -465,6 +467,7 @@ def parse_args():
 
     graph = commands.add_parser("graph")
     graph.add_argument("--all", action="store_true")
+    graph.add_argument("--if-none-match", type=int)
     commands.add_parser("batch")
     lease = commands.add_parser("lease")
     lease.add_argument("op", choices=["acquire", "renew", "release"])
