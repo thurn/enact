@@ -10,6 +10,8 @@ use std::io::{BufReader, Cursor};
 use std::path::{Path, PathBuf};
 
 const BATCH_SIZE: usize = 20;
+// A changed batch writes one sequence row, one feed row and one usage row.
+const BATCH_OVERHEAD: u64 = 3;
 // The server caps writes at 90%. Leave room inside that cap for normal
 // operations, including the shared sequence writes in the budget table.
 const NORMAL_ROWS: u64 = 36_000;
@@ -53,8 +55,7 @@ pub fn import(
     let mut written = 0;
     let mut start = 0;
     while start < pending.len() {
-        // One sequence row and one usage row per changed request.
-        let mut required = 2;
+        let mut required = BATCH_OVERHEAD;
         let size = pending[start..]
             .iter()
             .take(BATCH_SIZE)
@@ -94,7 +95,7 @@ pub fn import(
         imported += changed;
         written += rows;
         if changed == size as u64 {
-            available = available.saturating_sub(rows + 1);
+            available = available.saturating_sub(rows + BATCH_OVERHEAD - 1);
         } else {
             available = ceiling.saturating_sub(count(&state_snapshot(client)?, "rows_written")?);
         }
@@ -127,16 +128,16 @@ fn report(imported: u64, rows: u64, remaining: &[(Value, u64)], ceiling: u64) ->
     let mut available = 0;
     let mut in_batch = 0;
     for (_, cost) in remaining {
-        if *cost + 2 > ceiling {
+        if *cost + BATCH_OVERHEAD > ceiling {
             return json!({
                 "imported": imported, "rows_written": rows, "remaining": remaining.len(), "estimated_days": null,
             });
         }
         let new_batch = in_batch == 0 || in_batch == BATCH_SIZE;
-        let needed = cost + if new_batch { 2 } else { 0 };
+        let needed = cost + if new_batch { BATCH_OVERHEAD } else { 0 };
         if available < needed {
             days += 1;
-            available = ceiling - cost - 2;
+            available = ceiling - cost - BATCH_OVERHEAD;
             in_batch = 1;
         } else {
             available -= needed;
