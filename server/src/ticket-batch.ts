@@ -79,6 +79,7 @@ export class TicketBatch {
   private readonly originals = new Map<string, Ticket | null>();
   private readonly outgoing = new Map<string, Map<string, Edge>>();
   private readonly changed = new Set<string>();
+  private readonly relatedChanges = new Set<string>();
   private readonly created = new Map<string, string>();
   private readonly at: string;
   private seq: number;
@@ -98,7 +99,10 @@ export class TicketBatch {
   }
 
   changes(): BatchChanges {
-    return {seq: this.seq, tickets: this.tickets, outgoing: this.outgoing, changed: this.changed};
+    return {
+      seq: this.seq, tickets: this.tickets, outgoing: this.outgoing, changed: this.changed,
+      modified: new Set([...this.tickets.keys(), ...this.relatedChanges]),
+    };
   }
 
   private write(query: string, ...values: SqlStorageValue[]): void {
@@ -266,6 +270,7 @@ export class TicketBatch {
     this.seq++;
     this.changed.add(id);
     this.changed.add(dst);
+    this.relatedChanges.add(id);
   }
 
   private update(ticket: Ticket, op: Record<string, unknown>): OperationResult {
@@ -388,6 +393,7 @@ export class TicketBatch {
         `, id, this.actor, this.at, string(op.text, "text"), id);
         this.seq++;
         this.changed.add(id);
+        this.relatedChanges.add(id);
         break;
       case "dep_add":
       case "dep_remove":

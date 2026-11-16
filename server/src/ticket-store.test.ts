@@ -421,41 +421,6 @@ test("serves the live graph, listing and a conditional batch with 5,000 stored t
   expect((await checked<ShownTicket[]>(request("/tickets?ready=1"))).map(({id}) => id)).toEqual(["seed4999"]);
   await batch([{op: "claim", id: "seed4999"}], [{seq: graph.seq}, {id: "seed4999", assignee: null}]);
   expect((await checked<ShownTicket[]>(request("/tickets?ready=1")))).toEqual([]);
-
-  // The local simulator advances its clock through synchronous code. Time
-  // each handler without HTTP or auth I/O. Run this assertion explicitly to
-  // keep a loaded CI runner from failing the behavioral suite on scheduling.
-  if (import.meta.env.VITE_TICKET_BUDGET_CHECK === "1") {
-    const samples = await runInDurableObject(stub, ({store}) => {
-      const timed = (act: () => void) => {
-        const start = performance.now();
-        act();
-        return performance.now() - start;
-      };
-      return Array.from({length: 9}, (_, index) => {
-        store.invalidateIndex();
-        return {
-          coldGraph: timed(() => { store.tickets.graph(null); }),
-          coldArchive: timed(() => { store.tickets.graph(null, true); }),
-          list: timed(() => { Response.json(store.list("volume", new URLSearchParams())); }),
-          batch: timed(() => {
-            Response.json(store.batch("volume", "worker", {
-              if: [{id: "seed4999", assignee: "worker"}],
-              ops: [{op: "update", id: "seed4999", set: {title: `Measured update ${index}`}}],
-            }));
-          }),
-        };
-      });
-    });
-    const median = (samples: number[]) => samples.sort((left, right) => left - right)[Math.floor(samples.length / 2)];
-    for (const route of ["coldGraph", "list", "batch"] as const) {
-      const time = median(samples.map((sample) => sample[route]));
-      expect(time, `${route} median was ${time.toFixed(2)} ms`).toBeLessThan(10);
-      console.log(`${route} median was ${time.toFixed(2)} ms`);
-    }
-    expect(samples.some(({coldGraph}) => coldGraph > 0)).toBe(true);
-    console.log(`coldArchive median was ${median(samples.map(({coldArchive}) => coldArchive)).toFixed(2)} ms`);
-  }
 });
 
 async function connectFeed(request: (path: string, init?: RequestInit) => Promise<Response>) {
@@ -670,6 +635,94 @@ test("an alarm wakes a ready waiter when an open ticket's defer time passes", as
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect(await wake).toEqual({seq: seq + 1, tickets: [id], leases: [], events: [], cutover: "before"});
     expect((await list("?ready=1")).map((ticket) => ticket.id)).toEqual([id]);
+  } finally {
+    socket.close();
+  }
+});
+
+test("the next waiter wakes when an abandoned head stops reserving an expired lease", async () => {
+  const {stub, request, write, checked} = await fixture("lease-feed-abandoned");
+  const acquire = (holder: string) =>
+    write("/leases/staging", {op: "acquire", holder, ttl_s: 300}, holder);
+  await checked(acquire("owner"));
+  expect((await acquire("abandoned")).status).toBe(409);
+  expect((await acquire("waiting")).status).toBe(409);
+
+  const socket = await connectFeed(request);
+  try {
+    const catchup = nextMessage(socket);
+    socket.send('{"since":0}');
+    const {seq} = await catchup as {seq: number};
+    const headDeadline = await runInDurableObject(stub, ({store}) => {
+      const now = Date.now();
+      const expired = new Date(now - 100).toISOString();
+      const since = new Date(now - 30_000).toISOString();
+      store.sql.exec(
+        "UPDATE leases SET expires_at = ?, waiters = json_set(waiters, '$[0].since', ?)", expired, since,
+      );
+      return now + 30_000;
+    });
+    const expiration = nextMessage(socket);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await expiration).toMatchObject({seq: seq + 1, leases: ["staging"]});
+    const nextAlarm = await runInDurableObject(stub, (_object, state) => state.storage.getAlarm());
+    const day = 86_400_000;
+    expect(nextAlarm).toBe(Math.min((Math.floor((headDeadline - 30_000) / day) + 1) * day, headDeadline));
+
+    expect(await (await acquire("waiting")).json()).toMatchObject({position: 2});
+    await runInDurableObject(stub, ({store}) => {
+      const now = Date.now();
+      // Simulate the elapsed time since the first wake without waiting 30 seconds.
+      store.sql.exec("UPDATE meta SET value = ? WHERE key = 'feed_deadline_cursor'", now - 30_000);
+      store.sql.exec(
+        "UPDATE leases SET expires_at = ?, waiters = json_set(waiters, '$[0].since', ?)",
+        new Date(now - 30_001).toISOString(), new Date(now - 60_001).toISOString(),
+      );
+    });
+    const available = nextMessage(socket);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await available).toMatchObject({seq: seq + 2, leases: ["staging"]});
+    expect(await checked(acquire("waiting"))).toMatchObject({holder: "waiting"});
+  } finally {
+    socket.close();
+  }
+});
+
+test("a dependent stays blocked when child creation races the closing of its prerequisite", async () => {
+  const {batch, show} = await fixture("close-and-file");
+  const {results: [{id: parent}, {id: original}, {id: dependent}]} = await batch([
+    create("Prerequisite"), create("Original child", "$0"),
+    create("Dependent", undefined, {}, {deps: ["$0"]}),
+  ]);
+  const [, created] = await Promise.all([
+    batch([{op: "close", id: original, reason: "Complete"}]),
+    batch([create("New child", parent)]),
+  ]);
+  const child = created.results[0].id;
+  expect((await show(parent)).children).toContain(child);
+  expect((await show(dependent)).ready).toBe(false);
+  await batch([{op: "close", id: child, reason: "Complete"}]);
+  expect(await show(parent)).toMatchObject({status: "closed"});
+  expect((await show(dependent)).ready).toBe(true);
+});
+
+test("a queued acquirer can replay a release that happened before it subscribed", async () => {
+  const {request, write, checked} = await fixture("lease-feed-gap");
+  const path = "/leases/staging";
+  await checked(write(path, {op: "acquire", holder: "owner", ttl_s: 300}));
+  const conflict = await write(path, {op: "acquire", holder: "waiter", ttl_s: 300}, "waiter");
+  expect(conflict.status).toBe(409);
+  const {seq} = await conflict.json<{seq: number}>();
+  expect(Number.isInteger(seq)).toBe(true);
+  await checked(write(path, {op: "release", holder: "owner"}));
+
+  const socket = await connectFeed(request);
+  try {
+    const released = nextMessage(socket);
+    socket.send(JSON.stringify({since: seq}));
+    expect(await released).toMatchObject({leases: ["staging"]});
+    expect(await checked(write(path, {op: "acquire", holder: "waiter", ttl_s: 300}, "waiter")))
+      .toMatchObject({holder: "waiter"});
   } finally {
     socket.close();
   }

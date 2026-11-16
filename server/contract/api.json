@@ -29,7 +29,7 @@
     "Comment": {"ticket": "ticket ID", "n": "integer", "author": "string", "at": "timestamp", "text": "string", "legacy_id": "string|null (original Beads comment ID)"},
     "History": {"ticket": "ticket ID", "seq": "integer", "actor": "string", "at": "timestamp", "change": "field changes or imported event array"},
     "Whole ticket": {"ticket fields": "Ticket (version optional on import and assigned by the server)", "edges": "outgoing Edge[]", "comments": "Comment[]", "history": "History[]", "aliases": "string[] (optional on import)"},
-    "Lease": {"name": "string", "holder": "string", "machine": "string", "expires_at": "timestamp", "payload": "object", "waiters": "{holder, since}[]"},
+    "Lease": {"name": "string", "holder": "string", "machine": "string", "expires_at": "timestamp", "payload": "object", "waiters": "{holder, machine?, since}[]"},
     "Event": {"seq": "integer", "at": "timestamp", "kind": "session|ci|machine|cutover|usage", "machine": "string", "actor": "string", "data": "JSON"}
   },
   "routes": [
@@ -66,7 +66,7 @@
     {
       "method": "POST", "path": "/leases/<name>",
       "request": {"path": {"name": "lease name"}, "body": {"op": "acquire|renew|release", "holder": "string", "ttl_s": "integer?", "payload": "object?"}},
-      "response": {"body": "Lease"},
+      "response": {"body": "Lease", "busy": "{holder, expires_at, position, seq}"},
       "statuses": [200, 400, 401, 409, 429]
     },
     {
@@ -95,8 +95,8 @@
     {
       "method": "POST", "path": "/import",
       "request": {"body": {"tickets": "up to 200 flat Whole ticket objects", "daily_row_ceiling": "optional maximum daily rows including existing usage"}},
-      "response": {"seq": "integer", "imported": "number of changed tickets", "rows_written": "SQLite writes for data and shared sequence"},
-      "statuses": [200, 400, 401, 429]
+      "response": {"seq": "integer", "imported": "number of changed tickets", "rows_written": "SQLite writes for data and shared sequence", "conflict": "{error, conflicts: ticket IDs}"},
+      "statuses": [200, 400, 401, 409, 429]
     },
     {
       "method": "GET", "path": "/export",
@@ -132,7 +132,7 @@
     }
   },
   "lease_operations": {
-    "acquire": {"request": {"holder": "string", "ttl_s": "integer", "payload": "object?"}, "response": {"body": "Lease"}, "conflict": {"holder": "string", "expires_at": "timestamp", "position": "integer"}, "statuses": [200, 409]},
+    "acquire": {"request": {"holder": "string", "ttl_s": "integer", "payload": "object?"}, "response": {"body": "Lease"}, "conflict": {"holder": "string", "expires_at": "timestamp", "position": "integer", "seq": "integer"}, "statuses": [200, 409]},
     "renew": {"request": {"holder": "string", "ttl_s": "integer", "payload": "object?"}, "response": {"body": "Lease"}, "conflict": {"holder": "string|null", "expires_at": "timestamp|null"}, "statuses": [200, 409]},
     "release": {"request": {"holder": "string"}, "response": {"body": "released Lease"}, "conflict": {"holder": "string|null", "expires_at": "timestamp|null"}, "statuses": [200, 409]}
   },

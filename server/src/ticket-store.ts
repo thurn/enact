@@ -28,7 +28,7 @@ export class TicketStore {
   }
 
   advanceSequence(seq: number): void {
-    if (this.index) this.index.seq = seq;
+    this.index?.advanceSequence(seq);
   }
 
   meta(key: string): string | undefined {

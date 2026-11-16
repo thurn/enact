@@ -1808,7 +1808,7 @@ SQLite database is `server/contract/schema.sql`:
 ```sql
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 -- keys: seq (global change counter), cutover (before|paused|after),
--- cutover_at, daily_usage ({day, requests, rows_written}),
+-- cutover_at, cutover_seq, daily_usage ({day, requests, rows_written}),
 -- token_hashes (hash to machine), token_fetched_at
 
 CREATE TABLE tickets (
@@ -1860,7 +1860,7 @@ CREATE TABLE history (                     -- the changelog
 CREATE TABLE leases (
   name TEXT PRIMARY KEY, holder TEXT NOT NULL, machine TEXT NOT NULL,
   expires_at TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}',
-  waiters TEXT NOT NULL DEFAULT '[]'       -- JSON array of {holder, since}, arrival order
+  waiters TEXT NOT NULL DEFAULT '[]'       -- JSON array of {holder, machine, since}, arrival order
 ) WITHOUT ROWID;
 
 CREATE TABLE events (
@@ -1961,7 +1961,8 @@ use that sequence in the first feed message so a change between the previous
 read and subscription wakes the caller.
 
 Status codes: 200; 304; 400 malformed; 401 missing or unknown token; 404 no
-such ticket; 409 precondition failed or claim or lease lost; 429 with
+such ticket; 409 precondition failed, claim or lease lost, or late import
+conflict; 429 with
 `{limit: requests|rows_written}` when the object's own count says the write
 would pass 90 percent of a daily limit.
 
@@ -2012,13 +2013,16 @@ that are files under the clone's state directory today).
 
 - `acquire`: succeeds if there is no row, the row has expired, or the caller
   already holds it. Otherwise the caller is appended to `waiters` if absent
-  and gets 409 with the holder, expiry and its position. An expired lease
-  goes to the first waiter that asks; a waiter that has not asked for 60 s
-  is dropped.
+  and gets 409 with the holder, expiry, its position and the feed sequence.
+  An expired lease goes to the first waiter that asks. A waiter that has not
+  asked for 60 s is dropped.
 - `renew` and `release` succeed only for the holder; anyone else gets 409,
   which is how a holder learns it lost the lease (`LeaseLost` in Enact).
 - A waiter does not poll: it holds the feed and asks again when told the
-  lease changed or reached its expiry.
+  lease changed or reached its expiry. Subscribing from the 409 response's
+  sequence also catches a change before the socket connected. If an expired
+  lease is still reserved by an abandoned head waiter, the alarm wakes the
+  remaining queue again when that reservation lapses.
 
 ### 6. The feed
 
@@ -2059,7 +2063,11 @@ idle connection costs nothing.
   the final import and comparison, and sets `after`.
 - One hour later it pulls the bead store's remote once more and imports any
   bead changed after `cutover_at`, to catch a write that was in flight on a
-  machine that was asleep during the pause.
+  machine that was asleep during the pause. The server rejects that import
+  batch with the conflicting ticket IDs if a snapshot would replace a native
+  edit, including a comment or dependency change, or if the journal no
+  longer proves coverage back to cutover. The cutover operator retains the
+  legacy export for reconciliation when a batch conflicts.
 
 ### 8. Tokens
 

@@ -7,7 +7,7 @@ const eventKinds = ["session", "ci", "machine", "cutover", "usage"] as const;
 const cutoverStates = ["before", "paused", "after"] as const;
 type Cutover = typeof cutoverStates[number];
 
-type Waiter = {holder: string; since: string};
+export type Waiter = {holder: string; since: string; machine?: string};
 type Lease = {
   name: string;
   holder: string;
@@ -23,8 +23,12 @@ function lease(row: LeaseRow): Lease {
   return {...row, payload: JSON.parse(row.payload), waiters: JSON.parse(row.waiters)};
 }
 
+export function waiterExpires({since}: Waiter): number {
+  return Date.parse(since) + waiterLifetime;
+}
+
 function liveWaiters(current: Lease, now: number): Waiter[] {
-  return current.waiters.filter(({since}) => Date.parse(since) + waiterLifetime > now);
+  return current.waiters.filter((waiter) => waiterExpires(waiter) > now);
 }
 
 export function leases(sql: SqlStorage, now: number): Lease[] {
@@ -104,7 +108,8 @@ export class ProjectWrite {
     // Retain the start of the pause for the final reconciliation pull.
     if (wanted === "paused") this.meta("cutover_at", new Date(this.now).toISOString());
     if (wanted === "before") this.write("DELETE FROM meta WHERE key = 'cutover_at'");
-    this.advance();
+    const seq = this.advance();
+    if (wanted === "after") this.meta("cutover_seq", String(seq));
   }
 
   event(identity: Identity, body: unknown) {
@@ -135,18 +140,19 @@ export class ProjectWrite {
     const active = current && Date.parse(current.expires_at) > this.now;
     const held = active && current.holder === holder && current.machine === machine;
     const waiters = current ? liveWaiters(current, this.now) : [];
+    const caller = (waiter: Waiter) => waiter.holder === holder && (waiter.machine ?? machine) === machine;
     const at = new Date(this.now).toISOString();
 
     if (op !== "acquire" && !held) {
       return {status: 409, body: {holder: active ? current.holder : null, expires_at: active ? current.expires_at : null}};
     }
-    if (op === "acquire" && current && !held && (active || (waiters.length > 0 && waiters[0].holder !== holder))) {
-      const index = waiters.findIndex((waiter) => waiter.holder === holder);
+    if (op === "acquire" && current && !held && (active || (waiters.length > 0 && !caller(waiters[0])))) {
+      const index = waiters.findIndex(caller);
       const position = index === -1 ? waiters.length + 1 : index + 1;
-      waiters[position - 1] = {holder, since: at};
+      waiters[position - 1] = {holder, since: at, machine};
       const serialized = JSON.stringify(waiters);
       if (serialized !== row.waiters) this.write("UPDATE leases SET waiters = ? WHERE name = ?", serialized, leaseName);
-      return {status: 409, body: {holder: current.holder, expires_at: current.expires_at, position}};
+      return {status: 409, body: {holder: current.holder, expires_at: current.expires_at, position, seq: this.seq}};
     }
 
     if (op === "release" && !waiters.length) {
@@ -159,7 +165,7 @@ export class ProjectWrite {
       name: leaseName, machine, holder,
       expires_at: op === "release" ? at : new Date(this.now + ttl * 1000).toISOString(),
       payload: op === "release" ? current!.payload : payload ?? (held ? current.payload : {}),
-      waiters: waiters.filter((waiter) => waiter.holder !== holder),
+      waiters: waiters.filter((waiter) => !caller(waiter)),
     };
     this.write(`
       INSERT INTO leases VALUES (?, ?, ?, ?, ?, ?)

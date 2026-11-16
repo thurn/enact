@@ -63,7 +63,9 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
       const previous = this.store.tickets.seq;
       let change: FeedChange | undefined;
       const reply = this.store.batch(project, identity.actor, body, (rows, changes) => {
-        if (changes.seq !== previous) change = {previous, seq: changes.seq, tickets: [...changes.changed]};
+        if (changes.seq !== previous) {
+          change = {previous, seq: changes.seq, tickets: [...changes.changed], native: [...changes.modified]};
+        }
         this.record(usage, rows, change);
       });
       if (change) this.feed.publish(change);
@@ -89,7 +91,7 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
     if (path === "/import" && change) this.store.invalidateIndex();
     else this.store.advanceSequence(write.seq);
     if (change) this.feed.publish(change);
-    const armDeadlines = change && (lease !== undefined || path === "/import");
+    const armDeadlines = lease !== undefined ? write.rowsWritten > 0 : path === "/import" && change !== undefined;
     return {...(result ?? {body: this.state(usage)}), armDeadlines};
   }
 
@@ -101,7 +103,12 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
 
   private mutate(project: string, path: string, lease: string | undefined, identity: Identity, body: unknown, write: ProjectWrite):
     {body: object; status?: number} | undefined {
-    if (path === "/import") return {body: importTickets(write, project, body)};
+    if (path === "/import") {
+      const nativeEdits = cutoverState(this.store.sql).cutover === "after"
+        ? this.feed.nativeEditsSince(Number(this.store.meta("cutover_seq")), write.seq)
+        : undefined;
+      return {body: importTickets(write, project, body, nativeEdits)};
+    }
     if (path === "/events") return {body: write.event(identity, body)};
     if (lease !== undefined) return write.updateLease(decodeURIComponent(lease), identity.machine, body);
     write.cutover(body);

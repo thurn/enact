@@ -1,6 +1,6 @@
 import type {ProjectWrite} from "./project-state";
 import {
-  array, bad, choice, decodeTicket, edgeKinds, integer, name, object, statuses, string, strings,
+  ApiError, array, bad, choice, decodeTicket, edgeKinds, integer, name, object, statuses, string, strings,
   ticketTypes, timestamp, type Ticket, type TicketRow,
 } from "./ticket-types";
 
@@ -132,7 +132,7 @@ function checkParents(sql: SqlStorage, parents: Map<string, string | null>): voi
   }
 }
 
-export function importTickets(write: ProjectWrite, project: string, body: unknown) {
+export function importTickets(write: ProjectWrite, project: string, body: unknown, nativeEdits?: Set<string> | null) {
   const inputs = array(object(body, "import").tickets, "tickets");
   if (inputs.length > pageSize) bad(`At most ${pageSize} tickets can be imported at once`);
   const snapshots = inputs.map((value) => object(value, "ticket"));
@@ -147,6 +147,7 @@ export function importTickets(write: ProjectWrite, project: string, body: unknow
   }
   const parents = new Map<string, string | null>();
   const seen = new Set<string>();
+  const conflicts: string[] = [];
   for (const input of snapshots) {
     const ticket = fields(input);
     const {id} = ticket;
@@ -157,7 +158,11 @@ export function importTickets(write: ProjectWrite, project: string, body: unknow
     if (write.sql.exec(
       "SELECT 1 FROM aliases WHERE alias IN (?, ?) AND id != ?", id, `${project}-${id}`, id,
     ).toArray().length) bad(`Ticket ${id} collides with an alias`);
-    if (current && Date.parse(current.updated_at) > Date.parse(ticket.updated_at)) continue;
+    const protect = current && (nativeEdits === null || nativeEdits?.has(id));
+    if (current && Date.parse(current.updated_at) > Date.parse(ticket.updated_at)) {
+      if (protect) conflicts.push(id);
+      continue;
+    }
     if (current) ticket.next_child = Math.max(ticket.next_child, current.next_child);
     const encoded = encode(ticket);
     const columns = Object.keys(encoded) as (keyof typeof encoded)[];
@@ -172,8 +177,12 @@ export function importTickets(write: ProjectWrite, project: string, body: unknow
       if (!current || ticket.parent !== current.parent) parents.set(id, ticket.parent);
     }
     importRelated(write, project, id, input);
-    if (write.rowsWritten !== before) write.tickets.push(id);
+    if (write.rowsWritten !== before) {
+      if (protect) conflicts.push(id);
+      write.tickets.push(id);
+    }
   }
+  if (conflicts.length) throw new ApiError(409, {error: "Late import overlaps native edits or exceeds journal coverage", conflicts});
   checkParents(write.sql, parents);
   if (write.tickets.length) write.advance(historyFloor);
   return {seq: write.seq, imported: write.tickets.length, rows_written: write.rowsWritten};

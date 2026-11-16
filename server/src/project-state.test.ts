@@ -240,3 +240,86 @@ test("restoring an exported native history reserves its sequence before the next
     history: [{seq: 100}, {seq: 102}],
   });
 });
+
+test("late import cannot overwrite native comments or dependency removals", async () => {
+  const {post, json, get, sql} = await fixture("late-import");
+  const src = imported("source", {edges: [{src: "source", dst: "target", kind: "blocks"}]});
+  const target = imported("target");
+  const send = (...tickets: object[]) => post("/import", {tickets});
+  await json(send(src, target));
+  await json(post("/state", {cutover: "paused"}));
+  await json(post("/state", {cutover: "after"}));
+  await json(post("/batch", {ops: [
+    {op: "comment", id: "source", text: "Native comment"},
+    {op: "dep_remove", id: "source", on: "target"},
+  ]}));
+
+  const late = {...src, updated_at: "2040-01-01T00:00:00Z", title: "Late title"};
+  expect(await json(send(late, imported("newticket")), 409)).toMatchObject({conflicts: ["source"]});
+  expect(await json(get("/tickets/source?comments=1"))).toMatchObject({
+    title: "source", edges: [], comments: [{text: "Native comment"}],
+  });
+  expect((await get("/tickets/newticket")).status).toBe(404);
+  expect(await json(send({...target, title: "Late update"}, imported("newticket"))))
+    .toMatchObject({imported: 2});
+
+  await sql((db) => { db.exec("DELETE FROM feed_changes"); });
+  expect(await json(send({...target, title: "Unverified replacement"}), 409))
+    .toMatchObject({conflicts: ["target"]});
+  expect(await json(get("/tickets/target"))).toMatchObject({title: "Late update"});
+  expect(await json(send(imported("anothernew")))).toMatchObject({imported: 1});
+});
+
+test("coordination changes invalidate a cached graph's batch precondition", async () => {
+  const {get, post, json} = await fixture("graph-coordination-seq");
+  const {results: [{id}]} = await json<{results: {id: string}[]}>(post("/batch", {
+    ops: [{op: "create", fields: {title: "Available"}}],
+  }));
+  const first = await json<{seq: number}>(get("/graph?all=1"));
+  const event = await json<{seq: number}>(post("/events", {kind: "session", data: {state: "started"}}));
+  expect(event.seq).toBeGreaterThan(first.seq);
+  const changed = await json<{seq: number}>(get("/graph?all=1"));
+  expect(changed.seq).toBe(event.seq);
+  await json(post("/batch", {if: [{seq: changed.seq}], ops: [{op: "claim", id}]}));
+});
+
+test("lease, event and cutover operations stay within their SQLite row budgets", async () => {
+  const {get, post, json, sql} = await fixture("coordination-row-budget");
+  const countedRows = () => sql((db) => db.exec<{value: string}>(
+    "SELECT value FROM meta WHERE key = 'daily_usage'",
+  ).toArray().map(({value}) => JSON.parse(value).rows_written as number)[0] ?? 0);
+  const check = async (request: () => Promise<Response>, maximum: number, status = 200) => {
+    const before = await countedRows();
+    await json(request(), status);
+    expect(await countedRows() - before).toBeLessThanOrEqual(maximum);
+  };
+  const lease = (op: string, holder: string) =>
+    post("/leases/staging", {op, holder, ttl_s: 180});
+  await check(() => get("/state"), 1);
+  await check(() => lease("acquire", "owner"), 4);
+  await check(() => lease("acquire", "waiter"), 2, 409);
+  await check(() => lease("renew", "owner"), 4);
+  await check(() => lease("release", "owner"), 4);
+  await check(() => post("/events", {kind: "ci", data: {result: "passed"}}), 5);
+  await check(() => post("/state", {cutover: "paused"}), 5);
+  await check(() => post("/state", {cutover: "after"}), 5);
+});
+
+test("machines with the same holder name have separate queue positions", async () => {
+  const {post, json, sql} = await fixture("lease-machine");
+  const token = "another-machine";
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  const hash = [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  await sql((db) => {
+    db.exec("UPDATE meta SET value = json_patch(value, ?) WHERE key = 'token_hashes'",
+      JSON.stringify({[hash]: token}));
+  });
+  const acquire = (holder: string, authorization?: string) =>
+    post("/leases/staging", {op: "acquire", holder, ttl_s: 300}, authorization);
+  await json(acquire("owner"));
+  expect(await json(acquire("integrator"), 409)).toMatchObject({position: 1});
+  expect(await json(acquire("integrator", `Bearer ${token}`), 409)).toMatchObject({position: 2});
+  await json(post("/leases/staging", {op: "release", holder: "owner"}));
+  expect(await json(acquire("integrator", `Bearer ${token}`), 409)).toMatchObject({position: 2});
+  expect(await json(acquire("integrator"))).toMatchObject({machine: "test-machine"});
+});

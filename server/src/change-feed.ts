@@ -6,6 +6,7 @@ export type FeedChange = {
   tickets?: readonly string[];
   leases?: readonly string[];
   events?: readonly string[];
+  native?: readonly string[];
 };
 
 type ChangeRow = {seq: number; previous: number; changes: string};
@@ -89,6 +90,21 @@ export class ChangeFeed {
       INSERT INTO feed_changes VALUES (?, ?, ?, ?)
       ON CONFLICT(slot) DO UPDATE SET seq = excluded.seq, previous = excluded.previous, changes = excluded.changes
     `, seq % replaySequenceSpan, seq, previous, changes).rowsWritten;
+  }
+
+  // A late import may replace existing data only when the journal covers
+  // every write since cutover and identifies any intervening native edits.
+  nativeEditsSince(since: number, seq: number): Set<string> | null {
+    if (!Number.isSafeInteger(since) || since > seq || seq - since > replaySequenceSpan) return null;
+    const edited = new Set<string>();
+    if (since === seq) return edited;
+    let reached = since;
+    for (const change of this.replay(since, seq)) {
+      if (change.previous !== reached || change.resync) return null;
+      for (const id of change.native ?? []) edited.add(id);
+      reached = change.seq;
+    }
+    return reached === seq ? edited : null;
   }
 
   // Keep one row per sequence slot without paying for an index or pruning.

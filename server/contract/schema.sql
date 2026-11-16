@@ -1,6 +1,6 @@
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 -- keys: seq (global change counter), cutover (before|paused|after),
--- cutover_at, daily_usage ({day, requests, rows_written}),
+-- cutover_at, cutover_seq, daily_usage ({day, requests, rows_written}),
 -- token_hashes (hash to machine), token_fetched_at
 
 CREATE TABLE tickets (
@@ -52,7 +52,7 @@ CREATE TABLE history (                     -- the changelog
 CREATE TABLE leases (
   name TEXT PRIMARY KEY, holder TEXT NOT NULL, machine TEXT NOT NULL,
   expires_at TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}',
-  waiters TEXT NOT NULL DEFAULT '[]'       -- JSON array of {holder, since}, arrival order
+  waiters TEXT NOT NULL DEFAULT '[]'       -- JSON array of {holder, machine, since}, arrival order
 ) WITHOUT ROWID;
 
 CREATE TABLE events (

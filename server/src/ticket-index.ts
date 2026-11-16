@@ -33,6 +33,7 @@ export type BatchChanges = {
   tickets: ReadonlyMap<string, Ticket>;
   outgoing: ReadonlyMap<string, ReadonlyMap<string, Edge>>;
   changed: ReadonlySet<string>;
+  modified: ReadonlySet<string>;
 };
 
 export class TicketIndex {
@@ -92,10 +93,15 @@ export class TicketIndex {
     );
   }
 
+  advanceSequence(seq: number): void {
+    if (seq === this.seq) return;
+    this.seq = seq;
+    this.graphCache.clear();
+  }
+
   commit(changes: BatchChanges): void {
     if (this.seq === changes.seq) return;
-    this.seq = changes.seq;
-    this.graphCache.clear();
+    this.advanceSequence(changes.seq);
     let topologyChanged = false;
     for (const [id, ticket] of changes.tickets) {
       const previous = this.live.get(id);
