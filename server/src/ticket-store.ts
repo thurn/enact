@@ -72,6 +72,8 @@ export class TicketStore {
     const ancestorValue = filter.get("ancestor");
     const ancestor = ancestorValue === null ? null : resolveId(this.sql, project, ancestorValue);
     const labels = filter.getAll("label");
+    const excludedTypes = filter.getAll("exclude_type");
+    const unassigned = flag(filter, "unassigned");
     const includeClosed = flag(filter, "all") || status === "closed";
     const readyOnly = flag(filter, "ready");
     const beads = flag(filter, "beads");
@@ -91,6 +93,7 @@ export class TicketStore {
     for (const ticket of candidates) {
       if (status !== null && ticket.status !== status || type !== null && ticket.type !== type
         || assignee !== null && ticket.assignee !== assignee || parent !== null && ticket.parent !== parent
+        || unassigned && ticket.assignee !== null || excludedTypes.includes(ticket.type)
         || !labels.every((label) => ticket.labels.includes(label))) continue;
 
       if (ancestor !== null && !archived) {
@@ -101,7 +104,7 @@ export class TicketStore {
       const readiness = tickets.readiness(ticket, now);
       if (readyOnly && !(beads ? this.beadsReady(ticket, now) : readiness.ready)) continue;
       const counts = beads ? {
-        ...this.beadsCounts(ticket.id),
+        ...this.beadsCounts(ticket.id, archived),
         edges: [...tickets.edgesFrom(ticket.id).values()],
       } : {};
       const children = epicCounts ? this.sql.exec(
@@ -114,21 +117,24 @@ export class TicketStore {
     return results;
   }
 
-  private beadsCounts(id: string) {
+  private beadsCounts(id: string, includeClosed = false) {
     return this.sql.exec(
       `SELECT (SELECT count(*) FROM edges WHERE src = ?) AS dependency_count,
               (SELECT count(*) FROM edges JOIN tickets ON tickets.id = edges.src
-                WHERE dst = ? AND tickets.status != 'closed') AS dependent_count,
+                WHERE dst = ? AND (? OR tickets.status != 'closed')) AS dependent_count,
               (SELECT count(*) FROM comments WHERE ticket = ?) AS comment_count`,
-      id, id, id,
+      id, id, Number(includeClosed), id,
     ).one();
   }
 
   private beadsReady(ticket: Ticket, now: number): boolean {
     if (ticket.status !== "open" || ticket.defer_until && Date.parse(ticket.defer_until) >= now) return false;
-    for (const edge of this.tickets.edgesFrom(ticket.id).values()) {
-      if (["blocks", "conditional-blocks", "waits-for"].includes(edge.kind)
-        && this.tickets.lookup(edge.dst)?.status !== "closed") return false;
+    // Beads excludes tasks inside a blocked epic from ready listings.
+    for (let id: string | null = ticket.id; id !== null; id = this.tickets.parentOf(id)) {
+      for (const edge of this.tickets.edgesFrom(id).values()) {
+        if (["blocks", "conditional-blocks", "waits-for"].includes(edge.kind)
+          && this.tickets.lookup(edge.dst)?.status !== "closed") return false;
+      }
     }
     return true;
   }

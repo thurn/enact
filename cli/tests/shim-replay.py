@@ -202,7 +202,7 @@ def replay(tk, bd, directory, env, address):
             for row in got if isinstance(got, list) else [got]:
                 if isinstance(row, dict) and row.get("id") in snoozes and row.get("defer_until") == future:
                     row["defer_until"] = snoozes[row["id"]]
-            if args == ["list", "--json"]:
+            if call["command"][0] in {"list", "ready"}:
                 # Beads and SQLite do not promise an order among equal rank.
                 for listing in (want, got):
                     listing[:] = [
@@ -219,6 +219,10 @@ def replay(tk, bd, directory, env, address):
                 verify_write(address, args, json.loads(call["stdout"]))
             except AssertionError as error:
                 problems.append(f"{args}: persisted ticket differs ({error})")
+        elif call["returncode"] == 0 and call["command"] == ["comments", "add"]:
+            author, fields = (args[1], args[2:]) if args[0] == "--actor" else ("Derek Thurn", args)
+            comments = request(address, f"/by/api/tickets/{fields[2]}?comments=1")["comments"]
+            assert (comments[-1]["author"], comments[-1]["text"]) == (author, fields[3])
     assert not problems, "\n".join(problems)
     print(f"{len(calls)} recorded calls, zero unexplained differences.")
     print("Normalization rules: " + "; ".join(RULES))

@@ -152,6 +152,8 @@ def main():
     counts = Counter(" ".join(case["command"]) for case in cases)
     for command, count in sorted(counts.items()):
         print(f"{command}: {count}")
+    flags = {flag for case in cases for flag in case["flags"]}
+    print(f"{len(counts)} distinct command paths, {len(flags)} distinct flags")
     print(f"{len(cases)} distinct command and flag combinations")
 
 

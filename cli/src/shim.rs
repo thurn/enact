@@ -45,7 +45,11 @@ enum Action {
     Ready {
         #[arg(long)]
         label: Vec<String>,
-        #[arg(long, short = 'n', default_value_t = 10)]
+        #[arg(long, value_delimiter = ',')]
+        exclude_type: Vec<String>,
+        #[arg(long, short = 'u')]
+        unassigned: bool,
+        #[arg(long, short = 'n', default_value_t = 100)]
         limit: usize,
     },
     Show {
@@ -306,11 +310,30 @@ fn run(client: &Client, options: Options) -> Result<u8> {
             if all {
                 query.push(("all", "1".into()));
             }
-            output::listing(client, query, limit.unwrap_or(0), false, options.quiet)?
+            output::listing(
+                client,
+                query,
+                limit.unwrap_or(0),
+                false,
+                options.quiet || options.json,
+            )?
         }
-        Action::Ready { label, limit } => {
+        Action::Ready {
+            label,
+            exclude_type,
+            unassigned,
+            limit,
+        } => {
             let mut query = vec![("beads", "1".into()), ("ready", "1".into())];
             query.extend(label.into_iter().map(|value| ("label", value)));
+            query.extend(
+                exclude_type
+                    .into_iter()
+                    .map(|value| ("exclude_type", value)),
+            );
+            if unassigned {
+                query.push(("unassigned", "1".into()));
+            }
             output::listing(client, query, limit, true, options.quiet)?
         }
         Action::Show { ids } => return output::show(client, &ids, options.json),
@@ -447,6 +470,18 @@ fn run(client: &Client, options: Options) -> Result<u8> {
         Action::Comments { arguments } => {
             let query = [("comments", "1".into())];
             match arguments.as_slice() {
+                [command, ..] if command == "list" => {
+                    let message = concat!(
+                        "\"bd comments list\" is not valid.\n\n",
+                        "To list comments on an issue, run:\n  bd comments <issue-id>\n\n",
+                        "Example:\n  bd comments bd-123\n\nSee: bd comments --help"
+                    );
+                    if options.json {
+                        output::json(&json!({"error": message, "schema_version": 1}))?;
+                        return Ok(1);
+                    }
+                    return Err(usage(message));
+                }
                 [id] if id != "add" => {
                     let ticket = ticket(client, id, &query)?;
                     json!(
@@ -468,6 +503,7 @@ fn run(client: &Client, options: Options) -> Result<u8> {
                     }
                     let mut row = output::comment(client, comment);
                     row["schema_version"] = json!(1);
+                    rendered = Some(format!("Comment added to {}\n", string(&row["issue_id"])));
                     row
                 }
                 _ => {

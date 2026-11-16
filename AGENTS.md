@@ -14,8 +14,8 @@
 - For focused Worker checks, run `npm ci` and `npm test` in `server/` with
   Node 22.12 or later. Run Wrangler there with `npx wrangler`. Worker tests
   use the local simulator and require no Cloudflare login.
-- For focused Rust checks, run `npm ci` in `server/` once, then run
-  `cargo test --locked` in `cli/`. The CLI tests launch Wrangler locally.
+- For focused Rust checks, run `npm ci` and `npm run pretest` in `server/`, then
+  run `cargo test --locked` in `cli/`. The CLI tests launch Wrangler locally.
   Build the release executable with `cargo build --locked --release`.
 - Set `[tickets].project` and `[tickets].url` in a project's `.enact.toml`
   to point `tk` at its ticket server. The URL is the server root, for

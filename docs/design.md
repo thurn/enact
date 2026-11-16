@@ -2286,31 +2286,32 @@ rmdir "$restore"
 
 Beryl's live recording started on 2026-11-16 at 18:25:06 UTC. The first
 minutes are in the uncompressed `calls.jsonl`. Pass both files to the reducer
-and use a half-open interval in Unix nanoseconds to select the first day.
+and optionally use a half-open interval in Unix nanoseconds to select a sample.
 
 ```sh
 python3 scripts/bd_corpus.py --real-bd "$real" \
   --source live "$clone" "$state/calls.jsonl" \
   --source live "$clone" "$state/calls.jsonl.gz" \
-  --since-ns 1794853506000000000 --before-ns 1794939906000000000 \
-  /tmp/bd-day.jsonl.gz
+  /tmp/bd-live.jsonl.gz
 ```
 
 The reducer groups by command path and flag names, including repeated flags.
 It uses the recording version's help to identify which flags take a value and
-prefers successful examples when a shape appears more than once. The checked-in
-snapshot is the real `bd export` at the start. The initial cases came from real
-Beads 1.3.4 in an isolated Git clone seeded by that export. Replay those cases
-in file order against a fresh import. The tests use child IDs allocated from a
-fixture epic and include cases for stdin and invalid invocations. To incorporate
-live calls, reproduce their state and file inputs against an isolated import
-before adding them as replay cases. The live records preserve original
-responses from the changing production store.
+prefers successful examples when a shape appears more than once.
+`tests/corpus/live-shapes.json` records the resulting command paths and flags.
+The checked-in snapshot is the real `bd export` at the start. The replay cases
+come from real Beads 1.3.4 in an isolated Git clone seeded by that export.
+Replay them in file order against a fresh import. The tests use child IDs
+allocated from a fixture epic and include cases for stdin and invalid
+invocations. To incorporate live calls, reproduce their state and file inputs
+against an isolated import. The recorded export case compares the legacy
+success with the deliberate after-cutover refusal, so its response body is
+already covered by the snapshot.
 
 ### Install the cutover shim
 
 Build `tk` with `cargo build --locked --release --manifest-path cli/Cargo.toml`.
-Run the installer after the live recording window ends:
+Run the installer when the capture is complete:
 
 ```sh
 python3 scripts/install_bd_shim.py "$tk_binary" "$real_beads" "$bd_entry"
