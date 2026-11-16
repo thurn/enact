@@ -2064,6 +2064,12 @@ idle connection costs nothing.
   `machine` event in the previous 10 minutes has posted `drained` (at most 5
   minutes, else it sets `before` again and stops), pulls the bead store, runs
   the final import and comparison, and sets `after`.
+- Before switching Beryl to `after`, move Beryl viewers off Bead Me Up, Scotty
+  and stop any Scotty instance serving Beryl. Scotty polls `bd export --json`,
+  and forwarding those exports would exhaust the daily SQLite read quota.
+  Use the live ticket dashboard. The shim rejects legacy exports in `after`,
+  and the compatibility replay expects that rejection for Scotty's recorded
+  command. Native `tk export` serves the scheduled backup.
 - One hour later it pulls the bead store's remote once more and imports any
   bead changed after `cutover_at`, to catch a write that was in flight on a
   machine that was asleep during the pause. The server rejects that import

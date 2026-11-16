@@ -51,6 +51,7 @@ enum Action {
     Show {
         ids: Vec<String>,
     },
+    Export,
     Create {
         #[arg(long)]
         id: Option<String>,
@@ -169,6 +170,7 @@ impl Action {
             Self::List { .. }
             | Self::Ready { .. }
             | Self::Show { .. }
+            | Self::Export
             | Self::Dep {
                 operation: Dependency::List { .. },
             }
@@ -229,13 +231,19 @@ fn unsupported(args: &[OsString]) -> Failure {
         "comments" => "comment",
         "epic" => "list --type epic",
         "init" | "dolt" => "state",
-        "list" | "ready" | "show" | "create" | "update" | "close" | "defer" | "reopen"
-        | "export" => &command,
+        "list" | "ready" | "show" | "create" | "update" | "close" | "defer" | "reopen" => &command,
+        "export" => return retired_export(),
         _ => "--help",
     };
     usage(format!(
         "bd: unsupported arguments for {command:?}; use tk {native}"
     ))
+}
+
+fn retired_export() -> Failure {
+    usage(
+        "bd: full exports are disabled after ticket cutover. Use the ticket dashboard or targeted tk list/show reads.",
+    )
 }
 
 fn git_config(key: &str) -> Option<String> {
@@ -306,6 +314,7 @@ fn run(client: &Client, options: Options) -> Result<u8> {
             output::listing(client, query, limit, true, options.quiet)?
         }
         Action::Show { ids } => return output::show(client, &ids, options.json),
+        Action::Export => return Err(retired_export()),
         Action::Create {
             id,
             parent,

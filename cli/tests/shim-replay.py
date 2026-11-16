@@ -16,6 +16,9 @@ import urllib.request
 HERE = Path(__file__).resolve().parent
 CORPUS = HERE.parent.parent / "tests" / "corpus"
 TOKEN = "shim-replay-token"
+EXPORT_ARGS = ["export", "--json"]
+EXPORT_ERROR = ("bd: full exports are disabled after ticket cutover. "
+                "Use the ticket dashboard or targeted tk list/show reads.\n")
 RULES = (
     "JSON whitespace and object key order",
     "opaque version tokens and newly allocated comment IDs (mapped consistently)",
@@ -170,6 +173,11 @@ def replay(tk, bd, directory, env, address):
     for call in calls:
         args = call["argv"]
         reply = run(bd, args, directory, env, call["stdin"])
+        if args == EXPORT_ARGS and call["returncode"] == 0:
+            # Scotty polls this command. Its replacement is the live dashboard.
+            assert (reply.returncode, reply.stdout, reply.stderr) == (1, "", EXPORT_ERROR), reply
+            print("Recorded Scotty export rejected after cutover as expected.")
+            continue
         want = call["stdout"]
         got = reply.stdout
         if reply.returncode != call["returncode"]:
@@ -209,6 +217,10 @@ def cutover(bd, directory, env, address):
     config.write_text(f'[tickets]\nproject = "gate"\nurl = "{address}"\n')
     before = run(bd, ["show", "arg with spaces", "--json"], directory, env, "in\n")
     assert (before.returncode, before.stdout, before.stderr) == (17, 'show|arg with spaces|--json\nin\n', "legacy stderr\n"), before
+    legacy_export = run(bd, EXPORT_ARGS, directory, env, "")
+    assert (legacy_export.returncode, legacy_export.stdout, legacy_export.stderr) == (
+        17, "export|--json\n", "legacy stderr\n"
+    ), legacy_export
     request(address, "/gate/api/state", {"cutover": "paused"})
     paused = subprocess.Popen([bd, "epic", "close-eligible", "--json"], cwd=directory, env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -235,6 +247,17 @@ def cutover(bd, directory, env, address):
             paused.kill()
             paused.wait()
     assert (directory / "synced").read_text() == "sync\n"
+    requests_before = request(address, "/gate/api/state")["requests"]
+    for args in (EXPORT_ARGS, ["export"], EXPORT_ARGS):
+        retired = run(bd, args, directory, env)
+        assert (retired.returncode, retired.stdout, retired.stderr) == (1, "", EXPORT_ERROR), retired
+    # Only the observation request itself should reach the ticket server.
+    assert request(address, "/gate/api/state")["requests"] == requests_before + 1
+    output_export = run(bd, ["export", "-o", "backup.jsonl"], directory, env)
+    assert (output_export.returncode, output_export.stdout, output_export.stderr) == (
+        1, "", EXPORT_ERROR
+    ), output_export
+    assert not (directory / "backup.jsonl").exists()
     with socket.socket() as offline:
         offline.bind(("127.0.0.1", 0))
         config.write_text(f'[tickets]\nproject = "gate"\nurl = "http://127.0.0.1:{offline.getsockname()[1]}"\n')
