@@ -643,7 +643,10 @@ class Beads:
         cmd = ["bd"]
         if actor:
             cmd += ["--actor", actor]
-        return run([*cmd, *args], self.repo.main, check=False, env=self.env)
+        env = self.env
+        if self.repo.state / "ownership.lock" in _ownership_locks:
+            env = {**env, "ENACT_BD_IN_FLIGHT": "1"}
+        return run([*cmd, *args], self.repo.main, check=False, env=env)
 
     def run(self, *args: str, actor: str | None = None) -> str:
         if self.server:

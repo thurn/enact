@@ -1,16 +1,15 @@
 use crate::client::{Result, usage};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
+use std::fs;
 use std::io::BufRead;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::{env, fs};
 
 pub type Tickets = BTreeMap<String, Value>;
 
 pub fn legacy(arguments: &[&str], low_priority: bool) -> Result<Vec<u8>> {
-    let binary = env::var_os("ENACT_REAL_BD").unwrap_or_else(|| OsString::from("bd"));
+    let binary = crate::shim::state::real_binary()?;
     let mut command = if low_priority && cfg!(unix) {
         let mut nice = Command::new("nice");
         nice.args(["-n", "10"]).arg(&binary);

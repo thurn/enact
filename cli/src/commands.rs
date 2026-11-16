@@ -177,7 +177,7 @@ pub fn ready_query(filters: Ready) -> Query {
     query
 }
 
-fn read(client: &Client, path: &[&str], query: &[(&str, String)]) -> Result<Value> {
+pub(crate) fn read(client: &Client, path: &[&str], query: &[(&str, String)]) -> Result<Value> {
     client
         .get(&client.url(path, query), None, client.retry_for)?
         .json()
@@ -311,11 +311,11 @@ fn file_contents(path: Option<std::path::PathBuf>) -> Result<Option<String>> {
     .transpose()
 }
 
-fn single(client: &Client, op: Value, conditions: Vec<Value>) -> Result<Value> {
+pub(crate) fn single(client: &Client, op: Value, conditions: Vec<Value>) -> Result<Value> {
     batch(client, json!({"if": conditions, "ops": [op]}))
 }
 
-fn batch(client: &Client, mut body: Value) -> Result<Value> {
+pub(crate) fn batch(client: &Client, mut body: Value) -> Result<Value> {
     let operations = body["ops"]
         .as_array()
         .ok_or_else(|| usage("batch requires an ops array"))?;

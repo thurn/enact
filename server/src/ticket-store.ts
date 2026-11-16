@@ -57,7 +57,8 @@ export class TicketStore {
       history: this.sql.exec<{change: string}>("SELECT * FROM history WHERE ticket = ? ORDER BY seq", id)
         .toArray().map((row) => ({...row, change: JSON.parse(row.change)})),
     } : {};
-    return {...ticket, edges, children, ...this.tickets.readiness(ticket, Date.now()), ...comments, ...history};
+    const beads = flag(filter, "beads") ? this.beadsCounts(id) : {};
+    return {...ticket, edges, children, ...this.tickets.readiness(ticket, Date.now()), ...comments, ...history, ...beads};
   }
 
   list(project: string, filter: URLSearchParams): object[] {
@@ -73,6 +74,8 @@ export class TicketStore {
     const labels = filter.getAll("label");
     const includeClosed = flag(filter, "all") || status === "closed";
     const readyOnly = flag(filter, "ready");
+    const beads = flag(filter, "beads");
+    const epicCounts = flag(filter, "epic_counts");
     const limitValue = filter.get("limit");
     if (limitValue !== null && !/^\d+$/.test(limitValue)) bad("limit must be a nonnegative integer");
     const limit = limitValue === null ? Infinity : integer(Number(limitValue), "limit");
@@ -96,11 +99,38 @@ export class TicketStore {
         if (current === null) continue;
       }
       const readiness = tickets.readiness(ticket, now);
-      if (readyOnly && !readiness.ready) continue;
-      results.push({...ticket, ...readiness});
+      if (readyOnly && !(beads ? this.beadsReady(ticket, now) : readiness.ready)) continue;
+      const counts = beads ? {
+        ...this.beadsCounts(ticket.id),
+        edges: [...tickets.edgesFrom(ticket.id).values()],
+      } : {};
+      const children = epicCounts ? this.sql.exec(
+        "SELECT count(*) AS total_children, count(*) FILTER (WHERE status = 'closed') AS closed_children FROM tickets WHERE parent = ?",
+        ticket.id,
+      ).one() : {};
+      results.push({...ticket, ...readiness, ...counts, ...children});
       if (results.length === limit) break;
     }
     return results;
+  }
+
+  private beadsCounts(id: string) {
+    return this.sql.exec(
+      `SELECT (SELECT count(*) FROM edges WHERE src = ?) AS dependency_count,
+              (SELECT count(*) FROM edges JOIN tickets ON tickets.id = edges.src
+                WHERE dst = ? AND tickets.status != 'closed') AS dependent_count,
+              (SELECT count(*) FROM comments WHERE ticket = ?) AS comment_count`,
+      id, id, id,
+    ).one();
+  }
+
+  private beadsReady(ticket: Ticket, now: number): boolean {
+    if (ticket.status !== "open" || ticket.defer_until && Date.parse(ticket.defer_until) > now) return false;
+    for (const edge of this.tickets.edgesFrom(ticket.id).values()) {
+      if (["blocks", "conditional-blocks", "waits-for"].includes(edge.kind)
+        && this.tickets.lookup(edge.dst)?.status !== "closed") return false;
+    }
+    return true;
   }
 
   private *archivedCandidates(

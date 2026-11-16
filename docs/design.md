@@ -2277,3 +2277,33 @@ fixture epic and include cases for stdin and invalid invocations. To incorporate
 live calls, reproduce their state and file inputs against an isolated import
 before adding them as replay cases. The live records preserve original
 responses from the changing production store.
+
+### Install the cutover shim
+
+Build `tk` with `cargo build --locked --release --manifest-path cli/Cargo.toml`.
+Run the installer after the live recording window ends:
+
+```sh
+python3 scripts/install_bd_shim.py "$tk_binary" "$real_beads" "$bd_entry"
+```
+
+Pass the actual Beads executable as the second argument. On the recording Mac,
+resolve the link saved in `$HOME/.local/share/enact/bd-record/original-link`
+relative to the recorder's directory. On Windows use the corresponding
+`.exe` paths. The installer copies the real executable beside the `bd` entry
+as `bd-real`, then atomically publishes the shim at the requested path. An
+existing recorder's logs remain available to the reducer.
+
+The shim shares its five-second read cache and local drain marker across
+worktrees configured for the same server and project. A write reads the
+server state first. After the machine observes `after`, an outage cannot
+send it back to Beads. During a pause, the shim publishes the legacy store
+with Enact, acknowledges that pause, then waits on the WebSocket. It uses
+`~/enact/scripts/enact.py` and `python3` by default. Set
+`ENACT_SHIM_HELPER` and `ENACT_SHIM_PYTHON` for other installations.
+
+Native ticket closes complete eligible ancestors in the same transaction.
+A close through the shim preserves Beads' explicit `bd epic close-eligible`
+step. The shim also uses Beads' ready ordering and list counts. The
+replay test prints its output normalization rules and uses the production
+Worker in the local simulator.

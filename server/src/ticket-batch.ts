@@ -8,7 +8,8 @@ type TicketInput = Partial<Pick<Ticket,
   "title" | "body" | "acceptance" | "design" | "notes" | "type" | "status" |
   "priority" | "assignee" | "parent" | "last" | "labels" | "metadata" | "defer_until"
 >>;
-type OperationResult = {id: string; closed?: string[]; ready?: string[]};
+type LegacyComment = {ticket: string; n: number; author: string; at: string; text: string; legacy_id: string | null};
+type OperationResult = {id: string; closed?: string[]; ready?: string[]; comment?: LegacyComment};
 type BatchResult = {seq: number; results: OperationResult[]};
 
 const alphabet = "0123456789abcdefghjkmnpqrstvwxyz";
@@ -210,7 +211,18 @@ export class TicketBatch {
     if (fields.title === undefined) bad("A ticket needs a title");
     const parentValue = op.parent === undefined ? fields.parent : op.parent;
     const parent = parentValue == null ? null : this.ticket(parentValue, "parent");
-    const id = parent ? `${parent.id}.${parent.next_child}` : this.allocateRoot();
+    let id: string;
+    if (op.legacy_id !== undefined) {
+      const legacyId = name(op.legacy_id, "legacy_id");
+      if (parent || !legacyId.startsWith(`${this.project}-`)) bad("Invalid legacy root ID");
+      id = legacyId.slice(this.project.length + 1);
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) bad("Invalid legacy root ID");
+      if (this.lookup(id) || this.sql.exec(
+        "SELECT 1 FROM aliases WHERE alias IN (?, ?) LIMIT 1", id, legacyId,
+      ).toArray().length) bad(`Ticket already exists: ${legacyId}`);
+    } else {
+      id = parent ? `${parent.id}.${parent.next_child}` : this.allocateRoot();
+    }
     if (parent) {
       const next_child = parent.next_child + 1;
       this.write("UPDATE tickets SET next_child = ? WHERE id = ?", next_child, parent.id);
@@ -377,7 +389,8 @@ export class TicketBatch {
           bad("include_ready must be a boolean");
         }
         if (ticket.status !== "closed") this.save(ticket, {status: "closed", closed_at: this.at, close_reason: reason});
-        const closed = this.closeAncestors(id, reason);
+        // Beads closes eligible epics through its explicit epic command.
+        const closed = op.legacy === true ? [] : this.closeAncestors(id, reason);
         return op.include_ready ? {id, closed, ready: this.readyTickets()} : {id, closed};
       }
       case "reopen":
@@ -386,15 +399,20 @@ export class TicketBatch {
       case "defer":
         this.save(ticket, {status: "deferred", defer_until: timestamp(op.until, "until"), closed_at: null, close_reason: null});
         break;
-      case "comment":
-        this.write(`
-          INSERT INTO comments (ticket, n, author, at, text)
-          SELECT ?, COALESCE(MAX(n), 0) + 1, ?, ?, ? FROM comments WHERE ticket = ?
-        `, id, this.actor, this.at, string(op.text, "text"), id);
+      case "comment": {
+        const legacyId = op.legacy === true ? crypto.randomUUID() : null;
+        const inserted = this.sql.exec<LegacyComment>(`
+          INSERT INTO comments (ticket, n, author, at, text, legacy_id)
+          SELECT ?, COALESCE(MAX(n), 0) + 1, ?, ?, ?, ? FROM comments WHERE ticket = ?
+          RETURNING *
+        `, id, this.actor, this.at, string(op.text, "text"), legacyId, id);
+        const comment = inserted.one();
+        this.rowsWritten += inserted.rowsWritten;
         this.seq++;
         this.changed.add(id);
         this.relatedChanges.add(id);
-        break;
+        return legacyId === null ? {id} : {id, comment};
+      }
       case "dep_add":
       case "dep_remove":
         this.dependency(id, op, action === "dep_remove");
