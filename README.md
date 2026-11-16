@@ -95,6 +95,13 @@ links Claude skills when its configuration directory exists. It safely
 migrates this checkout's standalone legacy Codex links and preserves shared
 Claude roots and unrelated content.
 
+Install Rust with Cargo on `PATH` before running `install`. Enact builds
+`tk` in the machine's user cache and reports the executable's path in its
+JSON output. Ticket commands rebuild it when the CLI sources change.
+Set `ENACT_TK` to an absolute executable path to use a prebuilt client.
+For projects configured with `[tickets]`, `setup` also runs `tk register`
+if this machine has no token.
+
 Then run `/enact-setup` in each project. It writes `.enact.toml`:
 
 ```toml

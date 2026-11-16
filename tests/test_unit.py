@@ -28,6 +28,89 @@ sys.modules["enact"] = enact
 spec.loader.exec_module(enact)
 
 
+class TicketInstallTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.crate = self.root / "checkout" / "cli"
+        self.source = self.crate / "src" / "main.rs"
+        self.source.parent.mkdir(parents=True)
+        self.source.write_text("fn main() {}\n")
+        (self.crate / "Cargo.toml").write_text("[package]\nname = 'tk'\n")
+        (self.crate / "Cargo.lock").touch()
+        self.cache = self.root / "cache"
+
+    def test_source_hash_tracks_contents_names_and_touches(self):
+        original = enact.ticket_source_hash(self.crate)
+        times = self.source.stat()
+        self.source.write_text("fn main() { }\n")
+        os.utime(self.source, ns=(times.st_atime_ns, times.st_mtime_ns))
+        edited = enact.ticket_source_hash(self.crate)
+        self.assertNotEqual(edited, original)
+        os.utime(self.source, ns=(times.st_atime_ns, times.st_mtime_ns + 2_000_000_000))
+        touched = enact.ticket_source_hash(self.crate)
+        self.assertNotEqual(touched, edited)
+        self.source.rename(self.source.with_name("other.rs"))
+        self.assertNotEqual(enact.ticket_source_hash(self.crate), touched)
+
+    def test_reuses_build_and_rebuilds_for_a_touched_source(self):
+        def build(crate, target, executable):
+            binary = target / "release" / executable
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            binary.write_text("built")
+            return binary
+
+        with (mock.patch.dict(os.environ, {"ENACT_TK": ""}),
+              mock.patch.object(enact, "ENACT_ROOT", self.crate.parent),
+              mock.patch.object(enact, "ticket_cache_dir", return_value=self.cache),
+              mock.patch.object(enact, "build_ticket_client", side_effect=build) as cargo):
+            installed = enact.ticket_binary()
+            self.assertEqual(installed.read_text(), "built")
+            self.assertEqual(enact.ticket_binary(), installed)
+            cargo.assert_called_once()
+            times = self.source.stat()
+            os.utime(self.source, ns=(times.st_atime_ns, times.st_mtime_ns + 2_000_000_000))
+            rebuilt = enact.ticket_binary()
+            self.assertNotEqual(rebuilt, installed)
+            self.assertEqual(enact.ticket_binary(), rebuilt)
+            self.assertEqual(cargo.call_count, 2)
+
+    def test_windows_uses_local_cache_roaming_token_and_exe(self):
+        with (mock.patch.dict(os.environ, {
+                  "LOCALAPPDATA": str(self.root / "Local"),
+                  "APPDATA": str(self.root / "Roaming"), "ENACT_TK": "",
+              }),
+              mock.patch.object(enact, "WINDOWS", True),
+              mock.patch.object(enact, "ENACT_ROOT", self.crate.parent)):
+            cache = self.root / "Local" / "enact" / "tk"
+            self.assertEqual(enact.ticket_cache_dir(), cache)
+            self.assertEqual(enact.ticket_token_path(), self.root / "Roaming" / "enact" / "token")
+            binary = cache / enact.ticket_source_hash(self.crate) / "tk.exe"
+            binary.parent.mkdir(parents=True)
+            binary.touch()
+            self.assertEqual(enact.ticket_binary(), binary)
+
+    def test_cargo_is_required_when_the_binary_needs_building(self):
+        with mock.patch.object(enact.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(enact.Fail, "Install Rust and make cargo available"):
+                enact.build_ticket_client(self.crate, self.cache, "tk")
+
+    def test_setup_registration_runs_once_if_a_token_is_missing(self):
+        repo = enact.Repo(self.root, self.root, self.root, enact.Config(ticket_project="by"))
+        token = self.root / "config" / "enact" / "token"
+
+        def register(*args):
+            token.touch()
+            return subprocess.CompletedProcess([], 0, "{}", "")
+
+        with (mock.patch.object(enact, "ticket_token_path", return_value=token),
+              mock.patch.object(enact, "ticket_process", side_effect=register) as tk):
+            enact.register_ticket_client(repo)
+            enact.register_ticket_client(repo)
+        tk.assert_called_once_with(repo, "register")
+
+
 class TicketContractTests(unittest.TestCase):
     def test_ticket_graph_revalidates_the_cached_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -788,6 +871,7 @@ class InstallCliTest(unittest.TestCase):
         self.home = Path(temporary.name)
         self.env = {**os.environ, "HOME": str(self.home),
                     "USERPROFILE": str(self.home),
+                    "ENACT_TK": sys.executable,
                     "CODEX_HOME": str(self.home / ".codex"),
                     "CLAUDE_CONFIG_DIR": str(self.home / ".claude")}
 

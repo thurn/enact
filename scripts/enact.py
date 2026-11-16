@@ -409,17 +409,125 @@ def find_repo(cwd: Path | None = None) -> Repo:
 
 
 # ---------------------------------------------------------------------------
-# Beads
+# Ticket client and Beads
+
+
+def ticket_cache_dir() -> Path:
+    if WINDOWS:
+        local = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    elif sys.platform == "darwin":
+        local = Path.home() / "Library" / "Caches"
+    else:
+        local = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    return local / "enact" / "tk"
+
+
+def ticket_token_path() -> Path:
+    if WINDOWS:
+        if not (appdata := os.environ.get("APPDATA")):
+            raise Fail("APPDATA is unset; cannot locate the Enact token directory")
+        return Path(appdata) / "enact" / "token"
+    return Path.home() / ".config" / "enact" / "token"
+
+
+def ticket_source_hash(crate: Path) -> str:
+    files = [crate / "Cargo.toml", crate / "Cargo.lock", *(crate / "src").rglob("*")]
+    files.extend(crate.glob("build.rs"))
+    sources = hashlib.sha256()
+    for path in sorted(files):
+        if path.is_dir():
+            continue
+        with path.open("rb") as source:
+            # Include mtime so a touch asks Cargo to rebuild, even with identical bytes.
+            sources.update(path.relative_to(crate).as_posix().encode("utf-8") + b"\0")
+            sources.update(str(os.fstat(source.fileno()).st_mtime_ns).encode("ascii") + b"\0")
+            sources.update(hashlib.file_digest(source, "sha256").digest())
+    return sources.hexdigest()
+
+
+@contextlib.contextmanager
+def ticket_install_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    while (guard := try_lock(path)) is None:
+        time.sleep(0.1)
+    try:
+        yield
+    finally:
+        release_lock(path, guard)
+
+
+def build_ticket_client(crate: Path, target: Path, executable: str) -> Path:
+    if not (cargo := shutil.which("cargo")):
+        raise Fail("Cargo is required to build tk. Install Rust and make cargo available on PATH.")
+    built = target / "release" / executable
+    if built.is_file():
+        # Cargo can decide a binary is fresh after a source edit that preserves
+        # timestamps. Invalidate only tk, keeping its compiled dependencies.
+        run([cargo, "clean", "--release", "-p", "tk", "--target-dir", str(target)], crate)
+    log("building tk")
+    cmd = [cargo, "build", "--locked", "--release", "--target-dir", str(target)]
+    if WINDOWS:
+        priority = {"creationflags": subprocess.BELOW_NORMAL_PRIORITY_CLASS}
+    else:
+        cmd = ["nice", "-n", "10", *cmd]
+        priority = {}
+    proc = subprocess.run(cmd, cwd=crate, stdin=subprocess.DEVNULL,
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          **priority)
+    if proc.returncode:
+        raise Fail(f"Cargo could not build tk ({proc.returncode}): {proc.stderr.strip()[-4000:]}")
+    return built
+
+
+def ticket_binary() -> Path:
+    if override := os.environ.get("ENACT_TK"):
+        path = Path(override)
+        if not path.is_absolute() or not path.is_file():
+            raise Fail("ENACT_TK must be the absolute path to a tk executable")
+        return path
+    crate = ENACT_ROOT / "cli"
+    cache = ticket_cache_dir()
+    executable = "tk.exe" if WINDOWS else "tk"
+    try:
+        installed = cache / ticket_source_hash(crate) / executable
+        if installed.is_file():
+            return installed
+        with ticket_install_lock(cache / "build.lock"):
+            while True:
+                source_hash = ticket_source_hash(crate)
+                installed = cache / source_hash / executable
+                if installed.is_file():
+                    return installed
+                built = build_ticket_client(crate, cache / "target", executable)
+                if source_hash != ticket_source_hash(crate):
+                    continue
+                # A running Windows client can hold its executable open. Install
+                # each fingerprint at its own path and publish it atomically.
+                installed.parent.mkdir(parents=True, exist_ok=True)
+                temporary = installed.with_suffix(".tmp")
+                shutil.copy2(built, temporary)
+                temporary.replace(installed)
+                return installed
+    except OSError as error:
+        raise Fail(f"Cannot install tk: {error}") from error
 
 
 def ticket_process(repo: Repo, *args: str, actor: str | None = None,
                    input_text: str | None = None) -> subprocess.CompletedProcess[str]:
-    cmd = [shutil.which("tk") or "tk", "--json"]
+    cmd = [str(ticket_binary()), "--json"]
     if repo.config.ticket_project:
         cmd += ["--project", repo.config.ticket_project]
     if actor := actor or session_actor():
         cmd += ["--actor", actor]
     return run([*cmd, *args], repo.main, check=False, input_text=input_text)
+
+
+def register_ticket_client(repo: Repo) -> None:
+    token = ticket_token_path()
+    if not token.is_file():
+        with ticket_install_lock(token.with_name("register.lock")):
+            if not token.is_file():
+                ticket_reply(ticket_process(repo, "register"))
 
 
 @functools.lru_cache
@@ -429,8 +537,6 @@ def ticket_cutover(top: Path, project: str) -> str:
     with contextlib.suppress(OSError, ValueError):
         if json.loads(marker.read_text(encoding="utf-8")) == project:
             return "after"  # Cutover cannot reverse, even if the server is down.
-    if not shutil.which("tk"):
-        return "before"
     proc = ticket_process(repo, "--retry-for", "2", "state")
     if proc.returncode != 0:
         return "before"
@@ -5197,7 +5303,7 @@ def cmd_install(args: argparse.Namespace) -> dict[str, Any]:
                 else:
                     link.rmdir()
                 linked[str(link)] = "removed"
-    return {"skills": linked}
+    return {"skills": linked, "tk": str(ticket_binary())}
 
 
 ENACT_TOML_TEMPLATE = """\
@@ -5251,11 +5357,13 @@ def untrack_audit_log(repo: Repo) -> str:
 def cmd_setup(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     report: dict[str, Any] = {}
+    if repo.config.ticket_project or repo.config.ticket_backend == "server":
+        report["tk"] = str(ticket_binary())
+        report["has_tk"] = True
+        register_ticket_client(repo)
     server = uses_ticket_server(repo)
-    for tool in (("git", "tk") if server else ("git", "bd", "dolt")):
+    for tool in (("git",) if server else ("git", "bd", "dolt")):
         report[f"has_{tool}"] = bool(shutil.which(tool))
-    if server and not report["has_tk"]:
-        raise Fail("tk is not installed")
     if not server and not report["has_bd"]:
         raise Fail("bd (Beads) is not installed")
     toml = repo.main / ".enact.toml"
@@ -5418,7 +5526,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--inactive", choices=["stopped", "archived", "missing"])
     p.add_argument("--evidence", help="successful provider lookup proving inactivity")
 
-    p = add("install", cmd_install, "Link the Enact skills into user-level skill directories.")
+    p = add("install", cmd_install, "Install tk and link the Enact skills.")
 
     p = add("setup", cmd_setup, "Set up Enact in the current project.")
     p.add_argument("--prefix", help="Beads issue prefix")

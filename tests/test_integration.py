@@ -1641,17 +1641,17 @@ class TicketBackendTest(unittest.TestCase):
         self.trace = root / "requests"
         self.trace.touch()
         self.stub = SCRIPT.with_name("tk_stub.py")
+        executable = root / ("tk.cmd" if os.name == "nt" else "tk")
         self.env = {
             **os.environ, "TK_STUB_DB": str(root / "tickets.sqlite"),
-            "TK_STUB_TRACE": str(self.trace), "PATH": str(root) + os.pathsep + os.environ["PATH"],
+            "TK_STUB_TRACE": str(self.trace), "ENACT_TK": str(executable),
             "ENACT_NO_SELF_UPDATE": "1", "ENACT_PROVIDER": "codex", "ENACT_HOST": "test-host",
         }
         if os.name == "nt":
-            (root / "tk.cmd").write_text(f'@"{sys.executable}" "{self.stub}" %*\n')
+            executable.write_text(f'@"{sys.executable}" "{self.stub}" %*\n')
         else:
-            tk = root / "tk"
-            tk.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(self.stub))} \"$@\"\n")
-            tk.chmod(0o755)
+            executable.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(self.stub))} \"$@\"\n")
+            executable.chmod(0o755)
         sh(["git", "init", "-q"], self.repo)
         sh(["git", "config", "user.name", "Test"], self.repo)
         sh(["git", "config", "user.email", "test@example.com"], self.repo)
