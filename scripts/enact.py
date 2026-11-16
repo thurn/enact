@@ -2103,10 +2103,21 @@ def run_finished(bead: dict[str, Any]) -> bool:
     return run_control(bead)["state"] == "finished"
 
 
-def work_done(bead: dict[str, Any]) -> bool:
-    """A deferred bead was set aside on purpose; it no longer holds a run
-    or its epic open."""
-    return bead.get("status") in ("closed", "deferred")
+def defer_deadline(bead: dict[str, Any]) -> dt.datetime | None:
+    try:
+        deadline = dt.datetime.fromisoformat((bead.get("defer_until") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return deadline if deadline.tzinfo else deadline.replace(tzinfo=dt.timezone.utc)
+
+
+def work_done(bead: dict[str, Any], *, legacy_snoozes: bool = False) -> bool:
+    """An indefinite deferral lets the run finish. Legacy Beads also uses
+    deferred status for snoozes that its next ready read will reopen."""
+    status = bead.get("status")
+    return status == "closed" or (
+        status == "deferred" and (not legacy_snoozes or defer_deadline(bead) is None)
+    )
 
 
 def stopped_runs(bead: dict[str, Any], graph: list[dict[str, Any]],
@@ -2367,14 +2378,14 @@ def close_finished_epics(repo: Repo) -> list[str]:
         eligible = [b for b in graph if b.get("issue_type") == "epic"
                     and b.get("status") != "closed" and not stopped_runs(b, graph)
                     and (children := [c for c in graph if c.get("parent") == b["id"]])
-                    and all(work_done(c) for c in children)]
+                    and all(work_done(c, legacy_snoozes=True) for c in children)]
         if not eligible:
             if closed:
                 sync(repo)
             return closed
         for bead in eligible:
             # bd refuses to close an epic with deferred children unless forced;
-            # the filter above already proved every child is closed or deferred.
+            # the filter above proved every child is closed or set aside indefinitely.
             try:
                 beads.run("close", bead["id"], "--reason", "All children complete", "--force")
             except Fail as failure:
@@ -2640,6 +2651,9 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
     recover_deliveries(repo, drop_dead=True)
     beads = Beads(repo)
     server = uses_ticket_server(repo)
+    # Use a time no later than the readiness snapshot so a deadline passing
+    # during this call cannot turn a stale "not ready" into a deadlock.
+    now = dt.datetime.now(dt.timezone.utc)
     if server:
         epic = canonical_ticket_id(repo, epic)
         graph, seq = beads.ticket_graph()
@@ -2793,7 +2807,7 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
         # The graph predates the winning claim; it cannot prove a deadlock.
         return {**result, "action": "wait", "reason": "claims changed"}
 
-    open_scope = [by_id[i] for i in scope if not work_done(by_id[i])]
+    open_scope = [by_id[i] for i in scope if not work_done(by_id[i], legacy_snoozes=not server)]
     working = [b for b in open_scope if b.get("status") == "in_progress"]
     elsewhere = [b for b in ready if b["id"] in scope and not targeted_here(b)]
     if not working and not inflight:
@@ -2804,17 +2818,40 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
     # A pin nobody serves cannot make progress: the Justiciar unpins it or
     # moves it out of the epic rather than letting the run wait on it.
     stuck = [b["id"] for b in elsewhere if stranded(repo, b, by_id[epic])]
-    if open_scope and not working and len(stuck) == len(elsewhere) and not inflight:
+    scheduled = False
+    statuses = ("open",) if server else ("open", "deferred")
+    for bead in open_scope:
+        deadline = defer_deadline(bead)
+        if (deadline is None or deadline < now or bead.get("status") not in statuses
+                or bead.get("assignee") or bead.get("issue_type") == "epic"
+                or run_holds(bead, graph, epic)):
+            continue
+        if server:
+            blocked = bool(bead.get("blocked_by"))
+        else:
+            blocked = any(by_id.get(dep, {}).get("status") != "closed"
+                          for ancestor in epic_and_ancestors(bead["id"], graph)
+                          for dep in blockers(by_id[ancestor]))
+        if blocked:
+            continue
+        if targeted_here(bead) or not stranded(repo, bead, by_id[epic]):
+            # Beads rechecks on the next poll. The ticket feed wakes when the
+            # server's deadline alarm announces a readiness change.
+            scheduled = True
+            break
+        stuck.append(bead["id"])
+    if (open_scope and not scheduled and not working and all(b["id"] in stuck for b in elsewhere)
+            and not inflight):
         action = {**result, "action": "deadlock", "open": [b["id"] for b in open_scope]}
         return {**action, "stranded": stuck} if stuck else action
     stale = stale_hours(open_scope)
-    if open_scope and not inflight and stale is not None and stale >= 6:
+    if not scheduled and not inflight and stale is not None and stale >= 6:
         return {**result, "action": "deadlock", "reason": f"no change for {stale:.1f}h"}
     if delivery["pending"]:
         if repo.config.slow:
             result["ci"] = start_ci(repo)
         return {**result, "action": "wait", "reason": "delivery pending"}
-    return {**result, "action": "wait", "reason": "nothing ready"}
+    return {**result, "action": "wait", "reason": "scheduled work" if scheduled else "nothing ready"}
 
 
 # A worker bound to an open bead that has not touched it for this long may

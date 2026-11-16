@@ -1414,10 +1414,14 @@ instead of adopting it needs the plan's context.
   Finishing a paused or blocked run is refused; `run resume --explicit`
   reactivates a finished run. `stopped_runs` is unchanged: finished runs
   are not halted, so late Steward repairs of their commits stay allowed.
-- A deferred child counts as done (`work_done`) when deciding whether an
-  epic is complete: `close_finished_epics` closes an epic whose children
-  are all closed or deferred, and `schedule` ignores deferred beads when it
-  looks for open work or a deadlock.
+- A child set aside indefinitely counts as done (`work_done`) when Enact
+  decides whether an epic is complete. Legacy Beads also uses deferred
+  status for dated snoozes. A ready read reopens those beads when the
+  deadline passes, so Enact keeps their epics open. The ticket server reports
+  timed work as open with a future `defer_until`. When a deadline is the
+  only barrier to work a vizier can serve, `schedule` waits for readiness.
+  Beads rechecks on its next poll and the ticket server announces deadlines
+  on its change feed.
 - The vizier's skill text runs `enact run finish` as its last command.
 
 

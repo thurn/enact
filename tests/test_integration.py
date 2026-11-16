@@ -1589,6 +1589,24 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         step = self.a.enact("next", "--epic", epic)
         self.assertEqual((step["bead"], step["role"]), (second, "warden"))
 
+    def test_next_waits_for_a_dated_beads_deferral(self):
+        epic = self.a.create("Scheduled run", type="epic")
+        prerequisite = self.a.create("Scheduled prerequisite", parent=epic)
+        self.a.bd("defer", prerequisite, "--until=2099-01-01")
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual((step["action"], step["reason"]), ("wait", "scheduled work"))
+        self.assertEqual(self.a.show(epic)["status"], "open")
+
+        dependent = self.a.create("Dependent", parent=epic)
+        self.a.bd("dep", "add", dependent, prerequisite)
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual((step["action"], step["reason"]), ("wait", "scheduled work"))
+
+        # Put the deadline in the past without sleeping through a snooze.
+        self.a.bd("update", prerequisite, "--defer=2000-01-01")
+        step = self.a.enact("next", "--epic", epic)
+        self.assertEqual((step["action"], step["bead"]), ("spawn", prerequisite))
+
     def test_closed_run_waits_for_failed_ci_and_steward_delivery(self):
         epic = self.a.create("final delivery", type="epic")
         bead = self.a.create("last task", parent=epic)
@@ -1745,6 +1763,36 @@ class TicketBackendTest(unittest.TestCase):
         result, requests = self.enact("wait", child, "--timeout", "60")
         self.assertEqual(result["state"], "waiting")
         self.assertEqual(requests, ["graph", "wait", "graph"])
+
+    def test_next_waits_for_a_routable_ticket_whose_only_blocker_is_time(self):
+        epic, prerequisite, dependent = [r["id"] for r in self.tk("batch", data={"ops": [
+            {"op": "create", "fields": {"title": "Scheduled run", "type": "epic"}},
+            {"op": "create", "parent": "$0",
+             "fields": {"title": "Scheduled prerequisite", "defer_until": "2099-01-01"}},
+            {"op": "create", "parent": "$0", "deps": ["$1"], "fields": {"title": "Dependent"}},
+        ]})["results"]]
+        step, _ = self.enact("next", "--epic", epic)
+        self.assertEqual((step["action"], step["reason"]), ("wait", "scheduled work"))
+
+        self.tk("batch", data={"ops": [
+            {"op": "update", "id": prerequisite, "set_meta": {"enact_host": "unserved"}},
+        ]})
+        step, _ = self.enact("next", "--epic", epic)
+        self.assertEqual((step["action"], step["stranded"]), ("deadlock", [prerequisite]))
+
+        self.tk("batch", data={"ops": [
+            {"op": "update", "id": prerequisite, "unset_meta": ["enact_host"]},
+            {"op": "defer", "id": prerequisite, "until": "2099-01-01"},
+        ]})
+        step, _ = self.enact("next", "--epic", epic)
+        self.assertEqual((step["action"], step["open"]), ("deadlock", [dependent]))
+
+        self.tk("batch", data={"ops": [
+            {"op": "reopen", "id": prerequisite},
+            {"op": "update", "id": prerequisite, "set": {"defer_until": "2000-01-01"}},
+        ]})
+        step, _ = self.enact("next", "--epic", epic)
+        self.assertEqual((step["action"], step["bead"]), ("spawn", prerequisite))
 
     def test_server_scheduler_holds_a_legacy_archivist_during_an_imported_gate(self):
         run, _, audit, archivist = [r["id"] for r in self.tk("batch", data={"ops": [
