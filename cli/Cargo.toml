@@ -1,0 +1,10 @@
+[package]
+name = "tk"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# ureq provides blocking HTTP in place of a curl subprocess. Its rustls
+# feature handles TLS in Rust without requiring an OpenSSL installation.
+ureq = { version = "3", default-features = false, features = ["rustls"] }

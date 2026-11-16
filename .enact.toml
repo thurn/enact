@@ -4,8 +4,19 @@ staging_branch = "staging"
 master_branch = "master"
 
 [checks]
-fast = "python3 -m py_compile scripts/enact.py && python3 -m unittest -q tests.test_unit"
-slow = "python3 -m unittest -q tests.test_unit tests.test_integration"
+fast = """
+  python3 -m py_compile scripts/enact.py && \
+  python3 -m unittest -q tests.test_unit && \
+  npm --prefix server ci --prefer-offline --no-audit --no-fund && \
+  npm --prefix server test && \
+  cargo test --locked --manifest-path cli/Cargo.toml
+"""
+slow = """
+  python3 -m unittest -q tests.test_unit tests.test_integration && \
+  npm --prefix server ci --prefer-offline --no-audit --no-fund && \
+  npm --prefix server test && \
+  cargo test --locked --manifest-path cli/Cargo.toml
+"""
 
 [worktree]
 root = ".worktrees"

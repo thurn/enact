@@ -1,0 +1,17 @@
+name = "tickets"
+main = "src/index.ts"
+compatibility_date = "2026-11-16"
+account_id = "0cc730645e29feff389c14f36cb9cf4c"
+workers_dev = true
+
+[assets]
+directory = "./static"
+binding = "ASSETS"
+
+[[durable_objects.bindings]]
+name = "TICKETS"
+class_name = "ProjectTickets"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ProjectTickets"]

@@ -1,17 +1,21 @@
 # Working on Enact
 
-- Enact is the skill text in `skills/` plus the stdlib-only helper
-  `scripts/enact.py`. Keep it minimal: add helper code only when it clearly
-  beats calling git or `bd` directly.
+- Enact's skills live in `skills/` and the stdlib-only orchestration helper
+  lives in `scripts/enact.py`. The ticket service is a TypeScript Cloudflare
+  Worker in `server/`. The Rust client in `cli/` builds `tk`.
 - Skill and role files are markdown wrapped at 80 columns. Keep
   `skills/enact/SKILL.md` under ~500 lines and each role file around 100.
 - The helper must stay stdlib-only, Python 3.11+, and work on macOS, Linux
   and Windows (no shell-specific syntax, `pathlib` everywhere).
-- Fast checks:
-  `python3 -m py_compile scripts/enact.py && python3 -m unittest -q tests.test_unit`.
-- Slow checks: `python3 -m unittest -q tests.test_unit tests.test_integration`
-  (real git, bd and Dolt in temp dirs). Budget: 2-3 minutes; cut or redesign
-  scenarios rather than exceed it.
+- Fast and slow check commands live in `.enact.toml`. Both run the Worker
+  and Rust tests. Fast CI compiles the Python helper and runs its unit tests.
+  Slow CI also exercises real git, bd and Dolt in temporary directories.
+  Budget: 2-3 minutes for slow CI; cut or redesign scenarios to stay within it.
+- For focused Worker checks, run `npm ci` and `npm test` in `server/` with
+  Node 22.12 or later. Run Wrangler there with `npx wrangler`. Worker tests
+  use the local simulator and require no Cloudflare login.
+- For focused Rust checks, run `cargo test --locked` in `cli/`. Build the
+  release executable with `cargo build --locked --release`.
 - Deliver through Enact's own flow, never by committing or pushing to
   `master`: `python3 scripts/enact.py worktree create <name>` from the main
   checkout, commit in the printed worktree, then
