@@ -40,7 +40,9 @@ parent. File them before closing your audit so the next milestone waits
 for them. On the beads backend, file important findings under the review
 gate and minor ones under the top epic at low priority. Usually label them
 `role:executor`. Each bead states the measured problem, the proposed change
-and the expected gain.
+and the expected gain, with acceptance an agent can check the day it works
+the bead, never after waiting for more data (`common.md`, Follow-up
+beads).
 
 ## Improving Enact itself
 

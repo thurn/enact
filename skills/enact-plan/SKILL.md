@@ -226,6 +226,12 @@ filing anything, list every stoppage risk in the plan:
   files into the epic mid-run from such a machine (a CI or sweep on
   another host, an epic saying its failures come here): each must carry
   `enact_host`, or the run must leave them to that host;
+- waiting for time or data to pass: "measure over a day of pushes", "after
+  a normal running day", soak periods. A run cannot wait hours, and a bead
+  like this holds the whole epic open. Express acceptance as a measurement
+  an agent can take now (replay existing logs, synthetic load, a
+  benchmark). If real elapsed observation is still wanted, file it as an
+  observation bead outside the run (see `common.md`, Follow-up beads);
 - bars judged on samples (seeded games, LLM reviewers, benchmarks) that
   demand perfection on a handful of cases ("5 games, zero mistakes"): agents
   tune to the samples and never converge. Set held-out inputs chosen after

@@ -186,6 +186,22 @@ whose acceptance includes running the checks it unblocks, and record on your
 bead which checks went unrun and why. Never park it in a handoff or closing
 summary: nothing acts on those, so the gap silently becomes permanent.
 
+Never file a bead whose acceptance needs time to pass ("measure a day of
+pushes after the change", "over a normal running day"): no session can wait
+hours, and the bead holds its epic and the whole run open. Ship the change
+with a measurement you can take now (existing logs, a replay, a benchmark).
+If real later observation is still worth having, file it as an
+**observation bead**: no `--parent`, label `enact:observe`, the exact
+query and threshold in the acceptance, and deferred to the date the data
+will exist (`bd create --defer <date>`, or `tk defer <id> --until <date>`
+on the server). It wakes as ordinary open work outside any run, for a sweep
+or a later run to pick up.
+
+If your own bead's acceptance needs time to pass, do not wait for it. Do
+the change, take every measurement possible now, file the remaining
+observation as an observation bead, record its ID and what you measured on
+your bead, and close yours.
+
 If a Warden bead that has not started yet depends on yours, check the
 incoming edges as described in [Task backend](#task-backend). If the Warden
 will review the affected code, comment on its bead instead of filing one.

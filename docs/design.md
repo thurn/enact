@@ -2407,3 +2407,22 @@ preserve Beads sync and review gates on the Beads backend. On the server,
 they use immediate writes, native IDs and server readiness for new
 milestone audits. Sweep excludes both indefinitely deferred tickets and
 open tickets that are snoozed until a future date.
+
+
+## Runs never wait for time to pass (2026-11-16)
+
+- Audits and plans kept filing beads whose acceptance needed elapsed time:
+  Beryl's by-q44s.4.6 ("first measure a day of pushes after" a fix) under
+  the M2 review gate, and by-vaexw.1 ("over a normal running day"). Such a
+  bead holds its epic, so the whole run, open for hours with nothing to do.
+- The stoppage audit in enact-plan lists waiting for time or data as a
+  stoppage. `common.md` forbids filing such beads: acceptance must be
+  measurable when the bead is worked (existing logs, replays, benchmarks).
+- Observation still worth having becomes an **observation bead**: no
+  parent, label `enact:observe`, deferred to the date the data will exist.
+  A dated deferral under a run epic would keep that epic open (`work_done`),
+  so it lives outside every run. When the date passes it is ordinary open,
+  unowned work, which the sweep triages or a later run takes.
+- A worker handed such a bead does the change, measures what it can now,
+  files the rest as an observation bead and closes, so beads already filed
+  stop blocking too. This is prompt-only; the helper is unchanged.
