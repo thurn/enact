@@ -1591,6 +1591,30 @@ instead of adopting it needs the plan's context.
 - Writing costs one stat and one append and never fails a command: any
   `OSError` is ignored.
 
+## Where a sync's time goes (2026-11-16)
+
+- Between 00:36 and 01:43 UTC on 2026-11-16, ten syncs on Beryl's Mac held
+  the ownership lock for 45-227 s, and 12 waiters gave up behind them. The
+  step fields above were added to find out why.
+- In the 80 minutes after they landed (01:46-03:09 UTC), 66 full syncs ran
+  at load averages of 40-76. None took over 60 s (the longest took 51 s) and
+  no waiter gave up. Of 1,073 s in sync steps, `push_s` was 763 s (median
+  11 s, p90 21 s, max 50 s), `pull_s` 176 s, `busy_s` 53 s (max 22 s), and
+  `gc_s` 1 s.
+- A traced 14 s push spent 6.7 s in four `git push` calls to GitHub (two to
+  `refs/dolt/data`, two to `__dolt_remote_info__`), 4.7 s in 530
+  `git cat-file` calls on Dolt's 741 MB git cache, and 2.1 s in seven
+  fetches. All of this happens inside the Dolt CLI (2.2.0), so Enact can
+  only make fewer pushes, not cheaper ones.
+- Ruled out: `dolt gc` on a copy of the store took 1.5 s at load 76, and a
+  full `git gc` of the git cache took 4.5 s, so moving `compact_beads` out
+  of the lock would save nothing. The remote conjoined its table files
+  (254 down to 145) during the quiet window without any slow sync.
+- So the minutes-long syncs of the earlier window were not reproduced, and
+  their cause is not known. If they come back, the step fields of their
+  lines name the step. The steady cost is Dolt's push, which a newer Dolt
+  may make cheaper.
+
 ## Owner writes push in the background (2026-11-15)
 
 - The lock-wait log showed that, on Beryl's Mac, `enact meta` held the
