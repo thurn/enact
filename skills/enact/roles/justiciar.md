@@ -25,7 +25,9 @@ Infrastructure that blocks everyone: the Beads database is gone or corrupt,
 Dolt or git pushes fail for everyone, the remote is unreachable or
 misconfigured, disk is full, a core tool is broken or missing, CI is blocked
 by an infrastructure problem, or the epic is deadlocked (open beads that can
-never become ready). Failing tests are **not** an emergency. If that is all
+never become ready). Failing tests are **not** an emergency, and neither
+is one bead needing another machine or the user (see
+[below](#a-requirement-nobody-here-can-meet)). If that is all
 you find, file or point to the right Steward/Executor bead, release the lock
 and finish.
 
@@ -63,16 +65,41 @@ speculative defaults in `common.md` (pins, non-gating beads, epic-level
 edges, shared failures) and record each on the bead and the run epic. A
 graph decision is never a reason to block the run or ask the user.
 
+## A requirement nobody here can meet
+
+A bead that needs something the run cannot get (another machine, a device,
+access, credentials, a person's decision) never holds the whole run. First
+ask whether the requirement is real:
+
+- **A machine's own environment** (a broken toolchain such as a missing
+  DLL, its disk, its credentials) is that machine's problem, not the
+  project's. Pin the bead to that host (`bd update <bead> --set-metadata
+  enact_host=<host>`) and say so.
+- **Work only another machine can do or check** (its OS, a device, its
+  local logs): pin the bead to that host.
+- **Access or a decision only the user has**: no pin.
+
+Then, unless a vizier on this run serves the pinned host, drop the bead
+from the run: `bd update <bead> --parent "" --json`, `bd label add <bead>
+enact:dropped`, remove every edge that makes a run bead wait on it,
+`enact release` it if it is assigned, and comment on it the exact need and
+the recovery you tried. Add the same comment to the run epic, starting
+`Dropped requirement:`, then `enact sync`. The bead stays open with its
+acceptance intact for that host or the user, so this is not closing an
+impossible requirement, and the vizier's final report names it. The run
+keeps going. Waiting on another machine or a person to answer is not
+recovery: drop the bead rather than wait.
+
 ## Exhausted recovery
 
-If progress truly requires unavailable access or a human decision after
-you exhaust recovery, run `enact run block <epic> --exhausted --reason
-"<exact need and attempted recovery>"` for each affected run. Preserve all
-unfinished beads, acceptance criteria and worktrees. Do not close an
-impossible requirement or keep releasing it for replacement workers.
-Release the Justiciar lock, retitle `⛔ <summary>` and report the exact
-need. Only explicit user
-resume (`enact run resume <epic> --explicit --reason "..."`) can restart it.
+Hold a whole run only when no bead left in it can progress without the
+missing access or decision (the remote unreachable from every host on the
+run, credentials every bead needs). After you exhaust recovery, run
+`enact run block <epic> --exhausted --reason "<exact need and attempted
+recovery>"` for each affected run. Preserve all unfinished beads,
+acceptance criteria and worktrees. Release the Justiciar lock, retitle
+`⛔ <summary>` and report the exact need. Only explicit user resume
+(`enact run resume <epic> --explicit --reason "..."`) can restart it.
 Ordinary test failures and implementation difficulty are not blockers.
 
 ## Finish

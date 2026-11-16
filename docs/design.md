@@ -1732,3 +1732,34 @@ instead of adopting it needs the plan's context.
   branch and head for the next session.
 - A closed dependency is not waited on either: its commits are on
   staging already, so the worker rebases.
+
+## One bead's unmet need never holds a run (2026-11-16)
+
+- A Beryl run stopped overnight for one bead. The Beryl 3D sweep on Cygnus
+  (Windows) filed a cargo-test failure into the epic with no host pin. A
+  Mac worker could not reach Cygnus or its log, so it asked for a
+  Justiciar. The Justiciar queued a request for Cygnus, waited ten minutes,
+  then ran `run block --exhausted`. That held the whole epic, though
+  nothing depended on the bead. The failure was MSVC's missing
+  `mspdbcore.dll` on Cygnus, not Beryl's code.
+- A bead only another machine can do or check (its failure came from
+  there, or it needs that OS, a device or that host's logs) is now pinned
+  to that host by the worker and released. It is not impossible
+  acceptance. A failure in a machine's own environment is that machine's
+  work.
+- The Justiciar drops a bead with an unmet need from the run instead of
+  holding the run: it moves the bead out of the epic, labels it
+  `enact:dropped`, removes edges so nothing waits on it, and comments
+  `Dropped requirement:` on the run epic for the vizier's final report.
+  The bead stays open with its acceptance, so this does not close an
+  impossible requirement. Waiting on another machine or a person is not
+  recovery.
+- `run block --exhausted` stays for a need that no bead left in the run
+  can progress without. The helper is unchanged: whether a need is one
+  bead's or the run's is a judgment, and the rule lives in `justiciar.md`.
+- Pre-flight's stoppage audit now covers machines, OSes and devices no
+  vizier on the run serves, and tooling that files beads into the epic
+  from such machines. It also runs over the open beads of an existing
+  epic or input beads, which it skipped before.
+- When a run is blocked, the vizier gives the user two answers: meet the
+  need, or drop the requirement and resume.

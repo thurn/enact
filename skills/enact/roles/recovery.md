@@ -18,11 +18,14 @@ an unassigned tree.
 
 ## When things go wrong
 
-- **Genuinely impossible acceptance:** preserve the open requirement and
-  request Justiciar recovery with the evidence. Do not close it as delivered
-  or repeatedly release it for replacements. After exhausted recovery the
-  Justiciar records `enact run block <epic> --exhausted --reason "<exact
-  missing access or decision>"`; the unfinished beads and work stay intact.
+- **Only another machine can do or check it** (the failure came from that
+  host or needs its OS, a device or its local logs): apply the
+  `common.md` default for it. That is not impossible acceptance.
+- **Genuinely impossible acceptance** (access or a decision only the user
+  has): preserve the open requirement and request Justiciar recovery with
+  the evidence. Do not close it as delivered or repeatedly release it for
+  replacements. The Justiciar drops the bead from the run, open and intact,
+  so the rest of the run goes on (`justiciar.md`).
 - **Emergency** (the Beads database is gone or corrupt, the remote rejects
   every push, disk is full, a core tool is broken for everyone): run
   `enact justiciar request --reason "<what is broken, evidence>"`. Exit 3

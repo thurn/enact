@@ -81,8 +81,8 @@ Sort each stale bead into one of four verdicts:
   gone. Cite what replaced it.
 - **keep**: still valid and still wanted.
 - **human**: still valid, but it needs a person (a decision, credentials,
-  manual QA, an outside party). The stoppage audit in enact-plan defines
-  these.
+  manual QA, an outside party) or a machine or device no vizier here will
+  serve. The stoppage audit in enact-plan defines these.
 
 For each bead, `enact brief <id>` gives its text, comments, epics and
 handoffs. Check it against the code: `git log --oneline --since=<created>`

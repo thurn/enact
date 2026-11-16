@@ -205,6 +205,13 @@ on the bead and, when it changes the run, on the run epic. Defaults:
   no vizier serves: unpin it if it can run here; otherwise move it out of
   the epic (`bd update <bead> --parent ""`), left open for that host, and
   drop edges so nothing in the epic waits on it.
+- **A bead only another machine can do or check**: its failure came from
+  that host (its description, log or CI metadata says so), or it needs that
+  OS, a device or hardware this host lacks, or that host's local logs. Do
+  not try to reach that machine or wait for it. If the failure is the
+  machine's own environment (a broken toolchain, a full disk), say so on
+  the bead. Pin it with `enact meta <bead> enact_host=<host>`, comment
+  why, and `enact release` it; the pin rule above then applies.
 - **A reported-only or non-gating bead** (benchmark, measurement,
   exploration) blocking closure or later work: remove its dependents' edges
   so it leaves the critical path; it still runs when it can.
@@ -230,8 +237,9 @@ on the bead and, when it changes the run, on the run epic. Defaults:
   name a deterministic measure (`warden.md`, "Tests that survive load").
 
 Change only what the default needs; never take over another worker's
-assignment. Only missing access, credentials or an irreversible outward
-action go to the Justiciar's exhausted recovery (`recovery.md`).
+assignment. Only missing access, credentials, a decision only the user can
+make or an irreversible outward action go to the Justiciar (`recovery.md`),
+which drops that one bead from the run rather than holding the run.
 
 ## When things go wrong
 

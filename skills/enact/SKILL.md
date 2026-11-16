@@ -132,7 +132,8 @@ and review policy:
 Start by asking the user a few clarifying questions, one at a time, as
 needed to understand the scope of the request. Then read enough code to
 scope the task. If it plainly needs a human (a choice between options,
-credentials, a manual step), settle that with the user now. If it
+credentials, a manual step) or a machine or device this host lacks, settle
+that with the user now. If it
 describes a large work item (several independent pieces, phases, days of
 work), tell the user to use `/enact-plan` and stop.
 

@@ -160,7 +160,8 @@ a recorded default (`common.md`, "Speculative defaults").
   probably working it; joining needs nothing special. If it has no children
   yet, plan its description as a plan document or task prompt (below), filing
   under this epic instead of a new one. Otherwise file nothing, but give its
-  unclaimed children the [lane and tier pass](#lane-and-tier-pass).
+  unclaimed children the [stoppage audit](#stoppage-audit) and the
+  [lane and tier pass](#lane-and-tier-pass).
 - **Any other bead**: it needs an epic around it, because follow-ups and the
   scheduler work by epic. If it already has a parent epic, ask the user
   whether to run that whole epic instead or to move the bead into a run of
@@ -168,7 +169,7 @@ a recorded default (`common.md`, "Speculative defaults").
   `bd update <bead> --parent <new epic> --json`. Do not decompose it or add
   beads.
 - **Several beads**: the same, with one new epic holding them all, then the
-  [lane and tier pass](#lane-and-tier-pass) over them.
+  stoppage audit and the lane and tier pass over them.
 
 A [light run](#light-runs) adjusts the graph as described there. Then go to
 [Finish planning](#finish-planning).
@@ -185,8 +186,8 @@ the [stoppage audit](#stoppage-audit), then
 
 Read `AGENTS.md` (Enact section), `.enact.toml` and enough code to scope the
 task. Skip the full stoppage audit, but if the prompt plainly needs a human
-(a choice between options, credentials, a manual step), resolve that point
-with the user first.
+(a choice between options, credentials, a manual step) or a machine or
+device the run lacks, resolve that point with the user first.
 
 Default to the smallest graph: one epic holding one executor bead that
 carries the whole prompt. No milestones and no Mason or Sage gates. Pick
@@ -214,7 +215,13 @@ filing anything, list every stoppage risk in the plan:
 - manual steps: sign-offs, QA by a person, UI review, approvals;
 - credentials, accounts, payments or access that agents do not have;
 - external parties: waiting on someone, a release window, a deploy;
-- anything irreversible or outward-facing the user has not authorized.
+- anything irreversible or outward-facing the user has not authorized;
+- a machine, OS or device no vizier on the run will serve: "test on
+  Windows", a phone, a GPU, another host's logs. Ask the user whether a
+  vizier will run there. Also look for beads the project's own tooling
+  files into the epic mid-run from such a machine (a CI or sweep on
+  another host, an epic saying its failures come here): each must carry
+  `enact_host`, or the run must leave them to that host;
 - bars judged on samples (seeded games, LLM reviewers, benchmarks) that
   demand perfection on a handful of cases ("5 games, zero mistakes"): agents
   tune to the samples and never converge. Set held-out inputs chosen after
@@ -226,7 +233,8 @@ credentials and access, payments, irreversible or outward-facing actions,
 people outside the run. Ask one question at a time with your recommendation.
 Settle everything else yourself: pick the least-blocking default, write it
 and its reason into the run epic's decisions, and move on. If a human-only
-risk cannot be resolved, cut it from scope or refuse to start and say why.
+risk cannot be resolved, cut it from scope (an existing bead moves out of
+the epic, as `justiciar.md` drops one) or refuse to start and say why.
 Never file a bead that needs a human later; express acceptance as checks an
 agent can run.
 
@@ -522,7 +530,8 @@ action or when the wait runs out. Handle the JSON:
    Handle `archive` as above. In Claude Desktop, archive the sessions in
    `pool_archive`, then run `enact pool drop --all`. Finally retitle
    `✅ [<epic>] <same summary>`, write a short final report (outcome, bead
-   count, anything for the user to look at) and end the turn. Stay unarchived.
+   count, anything for the user to look at, including every `Dropped
+   requirement:` comment on the run epic) and end the turn. Stay unarchived.
    Run `enact run finish <epic> --reason "<outcome>"` as the last command
    before the final report, so this machine stops treating the run as live.
    Deferred children count as complete, so an epic whose only open children
@@ -538,7 +547,9 @@ action or when the wait runs out. Handle the JSON:
    worker (above). Each entry comes once per period.
 9. **`action: paused` or `blocked`**: no new spawning or recovery. Report
    the shared reason, retitle `⛔ [<epic>] <same summary>` and end the turn,
-   preserving unfinished requirements.
+   preserving unfinished requirements. For `blocked`, give the user two
+   answers: meet the need, or drop that requirement and resume. If it
+   names one bead's need, say the run should not have held for it.
    Already running workers may finish and deliver. Do not automatically
    resume, close the run, or release it for endless replacement attempts.
 
