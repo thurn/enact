@@ -1003,10 +1003,14 @@ def sync_step(repo: Repo, name: str):
 
 def log_lock_wait(path: Path, entry: dict[str, Any]) -> None:
     """Append `entry` to the lock log next to the lock at `path`. Never raises."""
-    log_path = path.with_name(LOCK_LOG)
+    append_wait_log(path.with_name(LOCK_LOG), entry)
+
+
+def append_wait_log(log_path: Path, entry: dict[str, Any]) -> None:
+    """Append one local timing record and keep one rotated copy."""
     with contextlib.suppress(OSError, ValueError):
         if log_path.stat().st_size >= LOCK_LOG_BYTES:
-            log_path.replace(log_path.with_name("lock-waits.1.jsonl"))
+            log_path.replace(log_path.with_suffix(".1.jsonl"))
     with contextlib.suppress(OSError, ValueError):
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, sort_keys=True) + "\n")
@@ -4043,23 +4047,38 @@ class StagingLease:
                 compare_and_swap_ref(self.repo, "", self.sha, STAGING_LOCK_REF)
 
 
-def acquire_server_staging(repo: Repo, owner: str) -> None:
+def acquire_server_staging(repo: Repo, owner: str, bead: str | None) -> None:
     last_log = -math.inf
-    while True:
-        proc = ticket_lease(repo, "acquire", "staging", owner, STAGING_LOCK_SECONDS)
-        if proc.returncode != 3:
-            ticket_reply(proc)
-            return
-        current = json.loads(proc.stdout)
-        if time.monotonic() - last_log >= 60:
-            log(f"merge queue: waiting for staging lease held by {current['holder']}")
-            last_log = time.monotonic()
-        # Renewal and expiry both wake waiters. Allow a full lease plus
-        # time for its alarm before retrying if the feed missed a wake.
-        wait = ticket_process(repo, "wait", "lease", "staging", "--since", str(current["seq"]),
-                              "--timeout", str(STAGING_LOCK_SECONDS + 15))
-        if wait.returncode != 6:
-            ticket_reply(wait)
+    began = None
+    start = 0.0
+    outcome = "gave_up"
+    try:
+        while True:
+            proc = ticket_lease(repo, "acquire", "staging", owner, STAGING_LOCK_SECONDS)
+            if proc.returncode != 3:
+                ticket_reply(proc)
+                outcome = "acquired"
+                return
+            current = json.loads(proc.stdout)
+            now = time.monotonic()
+            if began is None:
+                began = dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds")
+                start = now
+            if now - last_log >= 60:
+                log(f"merge queue: waiting for staging lease held by {current['holder']}")
+                last_log = now
+            # Renewal and expiry both wake waiters. Allow a full lease plus
+            # time for its alarm before retrying if the feed missed a wake.
+            wait = ticket_process(repo, "wait", "lease", "staging", "--since", str(current["seq"]),
+                                  "--timeout", str(STAGING_LOCK_SECONDS + 15))
+            if wait.returncode != 6:
+                ticket_reply(wait)
+    finally:
+        if began is not None:
+            append_wait_log(repo.state / "staging-lease-waits.jsonl", {
+                "time": began, "pid": os.getpid(), "bead": bead, "outcome": outcome,
+                "waited_s": round(time.monotonic() - start, 3),
+            })
 
 
 def acquire_git_staging(repo: Repo, owner: str) -> str:
@@ -4078,12 +4097,12 @@ def acquire_git_staging(repo: Repo, owner: str) -> str:
 
 
 @contextlib.contextmanager
-def staging_lock(repo: Repo):
+def staging_lock(repo: Repo, bead: str | None):
     """Serialize staging batches across hosts. Only a host's integrator takes the lease."""
     owner = f"{host_name()}:{os.getpid()}:{uuid.uuid4().hex}"
     sha = None
     if uses_ticket_server(repo):
-        acquire_server_staging(repo, owner)
+        acquire_server_staging(repo, owner, bead)
     else:
         sha = acquire_git_staging(repo, owner)
     lease = StagingLease(repo, owner, sha)
@@ -4205,13 +4224,14 @@ def run_queue(repo: Repo, own: str) -> None:
     while not verdict_path(repo, own).exists():
         fetch(repo)
         entries = queued(repo)
-        if own not in {e["id"] for e in entries}:
+        own_entry = next((e for e in entries if e["id"] == own), None)
+        if own_entry is None:
             break  # replaced by a newer push from the same tree
         settled = settle_landed(repo, entries)
         batch = [e for e in entries if e["id"] not in settled][:repo.config.push_batch]
         if batch:
             try:
-                with staging_lock(repo) as lease:
+                with staging_lock(repo, own_entry["bead"]) as lease:
                     land(repo, tree, batch, progress, lease)
             except LeaseLost:
                 log("merge queue: staging lock changed; retrying the batch")

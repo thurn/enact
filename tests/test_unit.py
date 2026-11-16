@@ -1736,6 +1736,36 @@ class JusticiarPerMachineTest(unittest.TestCase):
         self.justiciar("host-a", "acquire", "sess-a")
 
 
+class StagingLeaseWaitTest(unittest.TestCase):
+    def test_acquisition_logs_one_wait_across_feed_retries(self):
+        for code, outcome in ((0, "acquired"), (4, "gave_up")):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                repo = enact.Repo(root, root, root / ".git", enact.Config())
+                busy = subprocess.CompletedProcess([], 3, '{"holder":"peer","seq":1}')
+                finish = subprocess.CompletedProcess([], code, "{}", "")
+                wake = subprocess.CompletedProcess([], 6, "")
+                clock = mock.Mock(side_effect=[10.0, 25.0, 46.0])
+                with (mock.patch.object(enact.time, "monotonic", clock),
+                      mock.patch.object(enact, "ticket_lease",
+                                        side_effect=[busy, busy, finish]) as acquire,
+                      mock.patch.object(enact, "ticket_process", return_value=wake) as wait):
+                    if code:
+                        with self.assertRaises(enact.Fail):
+                            enact.acquire_server_staging(repo, "ours", "qabc.12")
+                    else:
+                        enact.acquire_server_staging(repo, "ours", "qabc.12")
+                self.assertEqual(acquire.call_count, 3)
+                self.assertEqual(wait.call_count, 2)
+                lines = (repo.state / "staging-lease-waits.jsonl").read_text().splitlines()
+                self.assertEqual(len(lines), 1)
+                record = json.loads(lines[0])
+                self.assertEqual(record["bead"], "qabc.12")
+                self.assertEqual(record["outcome"], outcome)
+                self.assertEqual(record["waited_s"], 36.0)
+                self.assertIsNotNone(dt.datetime.fromisoformat(record["time"]).tzinfo)
+
+
 class OwnershipLockWaitTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()

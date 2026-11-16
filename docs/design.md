@@ -1630,6 +1630,15 @@ instead of adopting it needs the plan's context.
 - Writing costs one stat and one append and never fails a command: any
   `OSError` is ignored.
 
+### Staging lease waits
+
+When the ticket server queues the push that is running a host's merge queue,
+Enact appends one line to `.git/enact/staging-lease-waits.jsonl` at the end of
+the wait. The line gives the first busy reply's UTC `time` with milliseconds,
+the push's `pid` and `bead` (null for an unnamed push), the `outcome`
+(`acquired` or `gave_up`), and the elapsed `waited_s` through retries. It uses
+the same local append and rotation as the ownership-lock log.
+
 ## Dead delivery receipts (2026-11-16)
 
 - `enact next` held the ownership lock for about 10 s per poll on Beryl's

@@ -480,10 +480,10 @@ class QueueLeaseRetryTest(unittest.TestCase):
                     return result
 
                 @contextlib.contextmanager
-                def observe_acquisition(repo):
+                def observe_acquisition(repo, bead):
                     expected = staging if checked and change == "staging" else base
                     self.assertEqual(sh(["git", "rev-parse", "staging"], origin), expected)
-                    with acquire(repo) as lease:
+                    with acquire(repo, bead) as lease:
                         yield lease
 
                 with (mock.patch.object(enact, "run", date_cherry_picks),
