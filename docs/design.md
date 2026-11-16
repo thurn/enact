@@ -314,6 +314,19 @@ inspection; uncertainty never authorizes releasing ownership.
   owner was mid-rebase was handed to a second bead (the rebase guard had not
   reached `master` yet); the owner's rebase then finished on the wrong branch
   and an amend rewrote the other bead's commit.
+- Only released slots are free (2026-11-15): `release_slot` writes
+  `enact-released` in the slot's git dir with the commit it parked the slot
+  at, and a slot is free only while that file names its current HEAD;
+  `claim_slot` deletes the file when it takes the slot and logs why it
+  skipped each busy one. A detached HEAD alone no longer counts, since a
+  bisect or a manual `git checkout --detach` by the session still working
+  there detaches it too. On Beryl a session that had pushed kept bisecting
+  in its old slot after Enact handed it on, moving the new owner's HEAD and
+  deleting their uncommitted files as strays. Slots released before the
+  marker existed count as released while their HEAD reflog ends with
+  release's own reset and staging checkout, so live pools keep working.
+  Push and `worktree remove` print `slot_released`, saying the path may
+  now belong to another session and must not be used again.
 - Reused slow-CI tree (2026-11-14): `[checks] slow_tree = "<name>"` makes
   every slow-CI run check its tip out, detached, in one worktree of that name
   instead of a new `ci-<tip>` tree that is removed afterwards. The reset,

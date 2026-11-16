@@ -2650,6 +2650,40 @@ def tree_branch(repo: Repo, path: Path) -> str:
             or repo.git("rev-parse", "--abbrev-ref", "HEAD", cwd=path, check=False))
 
 
+# `release_slot` writes this file in a slot's git dir, holding the commit it parked the
+# slot at. Only a slot whose file names its current HEAD counts as released.
+RELEASE_MARKER = "enact-released"
+
+
+def slot_git_dir(repo: Repo, path: Path) -> Path:
+    return Path(repo.git("rev-parse", "--absolute-git-dir", cwd=path, check=False) or "/")
+
+
+def slot_released(repo: Repo, path: Path) -> bool:
+    """Whether Enact itself released slot `path` and nothing has moved its HEAD since.
+
+    A detached HEAD alone does not make a slot free: a session still working there
+    detaches it too, with a bisect or a manual `git checkout --detach`. On 2026-11-15 a
+    session that had pushed kept bisecting in its old slot after Enact handed it on.
+    `release_slot` therefore records the commit it parks the slot at, and the slot stays
+    released only while HEAD is still that commit. A slot released before the marker
+    existed has none; it counts as released while the last two entries of its HEAD
+    reflog are the ones `release_slot` leaves (the reset, then the checkout of staging),
+    which any later checkout or bisect step would follow with entries of its own.
+    """
+    head = repo.git("rev-parse", "--verify", "HEAD", cwd=path, check=False)
+    try:
+        marked = (slot_git_dir(repo, path) / RELEASE_MARKER).read_text(encoding="utf-8")
+    except OSError:
+        entries = repo.git("reflog", "-2", "--format=%gs", "HEAD", cwd=path,
+                           check=False).splitlines()
+        staging = repo.remote_ref(repo.config.staging)
+        return (len(entries) == 2 and entries[0].startswith("checkout: moving from ")
+                and entries[0].endswith(f" to {staging}")
+                and entries[1] == "reset: moving to HEAD")
+    return bool(head) and marked.strip() == head
+
+
 def slot_busy(repo: Repo, path: Path, graph: list[dict[str, Any]] | None) -> str:
     """Why a detached slot still holds someone's work, or "" when it is free to hand out.
 
@@ -2659,10 +2693,11 @@ def slot_busy(repo: Repo, path: Path, graph: list[dict[str, Any]] | None) -> str
     resets and cleans it. And a bead that is not closed, records this slot on this host and
     still has its branch is working there even when its session is gone (say, during an
     app restart): delivery and `worktree remove` delete the branch when they release the
-    slot. Taking a slot in any of these states would discard that work. `graph` is the
-    whole Beads graph, or None when it is unavailable.
+    slot. Taking a slot in any of these states would discard that work. Last, a slot
+    that Enact did not release (`slot_released`) may still be in use by whoever detached
+    it. `graph` is the whole Beads graph, or None when it is unavailable.
     """
-    git_dir = Path(repo.git("rev-parse", "--absolute-git-dir", cwd=path, check=False) or "/")
+    git_dir = slot_git_dir(repo, path)
     if (any((git_dir / state).exists() for state in PAUSED_OPERATIONS)
             or repo.git("ls-files", "--unmerged", cwd=path, check=False)):
         return "a stopped rebase or merge"
@@ -2674,6 +2709,8 @@ def slot_busy(repo: Repo, path: Path, graph: list[dict[str, Any]] | None) -> str
                 and meta(bead, "enact_worktree_host") == host_name() and branch
                 and repo.git_ok("rev-parse", "--verify", f"refs/heads/{branch}")):
             return f"the branch of bead {bead['id']}, which is {bead.get('status')}"
+    if not slot_released(repo, path):
+        return "a detached HEAD that Enact did not release"
     return ""
 
 
@@ -2683,8 +2720,9 @@ def claim_slot(repo: Repo, branch: str, base: str) -> Path | None:
     rustc keys its incremental caches to the worktree's path, so a worktree that starts
     in a directory built before recompiles only what changed, incrementally (measured on
     Beryl: 18 CPU-seconds for a test build after a one-function change, against 421-544
-    in a new directory). A free slot is a registered worktree on a detached HEAD that
-    holds nobody's work (`slot_busy`). Of the free slots, the one parked at the newest
+    in a new directory). A free slot is a registered worktree that Enact released and
+    that holds nobody's work (`slot_busy`); a slot is never reset or cleaned when
+    claimed, so anything left in it survives. Of the free slots, the one parked at the newest
     commit is taken, since its build is the closest to staging; a new slot is made only
     when none is free. Its ignored files (`rust/target`, `node_modules`) are kept.
     """
@@ -2694,7 +2732,12 @@ def claim_slot(repo: Repo, branch: str, base: str) -> Path | None:
              for number in range(1, repo.config.worktree_slots + 1)]
     candidates = [path for path in slots if path.resolve() in parked]
     graph = Beads(repo).all() if candidates and (repo.main / ".beads").is_dir() else None
-    free = [path for path in candidates if not slot_busy(repo, path, graph)]
+    free = []
+    for path in candidates:
+        if busy := slot_busy(repo, path, graph):
+            log(f"not claiming slot {path}: it has {busy}")
+        else:
+            free.append(path)
     path = None
     if free:
         # Slots are parked at staging tips, so the longest history is the newest.
@@ -2705,6 +2748,7 @@ def claim_slot(repo: Repo, branch: str, base: str) -> Path | None:
         if path is None:
             return None
         create_worktree(repo, path.name, None, base)
+    (slot_git_dir(repo, path) / RELEASE_MARKER).unlink(missing_ok=True)
     if repo.git_ok("rev-parse", "--verify", f"refs/heads/{branch}"):
         repo.git("checkout", "-q", branch, cwd=path)
     else:
@@ -2733,9 +2777,21 @@ def release_slot(repo: Repo, path: Path, branch: str | None) -> bool:
         if done.returncode != 0:
             log(f"slot {path} not released ({' '.join(step)}): {done.stderr.strip()}")
             return False
+    head = repo.git("rev-parse", "HEAD", cwd=path)
+    (slot_git_dir(repo, path) / RELEASE_MARKER).write_text(head + "\n", encoding="utf-8")
     if branch:
         repo.git("branch", "-D", branch, cwd=repo.main, check=False)
     return True
+
+
+def released_notice(repo: Repo, path: Path) -> dict[str, str]:
+    """What a command that released slot `path` prints, so its session stops using it."""
+    if not (is_slot(repo, path) and path.is_dir()):
+        return {}
+    return {"slot_released": (
+        f"{path} went back to Enact's slot pool and may already belong to another "
+        "session. Never run commands, check out commits, bisect or delete files there "
+        "again; make a new worktree with `enact worktree create` for further work.")}
 
 
 def owns_slot(bead: dict[str, Any], path: Path, branch: str) -> bool:
@@ -3082,7 +3138,8 @@ def bead_worktree(args: argparse.Namespace) -> dict[str, Any]:
                             repo.remote_ref(repo.config.staging))):
         raise Fail("branch contains unpublished commits; preserve it for recovery", code=2)
     ended = remove_worktree(repo, path, branch)
-    return {"removed": str(path), **({"ended_processes": ended} if ended else {})}
+    return {"removed": str(path), **released_notice(repo, path),
+            **({"ended_processes": ended} if ended else {})}
 
 
 # ---------------------------------------------------------------------------
@@ -3745,6 +3802,7 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
                 ended = remove_worktree(repo, repo.top,
                                         branch if branch.startswith("enact/") else None)
                 result["removed_worktree"] = str(repo.top)
+                result.update(released_notice(repo, repo.top))
                 if ended:
                     result["ended_processes"] = ended
     finally:

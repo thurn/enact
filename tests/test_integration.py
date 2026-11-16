@@ -805,6 +805,49 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         refused = self.a.enact("push", "--bead", other, "--no-ci", cwd=other_path, code=2)
         self.assertIn(f"not enact/{other}", refused["error"])
 
+    def test_a_slot_detached_without_a_release_is_not_claimed(self):
+        config = self.a.path / ".enact.toml"
+        config.write_text(config.read_text() + "[worktree]\nslots = 2\n")
+        self.a.git("commit", "-q", "-am", "use slots")
+        self.a.git("push", "-q", "origin", "HEAD:master", "HEAD:staging")
+        path = Path(self.a.enact("worktree", "create", "bisecting")["path"])
+        self.assertEqual(path.name, "slot-01")
+        released = self.a.enact("worktree", "remove", "bisecting")
+        self.assertIn("another session", released["slot_released"])
+        # The old owner keeps working there anyway, checking out commits as a bisect
+        # does: still detached and clean, but no longer as Enact left it.
+        self.a.git("checkout", "-q", "--detach", "HEAD~1", cwd=path)
+        bisected = self.a.git("rev-parse", "HEAD", cwd=path)
+        other = Path(self.a.enact("worktree", "create", "other")["path"])
+        self.assertEqual(other.name, "slot-02")
+        self.assertEqual(self.a.git("rev-parse", "HEAD", cwd=path), bisected)
+        swept = self.a.enact("worktree", "prune")
+        self.assertEqual(swept["kept"][str(path)],
+                         "slot with a detached HEAD that Enact did not release")
+        # A slot released before the marker existed is still taken: release used to
+        # reset the slot on its branch, then detach it at staging.
+        (path / self.a.git("rev-parse", "--git-path", "enact-released", cwd=path)).unlink()
+        self.a.git("checkout", "-q", "-b", "enact/legacy", cwd=path)
+        self.a.git("reset", "-q", "--hard", cwd=path)
+        self.a.git("checkout", "-q", "--detach", "origin/staging", cwd=path)
+        self.a.git("branch", "-D", "enact/legacy", cwd=path)
+        self.assertEqual(Path(self.a.enact("worktree", "create", "third")["path"]), path)
+
+    def test_a_released_slot_with_untracked_files_is_not_wiped(self):
+        config = self.a.path / ".enact.toml"
+        config.write_text(config.read_text() + "[worktree]\nslots = 2\n")
+        self.a.git("commit", "-q", "-am", "use slots")
+        self.a.git("push", "-q", "origin", "HEAD:master", "HEAD:staging")
+        path = Path(self.a.enact("worktree", "create", "first")["path"])
+        self.a.commit_file("one", "1", cwd=path)
+        pushed = self.a.enact("push", "--no-ci", cwd=path)
+        self.assertIn("may already belong to another session", pushed["slot_released"])
+        # Someone writes into the released slot before the next claim.
+        (path / "notes.txt").write_text("someone's work")
+        other = Path(self.a.enact("worktree", "create", "second")["path"])
+        self.assertNotEqual(other, path)
+        self.assertEqual((path / "notes.txt").read_text(), "someone's work")
+
     def test_an_ad_hoc_worktree_reuses_the_newest_free_slot(self):
         config = self.a.path / ".enact.toml"
         config.write_text(config.read_text() + "[worktree]\nslots = 2\n")
