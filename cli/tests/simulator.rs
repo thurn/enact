@@ -401,3 +401,21 @@ fn commands_use_the_worker_protocol() {
     assert_eq!(attempts.len(), 2);
     assert_eq!(attempts[0]["body"], attempts[1]["body"]);
 }
+
+#[test]
+#[ignore = "runs in slow CI with real Git clones and the Worker simulator"]
+fn enact_coordinates_through_the_real_worker() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let result = Command::new("python3")
+        .args(["-m", "unittest", "-q", "tests.test_ticket_coordination"])
+        .env("ENACT_TEST_TK", env!("CARGO_BIN_EXE_tk"))
+        .current_dir(root.parent().unwrap())
+        .output()
+        .expect("run the Enact and Worker integration scenario");
+    assert!(
+        result.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}

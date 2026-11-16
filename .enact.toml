@@ -15,7 +15,7 @@ slow = """
   python3 -m unittest -q tests.test_unit tests.test_integration && \
   npm --prefix server ci --prefer-offline --no-audit --no-fund && \
   npm --prefix server test && \
-  cargo test --locked --manifest-path cli/Cargo.toml
+  cargo test --locked --manifest-path cli/Cargo.toml -- --include-ignored
 """
 
 [worktree]

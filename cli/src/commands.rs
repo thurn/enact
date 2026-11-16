@@ -112,6 +112,8 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
             ttl,
             holder,
             payload,
+            if_revision,
+            no_queue,
         } => {
             let holder = holder.as_deref().unwrap_or(&client.actor);
             let (operation, duration) = match operation {
@@ -125,6 +127,12 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
             }
             if let Some(payload) = payload {
                 data["payload"] = serde_json::from_str(&payload).map_err(usage)?;
+            }
+            if let Some(revision) = if_revision {
+                data["if_revision"] = json!(revision);
+            }
+            if no_queue {
+                data["no_queue"] = json!(true);
             }
             write(client, &["leases", &name], &data)
         }

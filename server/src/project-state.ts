@@ -3,7 +3,7 @@ import type {Identity} from "./token-auth";
 
 export const dayMilliseconds = 86_400_000;
 const waiterLifetime = 60_000;
-const eventKinds = ["session", "ci", "machine", "cutover", "usage"] as const;
+export const eventKinds = ["session", "ci", "machine", "cutover", "usage"] as const;
 const cutoverStates = ["before", "paused", "after"] as const;
 type Cutover = typeof cutoverStates[number];
 
@@ -143,10 +143,15 @@ export class ProjectWrite {
     const caller = (waiter: Waiter) => waiter.holder === holder && (waiter.machine ?? machine) === machine;
     const at = new Date(this.now).toISOString();
 
-    if (op !== "acquire" && !held) {
+    if (input.no_queue !== undefined && typeof input.no_queue !== "boolean") bad("no_queue must be a boolean");
+    const expected = input.if_revision === undefined ? undefined : name(input.if_revision, "if_revision");
+    if (op !== "acquire" && (!held || (expected !== undefined && current.payload.revision !== expected))) {
       return {status: 409, body: {holder: active ? current.holder : null, expires_at: active ? current.expires_at : null}};
     }
     if (op === "acquire" && current && !held && (active || (waiters.length > 0 && !caller(waiters[0])))) {
+      if (input.no_queue) {
+        return {status: 409, body: {holder: current.holder, expires_at: current.expires_at, seq: this.seq}};
+      }
       const index = waiters.findIndex(caller);
       const membershipChanged = index === -1 || waiters.length !== current.waiters.length;
       const position = index === -1 ? waiters.length + 1 : index + 1;

@@ -161,9 +161,9 @@ export class TicketStore {
     }
   }
 
-  batch(project: string, actor: string, body: unknown, beforeCommit?: (rowsWritten: number, changes: BatchChanges) => void) {
+  batch(project: string, actor: string, body: unknown, beforeCommit?: (rowsWritten: number, changes: BatchChanges) => void, machine = "") {
     const index = this.tickets;
-    const batch = new TicketBatch(this.sql, index, project, actor, Date.now());
+    const batch = new TicketBatch(this.sql, index, project, actor, Date.now(), machine);
     const {result, changes} = this.storage.transactionSync(() => {
       const result = batch.applyBatch(body);
       const changes = batch.changes();

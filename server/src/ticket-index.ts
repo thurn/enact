@@ -34,6 +34,7 @@ export type BatchChanges = {
   outgoing: ReadonlyMap<string, ReadonlyMap<string, Edge>>;
   changed: ReadonlySet<string>;
   modified: ReadonlySet<string>;
+  events: string[];
 };
 
 export class TicketIndex {

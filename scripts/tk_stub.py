@@ -307,7 +307,9 @@ class Store:
         ticket = self.ticket(ref(op["id"]))
         name = ticket["id"]
         result = {"id": name}
-        if action == "update":
+        if action == "event":
+            self.write_event(op["kind"], {**op["data"], "ticket": name})
+        elif action == "update":
             self.update(ticket, op, ref)
         elif action == "claim":
             if ticket["assignee"] not in (None, self.actor):
@@ -381,6 +383,9 @@ class Store:
         if args.op == "acquire":
             permitted = lease["holder"] == holder if active else first in (None, holder)
             if not permitted:
+                if args.no_queue:
+                    raise Conflict({"holder": lease["holder"], "expires_at": lease["expires_at"],
+                                    "seq": self.seq()})
                 names = [waiter["holder"] for waiter in waiters]
                 if holder in names:
                     waiters[names.index(holder)]["since"] = self.at
@@ -393,8 +398,9 @@ class Store:
                 # A denied acquire still records the caller's place in line.
                 self.db.commit()
                 raise Conflict({"holder": lease["holder"], "expires_at": lease["expires_at"],
-                                "position": names.index(holder) + 1})
-        elif not active or lease["holder"] != holder:
+                                "position": names.index(holder) + 1, "seq": self.seq()})
+        elif (not active or lease["holder"] != holder
+              or (args.if_revision is not None and lease["payload"].get("revision") != args.if_revision)):
             raise Conflict({"holder": lease["holder"] if lease else None,
                             "expires_at": lease["expires_at"] if lease else None})
         if args.op == "release":
@@ -419,19 +425,24 @@ class Store:
         self.advance()
         return reply
 
-    def event(self, args):
-        data = json.loads(args.data)
+    def write_event(self, kind, data):
+        if kind not in EVENT_KINDS:
+            raise ValueError(f"Unknown event kind {kind}")
         seq = self.advance()
         self.db.execute("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)",
-                        (seq, self.at, args.kind, self.machine, self.actor, args.data))
-        return {"seq": seq, "at": self.at, "kind": args.kind, "machine": self.machine,
+                        (seq, self.at, kind, self.machine, self.actor, json.dumps(data)))
+        return {"seq": seq, "at": self.at, "kind": kind, "machine": self.machine,
                 "actor": self.actor, "data": data}
 
+    def event(self, args):
+        return self.write_event(args.kind, json.loads(args.data))
+
     def events(self, args):
+        order = "ASC" if args.since is not None else "DESC"
         return [decoded(row) for row in self.db.execute(
-            """SELECT * FROM events WHERE seq > ? AND (? IS NULL OR kind = ?)
-                ORDER BY seq LIMIT ?""",
-            (args.since, args.kind, args.kind, args.limit),
+            f"""SELECT * FROM events WHERE seq > ? AND (? IS NULL OR kind = ?)
+                ORDER BY seq {order} LIMIT ?""",
+            (args.since or 0, args.kind, args.kind, args.limit),
         )]
 
     def state(self, args):
@@ -481,6 +492,8 @@ def parse_args():
     lease.add_argument("--holder")
     lease.add_argument("--ttl", type=int, default=180)
     lease.add_argument("--payload")
+    lease.add_argument("--if-revision")
+    lease.add_argument("--no-queue", action="store_true")
     commands.add_parser("leases")
 
     event = commands.add_parser("event")
@@ -488,7 +501,7 @@ def parse_args():
     event.add_argument("data")
     events = commands.add_parser("events")
     events.add_argument("--kind", choices=sorted(EVENT_KINDS))
-    events.add_argument("--since", type=int, default=0)
+    events.add_argument("--since", type=int)
     events.add_argument("--limit", type=int, default=-1)
     state = commands.add_parser("state")
     state.add_argument("--set-cutover", choices=["before", "paused", "after"])

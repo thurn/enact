@@ -83,6 +83,10 @@ pub enum Command {
         holder: Option<String>,
         #[arg(long)]
         payload: Option<String>,
+        #[arg(long)]
+        if_revision: Option<String>,
+        #[arg(long)]
+        no_queue: bool,
     },
     Leases,
     Event {

@@ -1,3 +1,4 @@
+import {eventKinds} from "./project-state";
 import {ancestors, liveDescendants, readiness, TicketIndex, type BatchChanges} from "./ticket-index";
 import {
   ApiError, array, bad, byId, choice, edgeKinds, integer, name, object, statuses, string, strings,
@@ -88,12 +89,15 @@ export class TicketBatch {
 
   rowsWritten = 0;
 
+  private readonly events = new Set<string>();
+
   constructor(
     private readonly sql: SqlStorage,
     private readonly index: TicketIndex,
     private readonly project: string,
     private readonly actor: string,
     private readonly now: number,
+    private readonly machine: string,
   ) {
     this.seq = index.seq;
     this.at = new Date(now).toISOString();
@@ -103,6 +107,7 @@ export class TicketBatch {
     return {
       seq: this.seq, tickets: this.tickets, outgoing: this.outgoing, changed: this.changed,
       modified: new Set([...this.tickets.keys(), ...this.relatedChanges]),
+      events: [...this.events],
     };
   }
 
@@ -368,6 +373,15 @@ export class TicketBatch {
     if (op.op === "create") {
       const id = this.create(op);
       this.created.set(`$${index}`, id);
+      return {id};
+    }
+    if (op.op === "event") {
+      const {id} = this.ticket(op.id);
+      const kind = choice(op.kind, "kind", eventKinds);
+      const data = {...object(op.data, "data"), ticket: id};
+      this.write("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)",
+        ++this.seq, this.at, kind, this.machine, this.actor, JSON.stringify(data));
+      this.events.add(kind);
       return {id};
     }
     const action = choice(op.op, "op", ["update", "claim", "close", "reopen", "defer", "comment", "dep_add", "dep_remove"]);

@@ -1944,7 +1944,8 @@ transaction or none of it.
   (`set` fields, `add_labels`, `remove_labels`, `set_meta`, `unset_meta`),
   `claim` (sets `assignee` to the actor and `status` to `in_progress`; fails
   if assigned to anyone else), `close` (`reason`), `reopen`, `defer`
-  (`until`), `comment` (`text`), `dep_add`, `dep_remove` (`on`, `kind`).
+  (`until`), `comment` (`text`), `dep_add`, `dep_remove` (`on`, `kind`), and
+  `event` (append an event associated with a ticket or a batch reference).
 - Result: `{seq, results: [...]}`, or status 409 with
   `{failed: <index of the precondition or operation>, current: <ticket>}`.
 - Closing a ticket also closes each ancestor whose descendants are now all
@@ -1967,12 +1968,13 @@ conflict; 429 with
 would pass 90 percent of a daily limit.
 
 There are no endpoints written specially for Enact. Its scheduler stays in
-Python: `enact next` is one `GET /graph` (usually a 304 against the copy the
+Python. For tickets, `enact next` is one `GET /graph` (usually a 304 against the copy the
 helper cached on disk) and one `POST /batch` whose preconditions make the
 reservation atomic. `enact start` and `enact close` are one batch each, the
 close with `--continue` reading the reply's graph delta to pick the lane's
-next ticket and claiming it in a second batch. So an Enact command makes at
-most two requests (three for a lane continuation), and none under a lock.
+next ticket and claiming it in a second batch. The ticket operations take
+at most two requests (three for a lane continuation). The vizier also
+updates its heartbeat and looks up its machine's Justiciar lease.
 
 ### 4. Readiness
 
@@ -2007,17 +2009,18 @@ The graph's numeric `seq` remains the batch precondition.
 ### 5. Leases
 
 A lease is a named, expiring claim. Names in use: `staging` (the merge
-queue's lock, `ttl_s` 180, renewed every 60 s while a batch is checked),
-`justiciar/<machine>`, and `vizier/<epic>/<vizier>` (the liveness leases
-that are files under the clone's state directory today).
+queue's lock, `ttl_s` 180, renewed every 50 s while a batch is checked),
+`justiciar/<machine>`, and `vizier/<epic>/<vizier>` for vizier liveness.
 
 - `acquire`: succeeds if there is no row, the row has expired, or the caller
   already holds it. Otherwise the caller is appended to `waiters` if absent
   and gets 409 with the holder, expiry, its position and the feed sequence.
   An expired lease goes to the first waiter that asks. A waiter that has not
-  asked for 60 s is dropped.
-- `renew` and `release` succeed only for the holder; anyone else gets 409,
-  which is how a holder learns it lost the lease (`LeaseLost` in Enact).
+  asked for 60 s is dropped. With `no_queue` set, a conflict leaves the queue
+  alone and omits the position.
+- `renew` and `release` succeed only for the holder. When the caller supplies
+  `if_revision`, it must also match the revision in the current payload.
+  A conflict returns 409 (`LeaseLost` for the staging lease in Enact).
 - A waiter does not poll: it holds the feed and asks again when told the
   lease changed or reached its expiry. Subscribing from the 409 response's
   sequence also catches a change before the socket connected. If an expired
@@ -2107,6 +2110,7 @@ tk comment <id> [TEXT | --body-file F]
 tk dep add|remove <id> <on> [--kind K]
 tk batch                      # the /batch JSON on stdin
 tk lease acquire|renew|release <name> [--ttl S] [--holder H] [--payload JSON]
+         [--no-queue] [--if-revision REV]
 tk leases
 tk event <kind> <json>
 tk events [--kind K] [--since SEQ]
@@ -2307,3 +2311,23 @@ A close through the shim preserves Beads' explicit `bd epic close-eligible`
 step. The shim also uses Beads' ready ordering and list counts. The
 replay test prints its output normalization rules and uses the production
 Worker in the local simulator.
+
+## Ticket server coordination (2026-11-16)
+
+The ticket backend holds the `staging` lease for the whole merge-queue
+batch and renews it before the Git push. Waiters subscribe from the
+sequence returned with the acquisition conflict. The holder renews before
+the waiters' positions expire so they can refresh on the feed notification.
+
+Each machine's Justiciar uses a six-hour lease. Request, spawn and acquire
+advance a revision in the lease payload. Renewing or releasing the lease
+checks the revision, so a caller that read an older state cannot overwrite
+it. Justiciar contenders receive a conflict without entering the staging
+style wait queue. Viziers renew their own leases while waiting and release
+them when their loop ends.
+
+Session events and slow-CI failure events accompany their ticket changes
+in the same batch. A sequence precondition makes concurrent CI failures on
+the same OS converge on one open Steward ticket. Passing CI advertises
+promotion after the Git push, so a feed waiter can fetch and check master.
+The local runner still tracks its PID, log and pending promotion receipt.

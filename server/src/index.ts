@@ -66,10 +66,11 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
       let change: FeedChange | undefined;
       const reply = this.store.batch(project, identity.actor, body, (rows, changes) => {
         if (changes.seq !== previous) {
-          change = {previous, seq: changes.seq, tickets: [...changes.changed], native: [...changes.modified]};
+          change = {previous, seq: changes.seq, tickets: [...changes.changed],
+            native: [...changes.modified], events: changes.events};
         }
         this.record(usage, rows, change);
-      });
+      }, identity.machine);
       if (change) this.feed.publish(change);
       const armDeadlines = change?.tickets?.some((id) => {
         const ticket = this.store.tickets.live.get(id);
@@ -130,7 +131,9 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
         const repository = this.env.TICKET_REPOSITORIES?.[project];
         const identity = await authorizeWrite(request, (hash) => this.tokens.lookup(repository, hash));
         const body = await request.json();
-        if (path === "/events") {
+        const operations = path === "/batch" ? object(body, "batch").ops : undefined;
+        if (path === "/events" || (Array.isArray(operations)
+            && operations.some((op: {op?: string} | null) => op?.op === "event"))) {
           // Arm retention before writing the first event so an eviction cannot
           // strand events in a project that then receives no more requests.
           await this.scheduleAlarm();

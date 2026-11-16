@@ -1685,7 +1685,8 @@ class TicketBackendTest(unittest.TestCase):
         ]})["results"]]
         step, requests = self.enact("next", "--epic", "by-" + epic)
         self.assertEqual((step["action"], step["bead"]), ("spawn", first))
-        self.assertEqual(requests, ["graph", "batch"])
+        self.assertEqual(requests, ["lease", "graph", "leases", "batch"])
+        self.enact("meta", first, "enact_session=worker", "--reservation", step["reservation"])
         self.enact("start", first, "--reservation", "wrong", actor="worker", code=3)
         started, requests = self.enact("start", first, "--reservation", step["reservation"], actor="worker")
         self.assertEqual(started["bead"]["assignee"], "worker")
@@ -1704,7 +1705,14 @@ class TicketBackendTest(unittest.TestCase):
         self.assertEqual(done["action"], "done")
         self.assertEqual(done["archive"], [{"bead": first, "session": "worker"},
                                            {"bead": second, "session": "worker"}])
-        self.assertEqual(requests, ["graph"])
+        self.assertEqual(requests, ["lease", "graph", "leases", "lease"])
+        self.enact("meta", first, "enact_archived=true")
+        changes = self.tk("events", "--kind", "session")
+        self.assertEqual([(e["data"]["ticket"], e["data"]["action"]) for e in changes],
+                         [(first, "archive"), (second, "close"), (first, "close"),
+                          (first, "start"), (first, "spawn")])
+        self.assertFalse(self.tk("leases"))
+        self.assertFalse(list((self.repo / ".git" / "enact").glob("vizier-*.json")))
 
     def test_completed_cutover_overrides_default_backend(self):
         self.assertEqual(self.enact("backend"),
@@ -1733,7 +1741,7 @@ class TicketBackendTest(unittest.TestCase):
         self.assertEqual(self.enact("next", "--epic", epic)[0]["action"], "spawn")
         result, requests = self.enact("next", "--epic", epic, "--wait", "60")
         self.assertEqual((result["action"], result["reason"]), ("wait", "capacity"))
-        self.assertEqual(requests, ["graph", "wait", "graph"])
+        self.assertEqual(requests, ["lease", "graph", "leases", "wait", "graph", "leases"])
         result, requests = self.enact("wait", child, "--timeout", "60")
         self.assertEqual(result["state"], "waiting")
         self.assertEqual(requests, ["graph", "wait", "graph"])

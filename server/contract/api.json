@@ -65,8 +65,8 @@
     },
     {
       "method": "POST", "path": "/leases/<name>",
-      "request": {"path": {"name": "lease name"}, "body": {"op": "acquire|renew|release", "holder": "string", "ttl_s": "integer?", "payload": "object?"}},
-      "response": {"body": "Lease", "busy": "{holder, expires_at, position, seq}"},
+      "request": {"path": {"name": "lease name"}, "body": {"op": "acquire|renew|release", "holder": "string", "ttl_s": "integer?", "payload": "object?", "no_queue": "boolean? (acquire)", "if_revision": "string? (renew or release)"}},
+      "response": {"body": "Lease", "busy": "{holder, expires_at, position?, seq}"},
       "statuses": [200, 400, 401, 409, 429]
     },
     {
@@ -128,13 +128,14 @@
       "defer": {"request": {"id": "ticket ID", "until": "timestamp"}, "response": {"id": "deferred ticket ID"}, "statuses": [200, 404]},
       "comment": {"request": {"id": "ticket ID", "text": "string"}, "response": {"id": "ticket ID"}, "statuses": [200, 404]},
       "dep_add": {"request": {"id": "ticket ID", "on": "ticket ID", "kind": "edge kind?"}, "response": {"id": "dependent ticket ID"}, "statuses": [200, 400, 404]},
-      "dep_remove": {"request": {"id": "ticket ID", "on": "ticket ID", "kind": "edge kind?"}, "response": {"id": "dependent ticket ID"}, "statuses": [200, 404]}
+      "dep_remove": {"request": {"id": "ticket ID", "on": "ticket ID", "kind": "edge kind?"}, "response": {"id": "dependent ticket ID"}, "statuses": [200, 404]},
+      "event": {"request": {"id": "ticket ID (or batch reference)", "kind": "session|ci|machine|cutover|usage", "data": "object (server sets ticket to the resolved ID)"}, "response": {"id": "associated ticket ID"}, "statuses": [200, 400, 404]}
     }
   },
   "lease_operations": {
-    "acquire": {"request": {"holder": "string", "ttl_s": "integer", "payload": "object?"}, "response": {"body": "Lease"}, "conflict": {"holder": "string", "expires_at": "timestamp", "position": "integer", "seq": "integer"}, "statuses": [200, 409]},
-    "renew": {"request": {"holder": "string", "ttl_s": "integer", "payload": "object?"}, "response": {"body": "Lease"}, "conflict": {"holder": "string|null", "expires_at": "timestamp|null"}, "statuses": [200, 409]},
-    "release": {"request": {"holder": "string"}, "response": {"body": "released Lease"}, "conflict": {"holder": "string|null", "expires_at": "timestamp|null"}, "statuses": [200, 409]}
+    "acquire": {"request": {"holder": "string", "ttl_s": "integer", "payload": "object?", "no_queue": "boolean?"}, "response": {"body": "Lease"}, "conflict": {"holder": "string", "expires_at": "timestamp", "position": "integer?", "seq": "integer"}, "statuses": [200, 409]},
+    "renew": {"request": {"holder": "string", "ttl_s": "integer", "payload": "object?", "if_revision": "string? (compares payload.revision)"}, "response": {"body": "Lease"}, "conflict": {"holder": "string|null", "expires_at": "timestamp|null"}, "statuses": [200, 409]},
+    "release": {"request": {"holder": "string", "if_revision": "string? (compares payload.revision)"}, "response": {"body": "released Lease"}, "conflict": {"holder": "string|null", "expires_at": "timestamp|null"}, "statuses": [200, 409]}
   },
   "feed_messages": {
     "subscribe": {"direction": "client to server", "request": {"since": "seq"}, "response": "change or resync when seq differs"},
@@ -157,7 +158,7 @@
       "comment": "<id> [TEXT | --body-file F]",
       "dep": "add|remove <id> <on> [--kind K]",
       "batch": "batch JSON on stdin",
-      "lease": "acquire|renew|release <name> [--ttl S] [--holder H] [--payload JSON]",
+      "lease": "acquire|renew|release <name> [--ttl S] [--holder H] [--payload JSON] [--no-queue] [--if-revision REV]",
       "leases": "",
       "event": "<kind> <json>",
       "events": "[--kind K] [--since SEQ]",
