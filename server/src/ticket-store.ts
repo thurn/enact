@@ -13,6 +13,9 @@ export class TicketStore {
       storage.transactionSync(() => this.sql.exec(schema));
     }
     this.sql.exec("CREATE INDEX IF NOT EXISTS aliases_id ON aliases(id)");
+    if (!this.sql.exec("SELECT 1 FROM pragma_table_info('comments') WHERE name = 'legacy_id'").toArray().length) {
+      this.sql.exec("ALTER TABLE comments ADD COLUMN legacy_id TEXT");
+    }
   }
 
   get tickets(): TicketIndex {

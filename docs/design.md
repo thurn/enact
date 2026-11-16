@@ -1928,6 +1928,11 @@ ticket by `updated_at`. Import returns `{seq, imported, rows_written}`, where
 `imported` counts changed tickets and `rows_written` counts their data and
 the shared sequence write.
 
+An import can supply `daily_row_ceiling` to lower its own quota. The Worker
+checks it against current usage in the import transaction. Imported comments
+keep their original Beads IDs in `legacy_id`. `metadata._enact_beads` retains
+source-only fields and the original dependency records for callers of the shim.
+
 `POST /batch` takes `{if: [...], ops: [...]}` and applies all of it in one
 transaction or none of it.
 
@@ -2099,9 +2104,20 @@ tk events [--kind K] [--since SEQ]
 tk wait ready [--ancestor ID] [--label L]... | ticket <id> [--status S]
         | lease <name> | change [--since SEQ]   --timeout S
 tk state [--set-cutover before|paused|after]
-tk export | tk import <bd-export.jsonl> [--history-dir D] | tk compare
+tk export
+tk import <bd-export.jsonl> [--history-dir D] [--row-budget N]
+tk compare [--history-dir D]
 tk register | tk bench | tk version
 ```
+
+Run import and comparison from the legacy Beads project. Set
+`ENACT_REAL_BD` to the path of the original Beads executable if the shim is
+first on `PATH`. Both commands reuse the per-project history cache under the
+Enact configuration directory. Import sends closed tickets first and reserves
+36,000 rows below the server's 90% daily cutoff for normal work. An import
+that reaches its budget exits with code 5 and reports the remaining tickets
+and estimated days. Run the same command again to resume. Compare exits
+with code 1 if any fields or readiness values differ.
 
 Without `--json` a command prints a short human-readable form; with it, the
 server's JSON. Exit codes: 0 done; 1 bad usage, not found or a malformed

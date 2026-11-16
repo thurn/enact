@@ -159,7 +159,7 @@ test("whole ticket snapshots export, replay idempotently, and reconcile changed 
   const parent = imported("parent", {type: "epic", next_child: 4, aliases: ["transfer-old"]});
   const child = imported("parent.3", {
     parent: "parent", edges: [{src: "parent.3", dst: "other", kind: "related"}],
-    comments: [{ticket: "parent.3", n: 1, author: "legacy", at, text: "A legacy comment"}],
+    comments: [{ticket: "parent.3", n: 1, author: "legacy", at, text: "A legacy comment", legacy_id: "27e9a640-1e3d-5519-abfd-16080ed75930"}],
     history: [{ticket: "parent.3", seq: 0, actor: "legacy", at, change: [{migration: "legacy history"}]}],
   });
   const other = imported("other", {status: "closed", closed_at: at});
@@ -196,6 +196,24 @@ test("whole ticket snapshots export, replay idempotently, and reconcile changed 
     expect((await send(imported("bad", {aliases: [alias]}))).status).toBe(400);
   }
   expect((await send(...Array.from({length: 201}, (_, n) => imported(`row${n}`)))).status).toBe(400);
+});
+
+test("honors an import ceiling atomically and resumes on a later UTC day", async () => {
+  const {get, post, json, stub} = await fixture("migration-budget");
+  const archived = imported("ci-deadbeef", {status: "closed", aliases: ["by-ci-deadbeef"]});
+  const active = imported("active");
+  const send = (tickets: object[], daily_row_ceiling: number) => post("/import", {tickets, daily_row_ceiling});
+  expect(await json(send([archived], 6))).toMatchObject({seq: 1, imported: 1});
+  const limited = await send([active], 6);
+  expect(limited.status).toBe(429);
+  expect(await limited.json()).toEqual({limit: "rows_written"});
+  expect((await get("/tickets/active")).status).toBe(404);
+  await runInDurableObject(stub, ({store}) => {
+    store.sql.exec("UPDATE meta SET value = json_set(value, '$.day', '2000-01-01') WHERE key = 'daily_usage'");
+  });
+  expect(await json(send([archived, active], 6))).toMatchObject({seq: 2, imported: 1});
+  expect(await readNdjson(await get("/export?after=ci-deadbeef"))).toBe("");
+  expect(await json(get("/tickets/by-ci-deadbeef"))).toMatchObject({id: "ci-deadbeef", status: "closed"});
 });
 
 test("exports stop at the page boundary and resume after its final canonical ID", async () => {

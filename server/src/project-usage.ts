@@ -15,12 +15,12 @@ export class ProjectUsage {
     this.counts = saved?.day === day ? saved : {day, requests: 0, rows_written: 0};
   }
 
-  check(rows: number): void {
+  check(rows: number, rowCeiling = threshold.rows_written): void {
     if (this.counts.requests + 1 > threshold.requests) {
       throw new ApiError(429, {limit: "requests"});
     }
     // Updating the usage row is itself a SQLite write.
-    if (this.counts.rows_written + rows + 1 > threshold.rows_written) {
+    if (this.counts.rows_written + rows + 1 > Math.min(rowCeiling, threshold.rows_written)) {
       throw new ApiError(429, {limit: "rows_written"});
     }
   }

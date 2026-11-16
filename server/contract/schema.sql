@@ -38,6 +38,7 @@ CREATE INDEX edges_dst ON edges(dst);
 CREATE TABLE comments (
   ticket TEXT NOT NULL, n INTEGER NOT NULL,
   author TEXT NOT NULL, at TEXT NOT NULL, text TEXT NOT NULL,
+  legacy_id TEXT,                          -- ID of an imported Beads comment
   PRIMARY KEY (ticket, n)
 ) WITHOUT ROWID;
 

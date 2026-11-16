@@ -383,7 +383,7 @@ export class TicketBatch {
         break;
       case "comment":
         this.write(`
-          INSERT INTO comments
+          INSERT INTO comments (ticket, n, author, at, text)
           SELECT ?, COALESCE(MAX(n), 0) + 1, ?, ?, ? FROM comments WHERE ticket = ?
         `, id, this.actor, this.at, string(op.text, "text"), id);
         this.seq++;

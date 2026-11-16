@@ -7,7 +7,7 @@ import { cutoverState, dayMilliseconds, events, leases, ProjectWrite } from "./p
 import { ProjectUsage } from "./project-usage";
 import { exportTickets, importTickets } from "./ticket-transfer";
 import { TicketStore } from "./ticket-store";
-import { ApiError } from "./ticket-types";
+import { ApiError, integer, object } from "./ticket-types";
 import { authorizeWrite, registeredMachine, type Identity } from "./token-auth";
 
 declare global {
@@ -82,7 +82,8 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
       if (write.seq !== previous) {
         change = {previous, seq: write.seq, tickets: write.tickets, leases: write.leases, events: write.events};
       }
-      this.record(usage, write.rowsWritten, change);
+      const ceiling = path === "/import" ? object(body, "import").daily_row_ceiling : undefined;
+      this.record(usage, write.rowsWritten, change, ceiling === undefined ? undefined : integer(ceiling, "daily_row_ceiling"));
       return reply;
     });
     if (path === "/import" && change) this.store.invalidateIndex();
@@ -92,9 +93,9 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
     return {...(result ?? {body: this.state(usage)}), armDeadlines};
   }
 
-  private record(usage: ProjectUsage, rows: number, change?: FeedChange): void {
+  private record(usage: ProjectUsage, rows: number, change?: FeedChange, ceiling?: number): void {
     const total = rows + (change ? this.feed.record(change) : 0);
-    usage.check(total);
+    usage.check(total, ceiling);
     usage.record(total);
   }
 

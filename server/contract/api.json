@@ -26,7 +26,7 @@
       "version": "seq"
     },
     "Edge": {"src": "ticket ID", "dst": "ticket ID", "kind": "blocks|conditional-blocks|waits-for|related|discovered-from"},
-    "Comment": {"ticket": "ticket ID", "n": "integer", "author": "string", "at": "timestamp", "text": "string"},
+    "Comment": {"ticket": "ticket ID", "n": "integer", "author": "string", "at": "timestamp", "text": "string", "legacy_id": "string|null (original Beads comment ID)"},
     "History": {"ticket": "ticket ID", "seq": "integer", "actor": "string", "at": "timestamp", "change": "field changes or imported event array"},
     "Whole ticket": {"ticket fields": "Ticket (version optional on import and assigned by the server)", "edges": "outgoing Edge[]", "comments": "Comment[]", "history": "History[]", "aliases": "string[] (optional on import)"},
     "Lease": {"name": "string", "holder": "string", "machine": "string", "expires_at": "timestamp", "payload": "object", "waiters": "{holder, since}[]"},
@@ -94,7 +94,7 @@
     },
     {
       "method": "POST", "path": "/import",
-      "request": {"body": {"tickets": "up to 200 flat Whole ticket objects"}},
+      "request": {"body": {"tickets": "up to 200 flat Whole ticket objects", "daily_row_ceiling": "optional maximum daily rows including existing usage"}},
       "response": {"seq": "integer", "imported": "number of changed tickets", "rows_written": "SQLite writes for data and shared sequence"},
       "statuses": [200, 400, 401, 429]
     },
@@ -164,8 +164,8 @@
       "wait": "ready [--ancestor ID] [--label L]... | ticket <id> [--status S] | lease <name> | change [--since SEQ] --timeout S",
       "state": "[--set-cutover before|paused|after]",
       "export": "",
-      "import": "<bd-export.jsonl> [--history-dir D]",
-      "compare": "",
+      "import": "<bd-export.jsonl> [--history-dir D] [--row-budget N]",
+      "compare": "[--history-dir D]",
       "register": "",
       "bench": "",
       "version": ""

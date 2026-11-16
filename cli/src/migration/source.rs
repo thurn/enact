@@ -193,11 +193,58 @@ fn convert_ticket(
         .map(|label| label.as_str().ok_or_else(|| usage("invalid label")))
         .collect::<Result<BTreeSet<_>>>()?;
     let text = |key: &str| row[key].as_str().unwrap_or("");
-    let metadata = match &row["metadata"] {
-        Value::Null => json!({}),
-        value @ Value::Object(_) => value.clone(),
+    let mut metadata = match &row["metadata"] {
+        Value::Null => serde_json::Map::new(),
+        Value::Object(value) => value.clone(),
         _ => return Err(usage("invalid metadata")),
     };
+    // Keep source-only fields for the shim and historical reports, including
+    // started_at, which Beryl's efficiency dashboard reads.
+    let ticket_fields = [
+        "_type",
+        "id",
+        "title",
+        "description",
+        "design",
+        "acceptance_criteria",
+        "notes",
+        "issue_type",
+        "status",
+        "priority",
+        "assignee",
+        "labels",
+        "metadata",
+        "created_by",
+        "created_at",
+        "updated_at",
+        "defer_until",
+        "closed_at",
+        "close_reason",
+        "dependencies",
+        "comments",
+        "dependency_count",
+        "dependent_count",
+        "comment_count",
+    ];
+    let mut legacy: serde_json::Map<String, Value> = row
+        .as_object()
+        .expect("legacy ticket object")
+        .iter()
+        .filter(|(key, _)| !ticket_fields.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    if let Some(dependencies) = row.get("dependencies") {
+        legacy.insert("dependencies".into(), dependencies.clone());
+    }
+    if !legacy.is_empty()
+        && metadata
+            .insert("_enact_beads".into(), Value::Object(legacy))
+            .is_some()
+    {
+        return Err(usage(
+            "legacy metadata already has the reserved _enact_beads key",
+        ));
+    }
     Ok(json!({
         "id": id, "aliases": [old_id], "parent": parent, "next_child": next_child,
         "title": field(row, "title")?, "body": text("description"), "design": text("design"),
@@ -291,6 +338,7 @@ mod tests {
             {"type": "parent-child", "depends_on_id": "by-ci-abcd"},
             {"type": "relates-to", "depends_on_id": "by-parent"},
         ]);
+        child["started_at"] = json!("2026-11-16T08:05:00Z");
         child["comments"] = json!([
             {"id": "27e9a640-1e3d-5519-abfd-16080ed75930", "created_at": "2026-11-16T08:20:00Z", "author": "Ada", "text": "Echo"},
             {"id": "facd143d-f940-5839-ae2d-716282e5c28d", "created_at": "2026-11-16T08:10:00Z", "author": "Bea", "text": "Unicode ‘雪’\nnext line"},
@@ -317,6 +365,14 @@ mod tests {
         assert_eq!(
             child["comments"][0]["legacy_id"],
             "facd143d-f940-5839-ae2d-716282e5c28d"
+        );
+        assert_eq!(
+            child["metadata"]["_enact_beads"]["started_at"],
+            "2026-11-16T08:05:00Z"
+        );
+        assert_eq!(
+            child["metadata"]["_enact_beads"]["dependencies"][0]["type"],
+            "parent-child"
         );
         assert_eq!(child["comments"][0]["n"], 1);
         assert_eq!(child["comments"][1]["n"], 2);

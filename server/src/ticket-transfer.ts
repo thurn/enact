@@ -8,7 +8,7 @@ const pageSize = 200;
 
 function ticketId(value: unknown, field: string): string {
   const id = name(value, field);
-  if (!/^[a-z0-9]+(?:\.[1-9]\d*)*$/.test(id)) bad(`${field} must be a ticket ID`);
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[1-9]\d*)*$/.test(id)) bad(`${field} must be a ticket ID`);
   return id;
 }
 
@@ -89,7 +89,8 @@ function importRelated(write: ProjectWrite, project: string, id: string, input: 
   const comments = array(input.comments, "comments").map((value) => {
     const row = record(value, "ticket", id);
     return {ticket: id, n: integer(row.n, "n"), author: string(row.author, "author"),
-      at: timestamp(row.at, "at"), text: string(row.text, "text")};
+      at: timestamp(row.at, "at"), text: string(row.text, "text"),
+      legacy_id: row.legacy_id == null ? null : name(row.legacy_id, "legacy_id")};
   });
   const history = array(input.history, "history").map((value) => {
     const row = record(value, "ticket", id);
@@ -186,7 +187,7 @@ export function exportTickets(sql: SqlStorage, after: string | null): Response {
     SELECT tickets.*,
       (SELECT json_group_array(json_object('src', src, 'dst', dst, 'kind', kind) ORDER BY dst)
        FROM edges WHERE src = tickets.id) AS edges,
-      (SELECT json_group_array(json_object('ticket', ticket, 'n', n, 'author', author, 'at', at, 'text', text) ORDER BY n)
+      (SELECT json_group_array(json_object('ticket', ticket, 'n', n, 'author', author, 'at', at, 'text', text, 'legacy_id', legacy_id) ORDER BY n)
        FROM comments WHERE ticket = tickets.id) AS comments,
       (SELECT json_group_array(json_object('ticket', ticket, 'seq', seq, 'actor', actor, 'at', at, 'change', json(change)) ORDER BY seq)
        FROM history WHERE ticket = tickets.id) AS history,
