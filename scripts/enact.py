@@ -921,32 +921,38 @@ def remote_tip_known(repo: Repo) -> bool:
 
 
 @serialized
-def sync(repo: Repo, force: bool = False) -> dict[str, Any]:
-    """Commit local Beads writes, merge the remote and push refs/dolt/data,
-    then compact an embedded store whose journal has grown (`compact_beads`).
+def sync(repo: Repo, force: bool = False, publish: bool = False) -> dict[str, Any]:
+    """Commit local Beads writes and merge the remote, then compact an embedded
+    store whose journal has grown (`compact_beads`).
+
+    With `publish`, also push refs/dolt/data before returning, so a check that
+    follows sees what the remote kept after a race with another machine (claims,
+    start, release). Otherwise local commits that the remote lacks are left to
+    the background pusher (`defer_sync`): see `PUBLISH_IN_LOCK`.
 
     Without `force`, the sync is skipped when nothing was written here and the
     remote has not moved since the last one (see `_beads_dirty`). Its time is
     added to the ownership lock's line in the lock log (`log_lock_wait`)."""
     start = time.monotonic()
     try:
-        return sync_unlogged(repo, force)
+        return sync_unlogged(repo, force, publish)
     finally:
         syncs = _lock_syncs.get(repo.state / "ownership.lock")
         if syncs is not None:
             syncs.append(time.monotonic() - start)
 
 
-def sync_unlogged(repo: Repo, force: bool) -> dict[str, Any]:
+def sync_unlogged(repo: Repo, force: bool, publish: bool = True) -> dict[str, Any]:
     if not force and repo.common not in _beads_dirty and known_tip(repo):
         # Other processes' bd reads and writes on this host need no pull, but
         # cached reads must still see the latter.
         _beads_reads.get(repo.common, {}).clear()
         return {"remote": True, "dropped": [], "unchanged": True}
-    result = sync_beads(repo)
+    result = sync_beads(repo, publish)
     _beads_dirty.discard(repo.common)
-    # Every local commit is on the remote now, deferred ones included.
-    (repo.state / SYNC_PENDING).unlink(missing_ok=True)
+    if not result.get("deferred"):
+        # Every local commit is on the remote now, deferred ones included.
+        (repo.state / SYNC_PENDING).unlink(missing_ok=True)
     with sync_step(repo, "gc"):
         compact_beads(repo)
     return result
@@ -972,12 +978,12 @@ DEFERRED_SYNC_DELAY = 2.0
 def defer_sync(repo: Repo) -> dict[str, Any]:
     """Publish this process's Beads writes in the background. The caller holds
     the ownership lock. With `ENACT_SYNC_NOW` set, sync now instead."""
-    if os.environ.get("ENACT_SYNC_NOW"):
-        return sync(repo)
+    if os.environ.get(PUBLISH_IN_LOCK):
+        return sync(repo, publish=True)
     try:
         (repo.state / SYNC_PENDING).write_text(f"{os.getpid()}\n", encoding="utf-8")
     except OSError:
-        return sync(repo)
+        return sync(repo, publish=True)
     start_pusher(repo)
     return {"remote": True, "dropped": [], "deferred": True}
 
@@ -1022,7 +1028,7 @@ def deferred_sync(repo: Repo) -> dict[str, Any]:
             time.sleep(DEFERRED_SYNC_DELAY)
             with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED):
                 if pending.exists():
-                    sync(repo, force=True)
+                    sync(repo, force=True, publish=True)
                     synced += 1
         finally:
             release_lock(path, guard)
@@ -1088,7 +1094,21 @@ def save_dolt_settings(repo: Repo, remotes: str, branch: str) -> None:
                    {"key": dolt_settings_key(repo), "remotes": remotes, "branch": branch})
 
 
-def sync_beads(repo: Repo) -> dict[str, Any]:
+# A Dolt push holds the embedded store's file lock for its whole run, so every
+# bd command on the host waits for it, and it reads every table file of the
+# remote through Dolt's git cache whatever it uploads: on Beryl in November
+# 2026, 230 blobs and 864 MB for a push of a few KB, 4 s on an idle machine and
+# a median of 12 s under load. Syncs inside the ownership lock pushed 40-80
+# times an hour, about a third of all the time the lock was held, mostly
+# publishing other sessions' bd writes. Only checks of ownership against other
+# machines need the push before they read (`sync(publish=True)`). Every other
+# sync commits and merges, and leaves the push to the background pusher, which
+# gathers the writes of several commands into one push. Setting this variable
+# pushes in every sync, as before.
+PUBLISH_IN_LOCK = "ENACT_SYNC_NOW"
+
+
+def sync_beads(repo: Repo, publish: bool = True) -> dict[str, Any]:
     _beads_reads.get(repo.common, {}).clear()
     beads = Beads(repo)
     # Embedded databases need no Beads schema/engine initialization to sync.
@@ -1149,6 +1169,8 @@ def sync_beads(repo: Repo) -> dict[str, Any]:
             else:
                 if heads["local_tip"] == heads["remote_tip"]:
                     return {"remote": True, "dropped": dropped}
+            if not publish and not os.environ.get(PUBLISH_IN_LOCK):
+                return {**defer_sync(repo), "dropped": dropped}
         with sync_step(repo, "push"):
             push = command("push", *target)
         if push.returncode == 0:
@@ -1234,7 +1256,7 @@ def claim(repo: Repo, bead_id: str, actor: str, extra_meta: dict[str, str]) -> b
     if meta(bead, "enact_unowned"):
         args += ["--unset-metadata", "enact_unowned"]  # someone is repairing it now
     beads.run(*args, actor=actor)
-    sync(repo)
+    sync(repo, publish=True)
     saved = beads.show(bead_id)
     require_running(saved, beads.all())
     return saved.get("assignee") == actor and all(
@@ -1274,7 +1296,7 @@ def cmd_start(args: argparse.Namespace) -> dict[str, Any]:
     reassign(beads, args.bead, "--assignee", actor, "--status", "in_progress",
              "--set-metadata", f"enact_actor={actor}",
              "--set-metadata", f"enact_session={actor}", actor=actor)
-    sync(repo)
+    sync(repo, publish=True)
     bead = beads.show(args.bead)
     require_owner(bead, actor)
     require_running(bead, beads.all())
@@ -1364,7 +1386,7 @@ def cmd_sync(args: argparse.Namespace) -> dict[str, Any]:
     if args.deferred:
         return deferred_sync(find_repo())
     # Run after raw bd writes this process cannot see, so never skipped.
-    return sync(find_repo(), force=True)
+    return sync(find_repo(), force=True, publish=True)
 
 
 def handoff(comments: list[dict[str, Any]]) -> str | None:
@@ -4713,7 +4735,7 @@ def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
         "--unset-metadata", "enact_actor", "--unset-metadata", "enact_archived",
         "--unset-metadata", "enact_reservation", "--unset-metadata", "enact_pool_session",
         actor=actor)
-    result = sync(repo)
+    result = sync(repo, publish=True)
     saved = beads.show(args.bead)
     if saved.get("assignee") or recovery_records(saved) != records:
         raise Fail("release lost during sync; recheck ownership", code=3)
@@ -4902,7 +4924,7 @@ def cmd_setup(args: argparse.Namespace) -> dict[str, Any]:
     report["local_branches"] = track_local_branches(repo)
     report["beads_remote"] = beads.has_remote()
     if report["beads_remote"]:
-        report["sync"] = sync(repo)
+        report["sync"] = sync(repo, publish=True)
     report["agents_template"] = str(ENACT_ROOT / "templates" / "AGENTS.md")
     return report
 

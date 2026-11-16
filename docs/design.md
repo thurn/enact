@@ -1763,3 +1763,33 @@ instead of adopting it needs the plan's context.
   epic or input beads, which it skipped before.
 - When a run is blocked, the vizier gives the user two answers: meet the
   need, or drop the requirement and resume.
+
+## Only ownership checks push inside the lock (2026-11-16)
+
+- Symptom: on Beryl's Mac, the ownership lock was busy 79% of the time
+  between 14:00 and 16:10 UTC, commands waited 17,300 s for it in those two
+  hours, and 7 gave up. Dolt pushes made up about 2,000 s of the 6,100 s it
+  was held, at a median of 12-14 s each and 40-80 pushes an hour.
+- Why a push is slow whatever it carries: through a `git+` remote, `dolt
+  push` (and `dolt fetch`) reads every table file blob of the remote from
+  Dolt's git cache with `git cat-file blob`. On Beryl that was 230 blobs and
+  864 MB, twenty of them 52 MB parts, to upload about 20-60 KB. A push also
+  holds the embedded store's file lock for its whole run, so a concurrent
+  `bd show` waited for all of it. (A fetch does not block bd.) Moving the
+  push out of the ownership lock alone would therefore only move the wait
+  to the store lock; the fix is fewer pushes.
+- bd commits locally and never pushes, so almost every sync found local
+  commits the remote lacked (other sessions' bd writes) and pushed them,
+  opening syncs included.
+- `sync(publish=False)`, the default, now commits and merges, and leaves
+  commits the remote lacks to the background pusher (`defer_sync`), which
+  gathers several commands' writes into one push. `sync(publish=True)` keeps
+  the old push-before-return for the closing syncs whose check reads what the
+  remote kept after a race with another machine: `claim` (and so vizier
+  reservations), `start`, `release`, the pusher itself, `enact sync` and
+  setup. Other closing writes (run metadata, delivery records, worktree
+  records, Steward filing, epic closing) belong to an owner or the vizier
+  that already holds them, the same argument as for `meta` and `close`
+  above; other machines see them a few seconds later.
+- `ENACT_SYNC_NOW` still makes every sync push before returning. The
+  integration tests set it.

@@ -31,7 +31,7 @@ def lock_log_holder(root, connection):
     sys.argv = ["enact.py", "meta", "by-x"]
     root = Path(root)
     repo = enact.Repo(root, root, root / ".git", enact.Config())
-    enact.sync_unlogged = lambda repo, force: time.sleep(0.05) or {}
+    enact.sync_unlogged = lambda repo, force, publish=True: time.sleep(0.05) or {}
     with enact.ownership_lock(repo):
         enact.sync(repo)
         connection.send("held")
@@ -1675,8 +1675,9 @@ class DeferredSyncTest(unittest.TestCase):
     def test_the_pusher_syncs_until_nothing_is_pending(self):
         writes = iter([True, False])
 
-        def full_sync(repo, force=False):
+        def full_sync(repo, force=False, publish=False):
             self.assertTrue(force)
+            self.assertTrue(publish)
             enact.sync_unlogged(repo, force)
             if next(writes):  # a command wrote again during this sync
                 self.pending.write_text("again")
@@ -1804,11 +1805,12 @@ class SyncTest(unittest.TestCase):
                 self.assertEqual(calls.count("pull"), 2)
                 remote["cached"].add("c")  # the pull fetched it
                 self.assertIn("unchanged", enact.sync(repo))
-                # A write by this process must be published. This clone has
-                # the remote's tip, so the push needs no pull first.
+                # A write by this process that an ownership check depends on
+                # is published. This clone has the remote's tip, so the push
+                # needs no pull first.
                 enact.Beads(repo).run("update", "work", "--title", "x")
                 pushes = calls.count("push")
-                self.assertNotIn("unchanged", enact.sync(repo))
+                self.assertNotIn("unchanged", enact.sync(repo, publish=True))
                 self.assertEqual(calls.count("pull"), 2)
                 self.assertEqual(calls.count("push"), pushes + 1)
                 # `enact sync` always syncs, and the remotes and branch come
@@ -1818,6 +1820,34 @@ class SyncTest(unittest.TestCase):
                 self.assertEqual(calls.count("pull"), 3)
                 self.assertEqual(calls.count("config"), 1)
                 self.assertEqual(calls.count("remote"), 1)
+
+    def test_a_sync_that_need_not_publish_leaves_the_push_to_the_pusher(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.fresh_sync_repo(Path(directory))
+            calls = []
+
+            def command(args, cwd, **kwargs):
+                calls.append(args[1])
+                out = {"config": "user.name = Test\nuser.email = t@example.com",
+                       "remote": "origin", "commit": ""}.get(args[1], "")
+                return subprocess.CompletedProcess(args, 0, out, "")
+
+            with mock.patch.dict(os.environ, {"ENACT_SYNC_NOW": ""}), \
+                    mock.patch.object(enact.shutil, "which", return_value="dolt"), \
+                    mock.patch.object(enact, "run", side_effect=command), \
+                    mock.patch.object(enact, "remote_tip_known", return_value=False), \
+                    mock.patch.object(enact.subprocess, "Popen") as popen, \
+                    mock.patch.object(enact, "dolt_json", side_effect=lambda db, q: (
+                        [{"b": "main"}] if "active_branch" in q
+                        else [{"local_tip": "a", "remote_tip": "b"}])):
+                result = enact.sync(repo, force=True)
+            # Committed and merged here, published later in the background.
+            self.assertTrue(result["deferred"])
+            self.assertEqual(calls.count("commit"), 1)
+            self.assertEqual(calls.count("pull"), 1)
+            self.assertEqual(calls.count("push"), 0)
+            self.assertTrue((repo.state / enact.SYNC_PENDING).exists())
+            self.assertEqual(popen.call_args.args[0][-2:], ["sync", "--deferred"])
 
     def test_a_push_rejected_after_a_skipped_pull_pulls_and_retries(self):
         with tempfile.TemporaryDirectory() as directory:
