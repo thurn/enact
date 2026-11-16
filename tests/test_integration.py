@@ -1795,7 +1795,7 @@ class TicketBackendTest(unittest.TestCase):
         self.assertEqual(requests, ["graph", "wait", "graph"])
 
     def test_next_waits_for_a_routable_ticket_whose_only_blocker_is_time(self):
-        epic, prerequisite, dependent = [r["id"] for r in self.tk("batch", data={"ops": [
+        epic, prerequisite, _ = [r["id"] for r in self.tk("batch", data={"ops": [
             {"op": "create", "fields": {"title": "Scheduled run", "type": "epic"}},
             {"op": "create", "parent": "$0",
              "fields": {"title": "Scheduled prerequisite", "defer_until": "2099-01-01"}},
@@ -1815,7 +1815,7 @@ class TicketBackendTest(unittest.TestCase):
             {"op": "defer", "id": prerequisite, "until": "2099-01-01"},
         ]})
         step, _ = self.enact("next", "--epic", epic)
-        self.assertEqual((step["action"], step["open"]), ("deadlock", [dependent]))
+        self.assertEqual((step["action"], step["reason"]), ("wait", "scheduled work"))
 
         self.tk("batch", data={"ops": [
             {"op": "reopen", "id": prerequisite},

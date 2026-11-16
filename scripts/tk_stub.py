@@ -325,7 +325,7 @@ class Store:
             self.changes(name, {"status": "open", "closed_at": None, "close_reason": None}, ticket)
         elif action == "defer":
             timestamp(op["until"])
-            self.changes(name, {"status": "deferred", "defer_until": op["until"]}, ticket)
+            self.changes(name, {"status": "open", "defer_until": op["until"]}, ticket)
         elif action == "comment":
             self.db.execute(
                 """INSERT INTO comments (ticket, n, author, at, text)

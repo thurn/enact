@@ -411,7 +411,7 @@ export class TicketBatch {
         this.save(ticket, {status: "open", closed_at: null, close_reason: null});
         break;
       case "defer":
-        this.save(ticket, {status: "deferred", defer_until: timestamp(op.until, "until"), closed_at: null, close_reason: null});
+        this.save(ticket, {status: "open", defer_until: timestamp(op.until, "until"), closed_at: null, close_reason: null});
         break;
       case "comment": {
         const legacyId = op.legacy === true ? crypto.randomUUID() : null;

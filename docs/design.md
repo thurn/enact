@@ -1425,7 +1425,8 @@ instead of adopting it needs the plan's context.
   decides whether an epic is complete. Legacy Beads also uses deferred
   status for dated snoozes. A ready read reopens those beads when the
   deadline passes, so Enact keeps their epics open. The ticket server reports
-  timed work as open with a future `defer_until`. When a deadline is the
+  native timed work as open with a future `defer_until`. After cutover, it
+  also wakes imported and shim-created dated deferrals. When a deadline is the
   only barrier to work a vizier can serve, `schedule` waits for readiness.
   Beads rechecks on its next poll and the ticket server announces deadlines
   on its change feed.
@@ -2016,6 +2017,13 @@ can see blockers involving closed tickets omitted from the live graph. The
 graph includes the full readiness result in `ready`. When an eligible
 ticket's defer time passes, the graph's ETag changes without a new write.
 The graph's numeric `seq` remains the batch precondition.
+
+Native `tk defer` leaves the ticket open with `defer_until` set. Beads
+snoozes are stored as `deferred` with a date so the shim shows the legacy
+status and cutover can compare exact snapshots. After cutover, the deadline
+alarm or the next graph or ready read reopens those tickets and clears the
+date. The status change advances the sequence and is journaled for the feed.
+A deferral without a date needs an explicit status change.
 
 ### 5. Leases
 

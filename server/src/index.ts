@@ -80,10 +80,12 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
         committed = changes;
       }, identity.machine);
       if (committed) this.dashboard.applyTicketChanges(committed, (id) => this.store.tickets.parentOf(id));
+      if (committed?.tickets.size) this.deadlines.invalidateSnoozes();
       if (change) this.feed.publish(change);
       const armDeadlines = change?.tickets?.some((id) => {
         const ticket = this.store.tickets.live.get(id);
-        return ticket?.status === "open" && ticket.defer_until && Date.parse(ticket.defer_until) >= now;
+        return ticket?.defer_until && (ticket.status === "deferred"
+          || ticket.status === "open" && Date.parse(ticket.defer_until) >= now);
       });
       return {body: reply, status: 200, armDeadlines};
     }
@@ -105,14 +107,16 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
       this.dashboard.invalidateProgress();
     } else this.store.advanceSequence(write.seq);
     if (change) this.feed.publish(change);
-    const armDeadlines = lease !== undefined ? write.rowsWritten > 0 : path === "/import" && change !== undefined;
+    const changedSnoozes = change !== undefined && (path === "/import" || path === "/state");
+    if (changedSnoozes) this.deadlines.invalidateSnoozes();
+    const armDeadlines = changedSnoozes || (lease !== undefined && write.rowsWritten > 0);
     return {...(result ?? {body: this.state(usage)}), armDeadlines};
   }
 
-  private record(usage: ProjectUsage, rows: number, change?: FeedChange, ceiling?: number): void {
+  private record(usage: ProjectUsage, rows: number, change?: FeedChange, ceiling?: number, requests = 1): void {
     const total = rows + (change ? this.feed.record(change) : 0);
     usage.check(total, ceiling);
-    usage.record(total);
+    usage.record(total, requests);
   }
 
   private mutate(project: string, path: string, lease: string | undefined, identity: Identity, body: unknown, write: ProjectWrite):
@@ -155,13 +159,16 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
         if (result.armDeadlines) {
           const at = Date.now();
           const {next, tickets, leases} = this.deadlines.scan(at);
-          await this.scheduleAlarm(tickets.length || leases.length ? at : next);
+          const due = tickets.length || leases.length || this.deadlines.dueSnoozes(at).length;
+          await this.scheduleAlarm(due ? at : next);
         }
         return Response.json(result.body, {status: result.status ?? 200});
       }
       const now = Date.now();
       const usage = this.usage(now);
-      usage.record();
+      const readyRead = request.method === "GET"
+        && (path === "/graph" || path === "/tickets" && url.searchParams.get("ready") === "1");
+      if (!readyRead || !this.wakeSnoozes(project, now, usage)) usage.record();
       accounted = true;
       if (dashboard) return await this.dashboard.fetch(request, dashboard, now, usage);
       if (request.method === "GET") return this.get(project, path, request, url.searchParams, usage, now);
@@ -183,9 +190,26 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
     if (current === null || next < current) await this.ctx.storage.setAlarm(next);
   }
 
+  private wakeSnoozes(project: string, now: number, usage: ProjectUsage): boolean {
+    const ids = this.deadlines.dueSnoozes(now);
+    if (!ids.length) return false;
+    try {
+      this.write(project, "/batch", undefined, {actor: "ticket deadline", machine: ""}, {
+        ops: ids.map((id) => ({op: "update", id: `${project}-${id}`, set: {status: "open", defer_until: null}})),
+      }, now, usage);
+      return true;
+    } catch (error) {
+      // Keep reads available when the daily write limit has been reached.
+      // The alarm will try again after the budget resets.
+      if (error instanceof ApiError && error.status === 429) return false;
+      throw error;
+    }
+  }
+
   override async alarm(): Promise<void> {
     const now = Date.now();
     const usage = this.usage(now);
+    const woke = this.wakeSnoozes(this.ctx.id.name!, now, usage);
     const {tickets, leases, next} = this.deadlines.scan(now);
     const write = new ProjectWrite(this.store.sql, now);
     const day = usage.state().day;
@@ -202,11 +226,11 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
           change = {previous, seq: write.advance(), tickets, leases};
           write.rowsWritten += this.deadlines.acknowledge(now);
         }
-        this.record(usage, write.rowsWritten, change);
+        this.record(usage, write.rowsWritten, change, undefined, woke ? 0 : 1);
       });
     } catch (error) {
       if (!(error instanceof ApiError && error.status === 429)) throw error;
-      usage.record();
+      if (!woke) usage.record();
       await this.scheduleAlarm();
       return;
     }

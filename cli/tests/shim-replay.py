@@ -24,6 +24,7 @@ RULES = (
     "opaque version tokens and newly allocated comment IDs (mapped consistently)",
     "simulator-generated timestamps on fixture tickets and comments",
     "date-only deferral represented in the caller's local timezone",
+    "recorded future snoozes kept future when replayed later",
     "relative list order among tickets with equal creation time and priority",
     "unordered raw dependency records",
     "platform line endings",
@@ -152,6 +153,14 @@ def verify_write(address, args, recorded):
 
 def replay(tk, bd, directory, env, address):
     rows = read_gzip(CORPUS / "start.jsonl.gz")
+    # A ticket due after the recording was snoozed for every captured call.
+    # Keep that relationship independent of the day CI runs this replay.
+    snoozes = {row["id"]: row["defer_until"] for row in rows
+               if row["status"] == "deferred" and row.get("defer_until")}
+    future = "2099-01-01T08:00:00Z"
+    for row in rows:
+        if row["id"] in snoozes:
+            row["defer_until"] = future
     export = directory / "start.jsonl"
     history = directory / "history"
     history.mkdir()
@@ -190,6 +199,9 @@ def replay(tk, bd, directory, env, address):
                 assert parse_time(want[0]["defer_until"]).date().isoformat() == args[3]
                 assert parse_time(got[0]["defer_until"]).astimezone().date().isoformat() == args[3]
                 want[0]["defer_until"] = got[0]["defer_until"] = args[3]
+            for row in got if isinstance(got, list) else [got]:
+                if isinstance(row, dict) and row.get("id") in snoozes and row.get("defer_until") == future:
+                    row["defer_until"] = snoozes[row["id"]]
             if args == ["list", "--json"]:
                 # Beads and SQLite do not promise an order among equal rank.
                 for listing in (want, got):
@@ -266,6 +278,64 @@ def cutover(bd, directory, env, address):
     print("Before, paused, after and unreachable-before pass-through verified.")
 
 
+def dated_deferrals(tk, bd, directory, env, address):
+    repo = directory / "snooze"
+    repo.mkdir()
+    env = {**env, "ENACT_TK": str(tk), "ENACT_SESSION": "vizier", "ENACT_NO_SELF_UPDATE": "1"}
+    for args in (["init", "-q"], ["commit", "-qm", "Initial commit", "--allow-empty"],
+                 ["branch", "-M", "master"], ["branch", "staging"], ["remote", "add", "origin", "."]):
+        subprocess.run(["git", *args], cwd=repo, env=env, check=True)
+    (repo / ".enact.toml").write_text(f'[tickets]\nbackend = "server"\nproject = "snooze"\nurl = "{address}"\n')
+
+    request(address, "/test-token/snooze")
+    epic, snoozed, indefinite = [row["id"] for row in request(address, "/snooze/api/batch", {"ops": [
+        {"op": "create", "fields": {"title": "Snoozed work", "type": "epic"}},
+        {"op": "create", "parent": "$0", "fields": {"title": "Shim snooze", "priority": 0, "labels": ["snooze-test"]}},
+        {"op": "create", "parent": "$0", "fields": {"title": "Indefinite", "status": "deferred", "labels": ["snooze-test"]}},
+    ]})["results"]]
+    imported = f"{epic}.3"
+    snapshot = {
+        "id": imported, "parent": epic, "next_child": 1, "title": "Imported snooze",
+        "body": "", "design": "", "notes": "", "acceptance": "", "type": "task",
+        "status": "deferred", "priority": 2, "assignee": None, "last": 0, "labels": ["snooze-test"], "metadata": {},
+        "defer_until": "2099-01-01T00:00:00Z", "close_reason": None, "closed_at": None,
+        "created_by": "legacy", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+        "edges": [], "comments": [], "history": [], "aliases": [f"snooze-{imported}"],
+    }
+    request(address, "/snooze/api/import", {"tickets": [snapshot]})
+    for state in ("paused", "after"):
+        request(address, "/snooze/api/state", {"cutover": state})
+
+    def ready():
+        return {row["id"]: row for row in ok(bd, ["ready", "--label", "snooze-test", "--json"], repo, env)}
+
+    helper = HERE.parent.parent / "scripts" / "enact.py"
+
+    def next_ticket():
+        return ok(sys.executable, [str(helper), "next", "--epic", epic], repo, env)
+
+    result, = ok(bd, ["defer", f"snooze-{snoozed}", "--until", "2099-01-01", "--json"], repo, env)
+    assert result["status"] == "deferred", result
+    assert ready() == {}, ready()
+    waiting = next_ticket()
+    assert (waiting["action"], waiting["reason"]) == ("wait", "scheduled work"), waiting
+
+    seq = request(address, "/snooze/api/state")["seq"]
+    request(address, "/test-expire-snoozes", {})
+    rows = ready()
+    assert set(rows) == {f"snooze-{snoozed}", f"snooze-{imported}"}, rows
+    assert all(row["status"] == "open" and "defer_until" not in row for row in rows.values()), rows
+    wake = ok(tk, ["--json", "wait", "change", "--since", str(seq), "--timeout", "15"], repo, env)
+    assert set(wake["tickets"]) == {snoozed, imported}, wake
+
+    picked = next_ticket()
+    assert (picked["action"], picked["bead"]) == ("spawn", snoozed), picked
+    assert f"snooze-{indefinite}" not in ready()
+    ok(bd, ["undefer", f"snooze-{indefinite}", "--json"], repo, env)
+    assert f"snooze-{indefinite}" in ready()
+    print("Imported and shim snoozes agree across bd ready, the change feed, and enact next.")
+
+
 def main():
     tk = Path(sys.argv[1]).resolve()
     with tempfile.TemporaryDirectory() as scratch:
@@ -315,6 +385,7 @@ fn main() {
             cutover(bd, directory, env, address)
             (directory / ".enact.toml").write_text(f'[tickets]\nproject = "by"\nurl = "{address}"\n')
             replay(tk, bd, directory, env, address)
+            dated_deferrals(tk, bd, directory, env, address)
         finally:
             worker.stdin.close()
             worker.wait(timeout=45)

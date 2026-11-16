@@ -11,12 +11,23 @@ export class ProjectTickets extends Tickets {
       this.store.sql.exec("INSERT INTO meta VALUES ('token_hashes', ?)", JSON.stringify({[hash]: "shim-test"}));
       return new Response(null, {status: 204});
     }
+    if (new URL(request.url).pathname === "/test-expire-snoozes") {
+      this.store.sql.exec(
+        "UPDATE tickets SET defer_until = ? WHERE status = 'deferred' AND defer_until IS NOT NULL",
+        new Date(Date.now() - 60_000).toISOString(),
+      );
+      this.store.invalidateIndex();
+      return new Response(null, {status: 204});
+    }
     return super.fetch(request);
   }
 }
 
 export default {
   async fetch(request: Request, env: Cloudflare.Env) {
+    if (new URL(request.url).pathname === "/test-expire-snoozes") {
+      return env.TICKETS.getByName("snooze").fetch(request);
+    }
     const project = /^\/test-token\/([a-z]+)$/.exec(new URL(request.url).pathname)?.[1];
     if (project) return env.TICKETS.getByName(project).fetch(new Request("http://test/test-token", {method: "POST", body: await request.text()}));
     return worker.fetch(request, env);

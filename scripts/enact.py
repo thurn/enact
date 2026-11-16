@@ -2111,12 +2111,11 @@ def defer_deadline(bead: dict[str, Any]) -> dt.datetime | None:
     return deadline if deadline.tzinfo else deadline.replace(tzinfo=dt.timezone.utc)
 
 
-def work_done(bead: dict[str, Any], *, legacy_snoozes: bool = False) -> bool:
-    """An indefinite deferral lets the run finish. Legacy Beads also uses
-    deferred status for snoozes that its next ready read will reopen."""
+def work_done(bead: dict[str, Any]) -> bool:
+    """A dated deferral is outstanding work until its ticket is closed."""
     status = bead.get("status")
     return status == "closed" or (
-        status == "deferred" and (not legacy_snoozes or defer_deadline(bead) is None)
+        status == "deferred" and defer_deadline(bead) is None
     )
 
 
@@ -2378,7 +2377,7 @@ def close_finished_epics(repo: Repo) -> list[str]:
         eligible = [b for b in graph if b.get("issue_type") == "epic"
                     and b.get("status") != "closed" and not stopped_runs(b, graph)
                     and (children := [c for c in graph if c.get("parent") == b["id"]])
-                    and all(work_done(c, legacy_snoozes=True) for c in children)]
+                    and all(work_done(c) for c in children)]
         if not eligible:
             if closed:
                 sync(repo)
@@ -2807,7 +2806,7 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
         # The graph predates the winning claim; it cannot prove a deadlock.
         return {**result, "action": "wait", "reason": "claims changed"}
 
-    open_scope = [by_id[i] for i in scope if not work_done(by_id[i], legacy_snoozes=not server)]
+    open_scope = [by_id[i] for i in scope if not work_done(by_id[i])]
     working = [b for b in open_scope if b.get("status") == "in_progress"]
     elsewhere = [b for b in ready if b["id"] in scope and not targeted_here(b)]
     if not working and not inflight:
@@ -2819,10 +2818,9 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
     # moves it out of the epic rather than letting the run wait on it.
     stuck = [b["id"] for b in elsewhere if stranded(repo, b, by_id[epic])]
     scheduled = False
-    statuses = ("open",) if server else ("open", "deferred")
     for bead in open_scope:
         deadline = defer_deadline(bead)
-        if (deadline is None or deadline < now or bead.get("status") not in statuses
+        if (deadline is None or deadline < now or bead.get("status") not in ("open", "deferred")
                 or bead.get("assignee") or bead.get("issue_type") == "epic"
                 or run_holds(bead, graph, epic)):
             continue

@@ -1,4 +1,5 @@
-import {waiterExpires, type Waiter} from "./project-state";
+import {cutoverState, waiterExpires, type Waiter} from "./project-state";
+import type {TicketIndex} from "./ticket-index";
 import type {TicketStore} from "./ticket-store";
 
 type Deadline = {kind: "tickets" | "leases"; id: string; at: number};
@@ -6,7 +7,38 @@ type Deadline = {kind: "tickets" | "leases"; id: string; at: number};
 const deadlineCursor = "feed_deadline_cursor";
 
 export class ProjectDeadlines {
+  private snoozes?: {index: TicketIndex; dates: Map<string, number>};
+
   constructor(private readonly store: TicketStore) {}
+
+  invalidateSnoozes(): void {
+    this.snoozes = undefined;
+  }
+
+  private get legacySnoozes(): Map<string, number> {
+    const index = this.store.tickets;
+    if (this.snoozes?.index === index) return this.snoozes.dates;
+    const snoozes = new Map<string, number>();
+    // Until cutover, Beads owns these rows and the import must compare
+    // exactly with its export.
+    if (cutoverState(this.store.sql).cutover === "after") {
+      for (const ticket of index.live.values()) {
+        if (ticket.status === "deferred" && ticket.defer_until) {
+          snoozes.set(ticket.id, Date.parse(ticket.defer_until) + 1);
+        }
+      }
+    }
+    this.snoozes = {index, dates: snoozes};
+    return snoozes;
+  }
+
+  dueSnoozes(now: number): string[] {
+    const due: string[] = [];
+    for (const [id, at] of this.legacySnoozes) {
+      if (at <= now) due.push(id);
+    }
+    return due;
+  }
 
   private *unannounced(now: number): Iterable<Deadline> {
     const cursor = Number(this.store.meta(deadlineCursor) ?? 0);
@@ -47,6 +79,11 @@ export class ProjectDeadlines {
   scan(now: number) {
     const due = {tickets: new Set<string>(), leases: new Set<string>()};
     let next = Infinity;
+    // Overdue snoozes are consumed by wakeSnoozes. A quota failure should
+    // retry at the next deadline or daily reset, without spinning.
+    for (const at of this.legacySnoozes.values()) {
+      if (at > now) next = Math.min(next, at);
+    }
     for (const {kind, id, at} of this.unannounced(now)) {
       if (at <= now) due[kind].add(id);
       else next = Math.min(next, at);

@@ -229,7 +229,7 @@ test("updates fields and history and closes every now-empty ancestor", async () 
   expect(shown.comments).toMatchObject([{n: 1, author: "worker", text: "first"}, {n: 2, author: "worker", text: "second"}]);
   expect(shown.history?.[1].change.title).toEqual(["Task", "Revised"]);
   await batch([{op: "defer", id: task, until: "2999-03-01T00:00:00Z"}]);
-  expect((await show(task)).status).toBe("deferred");
+  expect(await show(task)).toMatchObject({status: "open", ready: false});
   await batch([{op: "reopen", id: task}, {op: "update", id: task, set: {defer_until: null}}]);
   expect((await show(task)).ready).toBe(true);
   const {results: [, closed]} = await batch([
@@ -281,7 +281,8 @@ test("the all-ticket graph keeps closed assignments and updates the archive on w
 test("a defer time passing invalidates graph readiness at the same sequence", async () => {
   const {stub, batch} = await fixture("timed-readiness");
   const deadline = "2999-01-01T00:00:00Z";
-  const {seq} = await batch([create("Later", undefined, {defer_until: deadline})]);
+  const {results: [{id}]} = await batch([create("Later")]);
+  const {seq} = await batch([{op: "defer", id, until: deadline}]);
   const at = Date.parse(deadline);
   const result = await runInDurableObject(stub, async ({store}) => {
     const first = store.tickets.graph("timed-readiness", null, false, at);
@@ -390,7 +391,7 @@ test("one batch reports all rows to the transaction budget check", async () => {
     return counts;
   });
   expect(rows).toEqual({
-    create: 5, retry: 0, child: 9, update: 3, claim: 4, defer: 4, reopen: 4,
+    create: 5, retry: 0, child: 9, update: 3, claim: 4, defer: 4, reopen: 0,
     comment: 2, dep_remove: 2, dep_add: 3, close: 5,
   });
 });
@@ -663,6 +664,55 @@ test("an alarm wakes a ready waiter when an open ticket's defer time passes", as
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect(await wake).toEqual({seq: seq + 1, tickets: [id], leases: [], events: [], cutover: "before"});
     expect((await list("?ready=1")).map((ticket) => ticket.id)).toEqual([id]);
+  } finally {
+    socket.close();
+  }
+});
+
+test("cutover arms imported snoozes and the alarm reopens them exactly once", async () => {
+  const {stub, request, write, checked, list, show} = await fixture("legacy-snooze");
+  const now = Date.now();
+  const until = new Date(now + 60_000).toISOString();
+  const ticket = {
+    id: "imported", parent: null, next_child: 1, title: "Imported snooze", body: "", design: "",
+    acceptance: "", notes: "", type: "task", status: "deferred", priority: 2, assignee: null,
+    last: 0, labels: [], metadata: {}, defer_until: until, close_reason: null, closed_at: null,
+    created_at: until, updated_at: until, created_by: "legacy", edges: [], comments: [], history: [],
+  };
+  await checked(write("/import", {tickets: [ticket, {...ticket, id: "undated", defer_until: null}]}));
+  await checked(write("/state", {cutover: "paused"}));
+  expect(await runDurableObjectAlarm(stub)).toBe(true);
+  expect(await show("imported")).toMatchObject({status: "deferred", defer_until: until, ready: false});
+
+  const {seq} = await checked<{seq: number}>(write("/state", {cutover: "after"}));
+  const alarm = await runInDurableObject(stub, (_object, state) => state.storage.getAlarm());
+  const midnight = (Math.floor(now / 86_400_000) + 1) * 86_400_000;
+  expect(alarm).toBe(Math.min(midnight, Date.parse(until) + 1));
+  const graph = await request("/graph");
+  const tag = graph.headers.get("ETag")!;
+  expect(await list("?ready=1&beads=1")).toEqual([]);
+
+  const socket = await connectFeed(request);
+  try {
+    socket.send(JSON.stringify({since: seq}));
+    await runInDurableObject(stub, ({store}) => {
+      const expired = new Date(now - 60_000).toISOString();
+      store.sql.exec("UPDATE tickets SET defer_until = ? WHERE id = 'imported'", expired);
+      store.invalidateIndex();
+    });
+    const wake = nextMessage(socket);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await wake).toMatchObject({seq: seq + 1, tickets: ["imported"], cutover: "after"});
+    expect(await list("?ready=1&beads=1")).toMatchObject([{id: "imported", status: "open"}]);
+    const current = await checked<{seq: number; tickets: ShownTicket[]}>(request(
+      "/graph", {headers: {"If-None-Match": tag}},
+    ));
+    expect(current).toMatchObject({seq: seq + 1, tickets: [
+      {id: "imported", status: "open", ready: true, defer_until: null},
+      {id: "undated", status: "deferred", ready: false},
+    ]});
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await checked(request("/state"))).toMatchObject({seq: seq + 1});
   } finally {
     socket.close();
   }

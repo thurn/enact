@@ -125,7 +125,7 @@ export class TicketStore {
   }
 
   private beadsReady(ticket: Ticket, now: number): boolean {
-    if (ticket.status !== "open" || ticket.defer_until && Date.parse(ticket.defer_until) > now) return false;
+    if (ticket.status !== "open" || ticket.defer_until && Date.parse(ticket.defer_until) >= now) return false;
     for (const edge of this.tickets.edgesFrom(ticket.id).values()) {
       if (["blocks", "conditional-blocks", "waits-for"].includes(edge.kind)
         && this.tickets.lookup(edge.dst)?.status !== "closed") return false;
