@@ -1717,3 +1717,18 @@ instead of adopting it needs the plan's context.
   so `pool add` now refuses only more than ten members in one call (one
   message's starts) and `started` is kept for reporting. `pool-empty` no
   longer sends the user to a new session at the cap.
+
+## Release rather than wait on another bead (2026-11-16)
+
+- A worker whose bead needs another bead's work that has not reached
+  staging now commits to its branch, adds the dependency edge, and
+  releases its bead. It does not watch `origin/staging` in a loop.
+- Why: in Beryl's week to 2026-11-16, workers in active runs held run
+  slots for 16 to 55 minutes at a time in loops that waited for another
+  bead, or a Steward's repair, to land. A run that is limited by its slot
+  count loses that time outright. A released bead is not ready again
+  until its new blocker closes, so the vizier gives the slot to ready work
+  and restarts the bead afterwards, and the recovery record keeps the
+  branch and head for the next session.
+- A closed dependency is not waited on either: its commits are on
+  staging already, so the worker rebases.

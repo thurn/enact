@@ -113,7 +113,8 @@ later step, so explore deliberately:
   job on another machine, a background loop that polls until it ends).
   Never end your turn on a job nothing will report: no notice wakes you
   when it finishes, and the vizier looks at idle sessions only after 15
-  minutes without a bead update.
+  minutes without a bead update. Another bead's work landing is not a job
+  to wait on: release instead ("Speculative defaults").
 - Staging may be red because of someone else's change. That alone is not
   your problem. Do not stop for it; fast checks still gate your push.
 
@@ -213,6 +214,17 @@ on the bead and, when it changes the run, on the run epic. Defaults:
 - **Several beads failing for one cause** (a shared test fault, a broken
   helper): file one fix bead, make each affected bead depend on it, release
   or close yours with a pointer, and keep going.
+- **Your bead needs another bead's work that has not reached staging**: its
+  change, its fix for a check your push fails, or a Steward's repair. Do not
+  wait for it in your session: a watch loop on `origin/staging` holds a run
+  slot doing nothing, often for an hour. Commit what you have to your
+  branch, add the edge (`bd dep add <yours> <theirs>`), comment on your bead
+  what you need from it and where you stopped, and
+  `enact release <bead> --reason "waits on <theirs>"`. The vizier starts
+  your bead again once `<theirs>` closes, and its next session resumes from
+  your branch (`recovery.md`). If the work you need has no bead, file one
+  first. The exception is a bead that is closed already: its commits are
+  on staging, so rebase (`enact push` does) instead of waiting.
 - **A performance figure measured on a loaded machine**: report it, never
   gate on it or file follow-ups chasing it, unless the acceptance criteria
   name a deterministic measure (`warden.md`, "Tests that survive load").
