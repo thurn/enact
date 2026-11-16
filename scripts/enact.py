@@ -866,8 +866,82 @@ def sync_unlogged(repo: Repo, force: bool) -> dict[str, Any]:
         return {"remote": True, "dropped": [], "unchanged": True}
     result = sync_beads(repo)
     _beads_dirty.discard(repo.common)
+    # Every local commit is on the remote now, deferred ones included.
+    (repo.state / SYNC_PENDING).unlink(missing_ok=True)
     compact_beads(repo)
     return result
+
+
+# A full sync holds the ownership lock for 10-25 s on Beryl, mostly in the push
+# (about 8 s through Dolt's git cache) and the pull. Writes by a bead's owner
+# (`enact meta`, `enact close`) need no other machine to see them at once: no
+# one else may claim an owned bead, and claims still sync before and after. So
+# those commands commit locally, record `SYNC_PENDING` and return, and one
+# background `enact sync --deferred` per clone pushes them together after
+# `DEFERRED_SYNC_DELAY`. Any full sync before then pushes them too.
+SYNC_PENDING = "sync-pending"
+SYNC_PUSHER = "sync-pusher.lock"
+DEFERRED_SYNC_DELAY = 2.0
+
+
+def defer_sync(repo: Repo) -> dict[str, Any]:
+    """Publish this process's Beads writes in the background. The caller holds
+    the ownership lock. With `ENACT_SYNC_NOW` set, sync now instead."""
+    if os.environ.get("ENACT_SYNC_NOW"):
+        return sync(repo)
+    try:
+        (repo.state / SYNC_PENDING).write_text(f"{os.getpid()}\n", encoding="utf-8")
+    except OSError:
+        return sync(repo)
+    start_pusher(repo)
+    return {"remote": True, "dropped": [], "deferred": True}
+
+
+def start_pusher(repo: Repo) -> bool:
+    """Start `enact sync --deferred` unless one is running. A running pusher
+    looks for `SYNC_PENDING` again after it lets go of its lock, so a write
+    recorded while it runs is never left behind."""
+    path = repo.state / SYNC_PUSHER
+    try:
+        guard = try_lock(path)
+    except OSError:
+        return False
+    if guard is None:
+        return False
+    release_lock(path, guard)
+    kwargs: dict[str, Any] = {}
+    if WINDOWS:
+        kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED | NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    try:
+        with open(repo.state / "deferred-sync.log", "w", encoding="utf-8") as log_file:
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "sync",
+                              "--deferred"], cwd=repo.main, stdout=log_file, stderr=log_file,
+                             stdin=subprocess.DEVNULL, **kwargs)
+    except OSError as exc:
+        log(f"could not start the deferred sync: {exc}")
+        return False
+    return True
+
+
+def deferred_sync(repo: Repo) -> dict[str, Any]:
+    """Push pending writes after a short wait that lets more of them gather."""
+    pending, path = repo.state / SYNC_PENDING, repo.state / SYNC_PUSHER
+    synced = 0
+    while pending.exists():
+        guard = try_lock(path)
+        if guard is None:
+            break  # another pusher has it
+        try:
+            time.sleep(DEFERRED_SYNC_DELAY)
+            with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED):
+                if pending.exists():
+                    sync(repo, force=True)
+                    synced += 1
+        finally:
+            release_lock(path, guard)
+    return {"deferred": True, "synced": synced}
 
 
 def compact_beads(repo: Repo) -> bool:
@@ -976,7 +1050,13 @@ def sync_beads(repo: Repo) -> dict[str, Any]:
             message = (committed.stdout + committed.stderr).lower()
             if "no changes added to commit" not in message and "nothing to commit" not in message:
                 raise Fail(f"dolt commit failed: {(committed.stderr or committed.stdout).strip()}")
-        pull = command("pull", *target)
+        # A pull costs 2-6 s on Beryl. When this clone already has the commit at
+        # the remote's data ref, the push fast-forwards without one; a push
+        # rejected because the remote moved meanwhile pulls on the next attempt.
+        if not attempt and embedded and remote_tip_known(repo):
+            pull = subprocess.CompletedProcess(["dolt", "pull"], 0, "", "")
+        else:
+            pull = command("pull", *target)
         if pull.returncode != 0:
             text = (pull.stdout + pull.stderr).lower()
             if ("no branches found" in text or
@@ -1112,7 +1192,7 @@ def cmd_close(args: argparse.Namespace) -> dict[str, Any]:
     # bd 1.3 only lets the assignee close, under the exact name it recorded.
     actor = as_owner(actor, bead)
     beads.run("close", args.bead, "--reason", args.reason, actor=actor)
-    result = sync(repo)
+    result = defer_sync(repo)
     saved = beads.show(args.bead)
     require_owner(saved, actor, closed=True)
     if saved.get("status") != "closed":
@@ -1170,14 +1250,17 @@ def cmd_meta(args: argparse.Namespace) -> dict[str, Any]:
                            "enact_marshal_attempt_")) for key in pairs):  # legacy recovery keys
         raise Fail("run state and recovery fields are managed by enact run", code=3)
     beads.set_meta(args.bead, pairs, actor=actor)
-    result = sync(repo)
-    saved = beads.show(args.bead)
-    if any(meta(saved, key) != value for key, value in pairs.items()):
-        raise Fail("metadata lost during sync; recheck ownership", code=3)
+    result = defer_sync(repo)
+    if not result.get("deferred"):
+        saved = beads.show(args.bead)
+        if any(meta(saved, key) != value for key, value in pairs.items()):
+            raise Fail("metadata lost during sync; recheck ownership", code=3)
     return {"bead": args.bead, "metadata": pairs, "sync": result}
 
 
 def cmd_sync(args: argparse.Namespace) -> dict[str, Any]:
+    if args.deferred:
+        return deferred_sync(find_repo())
     # Run after raw bd writes this process cannot see, so never skipped.
     return sync(find_repo(), force=True)
 
@@ -4611,6 +4694,9 @@ def build_parser() -> argparse.ArgumentParser:
         return p
 
     p = add("sync", cmd_sync, "Commit, merge and push the Beads database.")
+    p.add_argument("--deferred", action="store_true",
+                   help="Push writes that enact meta and close left pending (run in the "
+                        "background by those commands).")
 
     p = add("claim", cmd_claim, "Claim a bead fleet-wide (pull, claim, push).")
     p.add_argument("bead")

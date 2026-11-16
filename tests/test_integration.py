@@ -370,6 +370,8 @@ class Machine:
             "BD_NON_INTERACTIVE": "1",
             # Never fast-forward the real Enact checkout from a test.
             "ENACT_NO_SELF_UPDATE": "1",
+            # No background pusher outlives a test; one test opts back in.
+            "ENACT_SYNC_NOW": "1",
         }
 
     def enact(self, *args, code=0, cwd=None, session=None, env=None):
@@ -1427,6 +1429,23 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.a.enact("sync")
         self.b.enact("sync")
         self.assertEqual(self.b.show(bead)["title"], "pending commit")
+
+    def test_sync_deferred_owner_writes_reach_another_machine(self):
+        bead = self.a.create("owned work")
+        self.a.enact("claim", bead)
+        background = {"ENACT_SYNC_NOW": ""}
+        result = self.a.enact("meta", bead, "enact_note=one", env=background)
+        self.assertTrue(result["sync"]["deferred"])
+        self.a.enact("meta", bead, "enact_other=two", env=background)
+        # Only catches a hung pusher: it normally finishes within seconds.
+        pending = self.a.path / ".git" / "enact" / "sync-pending"
+        deadline = time.time() + 300
+        while pending.exists() and time.time() < deadline:
+            time.sleep(0.5)
+        self.assertFalse(pending.exists())
+        self.b.enact("sync")
+        metadata = self.b.show(bead)["metadata"]
+        self.assertEqual((metadata["enact_note"], metadata["enact_other"]), ("one", "two"))
 
     def test_sync_without_dolt_cli_identity_keeps_bd_fallback(self):
         db = self.dolt_db(self.a)

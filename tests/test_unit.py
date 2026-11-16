@@ -1540,6 +1540,69 @@ class OwnershipLockWaitTest(unittest.TestCase):
         self.assertFalse(self.path.with_name("ownership.lock.holder").exists())
 
 
+
+class DeferredSyncTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.repo = enact.Repo(root, root, root / ".git", enact.Config())
+        self.repo.state.mkdir(parents=True, exist_ok=True)
+        self.pending = self.repo.state / enact.SYNC_PENDING
+
+    def test_an_owner_write_starts_one_background_pusher(self):
+        with mock.patch.dict(os.environ, {"ENACT_SYNC_NOW": ""}), \
+                mock.patch.object(enact.subprocess, "Popen") as popen, \
+                mock.patch.object(enact, "sync") as sync:
+            self.assertTrue(enact.defer_sync(self.repo)["deferred"])
+            self.assertTrue(self.pending.exists())
+            sync.assert_not_called()
+            self.assertEqual(popen.call_args.args[0][-2:], ["sync", "--deferred"])
+            # While a pusher runs, a second write leaves the push to it.
+            path = self.repo.state / enact.SYNC_PUSHER
+            guard = enact.try_lock(path)
+            self.addCleanup(enact.release_lock, path, guard)
+            enact.defer_sync(self.repo)
+            self.assertEqual(popen.call_count, 1)
+
+    def test_sync_now_skips_the_pusher(self):
+        with mock.patch.dict(os.environ, {"ENACT_SYNC_NOW": "1"}), \
+                mock.patch.object(enact.subprocess, "Popen") as popen, \
+                mock.patch.object(enact, "sync", return_value={"remote": True}) as sync:
+            self.assertNotIn("deferred", enact.defer_sync(self.repo))
+        sync.assert_called_once()
+        popen.assert_not_called()
+        self.assertFalse(self.pending.exists())
+
+    def test_the_pusher_syncs_until_nothing_is_pending(self):
+        writes = iter([True, False])
+
+        def full_sync(repo, force=False):
+            self.assertTrue(force)
+            enact.sync_unlogged(repo, force)
+            if next(writes):  # a command wrote again during this sync
+                self.pending.write_text("again")
+            return {}
+
+        self.pending.write_text("1")
+        with mock.patch.object(enact.time, "sleep"), \
+                mock.patch.object(enact, "sync_beads", return_value={}), \
+                mock.patch.object(enact, "compact_beads"), \
+                mock.patch.object(enact, "sync", side_effect=full_sync):
+            self.assertEqual(enact.deferred_sync(self.repo)["synced"], 2)
+        self.assertFalse(self.pending.exists())
+
+    def test_a_second_pusher_leaves_the_work_to_the_first(self):
+        self.pending.write_text("1")
+        path = self.repo.state / enact.SYNC_PUSHER
+        guard = enact.try_lock(path)
+        self.addCleanup(enact.release_lock, path, guard)
+        with mock.patch.object(enact, "sync") as sync:
+            self.assertEqual(enact.deferred_sync(self.repo)["synced"], 0)
+        sync.assert_not_called()
+        self.assertTrue(self.pending.exists())
+
+
 class BeadsReadTest(unittest.TestCase):
     def test_writes_sync_and_unlock_refresh_cached_reads(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1643,16 +1706,46 @@ class SyncTest(unittest.TestCase):
                 self.assertEqual(calls.count("pull"), 2)
                 remote["cached"].add("c")  # the pull fetched it
                 self.assertIn("unchanged", enact.sync(repo))
-                # A write by this process must be published.
+                # A write by this process must be published. This clone has
+                # the remote's tip, so the push needs no pull first.
                 enact.Beads(repo).run("update", "work", "--title", "x")
+                pushes = calls.count("push")
                 self.assertNotIn("unchanged", enact.sync(repo))
-                self.assertEqual(calls.count("pull"), 3)
+                self.assertEqual(calls.count("pull"), 2)
+                self.assertEqual(calls.count("push"), pushes + 1)
                 # `enact sync` always syncs, and the remotes and branch come
                 # from the cache while Dolt's config files are unchanged.
+                remote["tip"] = "d"
                 self.assertNotIn("unchanged", enact.sync(repo, force=True))
-                self.assertEqual(calls.count("pull"), 4)
+                self.assertEqual(calls.count("pull"), 3)
                 self.assertEqual(calls.count("config"), 1)
                 self.assertEqual(calls.count("remote"), 1)
+
+    def test_a_push_rejected_after_a_skipped_pull_pulls_and_retries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.fresh_sync_repo(Path(directory))
+            calls, pushes = [], iter([1, 0])
+
+            def command(args, cwd, **kwargs):
+                calls.append(args[1])
+                code = {"commit": 1, "push": None}.get(args[1], 0)
+                code = next(pushes) if code is None else code
+                out = {"config": "user.name = Test\nuser.email = t@example.com",
+                       "remote": "origin", "commit": "nothing to commit"}.get(args[1], "")
+                return subprocess.CompletedProcess(args, code, out, "")
+
+            with mock.patch.object(enact.shutil, "which", return_value="dolt"), \
+                    mock.patch.object(enact, "run", side_effect=command), \
+                    mock.patch.object(enact, "remote_tip_known", return_value=True), \
+                    mock.patch.object(enact.time, "sleep"), \
+                    mock.patch.object(enact, "dolt_json", side_effect=lambda db, q: (
+                        [{"b": "main"}] if "active_branch" in q
+                        else [{"local_tip": "a", "remote_tip": "b"}])):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(enact.sync_beads(repo)["remote"], True)
+            self.assertEqual(calls.count("push"), 2)
+            self.assertEqual(calls.count("pull"), 1)
+            self.assertLess(calls.index("push"), calls.index("pull"))
 
     def test_embedded_commit_failure_cannot_publish(self):
         with tempfile.TemporaryDirectory() as directory:

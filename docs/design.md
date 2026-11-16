@@ -1581,3 +1581,37 @@ instead of adopting it needs the plan's context.
   files together stay under 16 MB. A reader takes both.
 - Writing costs one stat and one append and never fails a command: any
   `OSError` is ignored.
+
+## Owner writes push in the background (2026-11-15)
+
+- The lock-wait log showed that, on Beryl's Mac, `enact meta` held the
+  ownership lock for 28 s at the median, `start` 37 s and `close` 19 s,
+  nearly all of it in Beads syncs, while other commands waited 13-50 s
+  behind them. Timing one `meta`: the bd write took 1.7 s, `dolt pull`
+  2.3 s and `dolt push` 8.3 s. Dolt pushes through a git cache of the data
+  ref, which on Beryl is 794 MB. `bd comments add` takes 0.55 s: bd commits
+  locally and does not push, so it was not the slow part.
+- A full sync now skips the pull when this clone already has the commit at
+  the remote's data ref (`remote_tip_known`): the push then fast-forwards.
+  If the remote moved in between, the push is rejected and the retry loop
+  pulls, as before.
+- `enact meta` and `enact close` write only beads their caller owns, and no
+  other machine may claim an owned bead, so their writes need not reach the
+  remote before the command returns. Instead of their closing sync they
+  call `defer_sync`, which records `.git/enact/sync-pending` and starts
+  `enact sync --deferred` unless one is running (`sync-pusher.lock`). The
+  pusher waits `DEFERRED_SYNC_DELAY` (2 s) so that more writes can gather,
+  then runs one forced sync under the ownership lock, and repeats while the
+  flag is back. It checks the flag again after letting go of its own lock,
+  so a write recorded while it runs is never left behind. Any full sync
+  removes the flag, because it pushes every local commit. Its output goes
+  to `.git/enact/deferred-sync.log`.
+- What this gives up: `meta` and `close` no longer re-read the bead after
+  the push to report a remote-wins conflict, and other machines see these
+  writes a few seconds later. Claims (`claim`, `start`, lane continuation)
+  still pull before and push and verify after, so two viziers still never
+  claim the same bead.
+- `ENACT_SYNC_NOW=1` restores the synchronous sync and check. The test
+  harness sets it so that no background pusher outlives a test, and one
+  integration test turns it off to check that deferred writes reach the
+  other clone.
