@@ -2485,23 +2485,60 @@ def is_slot(repo: Repo, path: Path) -> bool:
             and path.resolve().parent == repo.worktree_root().resolve())
 
 
+# Git keeps these in a worktree's git dir while an operation waits on the user.
+PAUSED_OPERATIONS = ("rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "MERGE_HEAD",
+                     "REVERT_HEAD")
+
+
+def paused_branch(repo: Repo, path: Path) -> str:
+    """The branch a stopped rebase in `path` is rewriting, or "" when none is.
+
+    A rebase detaches HEAD until it finishes, so `rev-parse --abbrev-ref HEAD` prints
+    `HEAD` and only the rebase's `head-name` file still names the branch.
+    """
+    git_dir = Path(repo.git("rev-parse", "--absolute-git-dir", cwd=path, check=False) or "/")
+    for state in ("rebase-merge", "rebase-apply"):
+        try:
+            name = (git_dir / state / "head-name").read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        return name.removeprefix("refs/heads/")
+    return ""
+
+
+def tree_branch(repo: Repo, path: Path) -> str:
+    """The branch worktree `path` is working on, including one a stopped rebase detached."""
+    return (paused_branch(repo, path)
+            or repo.git("rev-parse", "--abbrev-ref", "HEAD", cwd=path, check=False))
+
+
+def slot_in_use(repo: Repo, path: Path) -> bool:
+    """Whether a detached slot still holds someone's work: a rebase, cherry-pick, merge or
+    revert stopped on conflicts, or unmerged paths. Each leaves HEAD detached or the
+    resolution uncommitted, so the slot looks parked but taking it would discard that."""
+    git_dir = Path(repo.git("rev-parse", "--absolute-git-dir", cwd=path, check=False) or "/")
+    return (any((git_dir / state).exists() for state in PAUSED_OPERATIONS)
+            or bool(repo.git("ls-files", "--unmerged", cwd=path, check=False)))
+
+
 def claim_slot(repo: Repo, branch: str, base: str) -> Path | None:
     """Check `branch` out in a free slot, or return None when every slot is busy.
 
     rustc keys its incremental caches to the worktree's path, so a worktree that starts
     in a directory built before recompiles only what changed, incrementally (measured on
     Beryl: 18 CPU-seconds for a test build after a one-function change, against 421-544
-    in a new directory). A free slot is a registered worktree on a detached HEAD. Of the
-    free slots, the one parked at the newest commit is taken, since its build is the
-    closest to staging; a new slot is made only when none is free. Its ignored files
-    (`rust/target`, `node_modules`) are kept; tracked changes and untracked files are
+    in a new directory). A free slot is a registered worktree on a detached HEAD with no
+    git operation stopped in it (`slot_in_use`). Of the free slots, the one parked at the
+    newest commit is taken, since its build is the closest to staging; a new slot is made
+    only when none is free. Its ignored files (`rust/target`, `node_modules`) are kept; tracked changes and untracked files are
     discarded, since a released slot holds no work.
     """
     parked = {Path(entry["worktree"]).resolve() for entry in worktree_entries(repo)
               if "detached" in entry}
     slots = [repo.worktree_root() / f"slot-{number:02d}"
              for number in range(1, repo.config.worktree_slots + 1)]
-    free = [path for path in slots if path.resolve() in parked]
+    free = [path for path in slots
+            if path.resolve() in parked and not slot_in_use(repo, path)]
     path = None
     if free:
         # Slots are parked at staging tips, so the longest history is the newest.
@@ -2526,7 +2563,8 @@ def slot_on_branch(repo: Repo, branch: str) -> Path | None:
     after the branch lives."""
     for entry in worktree_entries(repo):
         path = Path(entry["worktree"])
-        if entry.get("branch") == f"refs/heads/{branch}" and is_slot(repo, path):
+        if is_slot(repo, path) and (entry.get("branch") == f"refs/heads/{branch}" or (
+                "detached" in entry and paused_branch(repo, path) == branch)):
             return path
     return None
 
@@ -2735,7 +2773,8 @@ def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
             repo.git("worktree", "unlock", str(path), cwd=repo.main, check=False)
             remove(path, None)
         elif is_slot(repo, path) and "detached" in entry:
-            kept[str(path)] = "idle slot"
+            kept[str(path)] = ("slot with a stopped rebase or merge"
+                               if slot_in_use(repo, path) else "idle slot")
         elif not branch.startswith("enact/"):
             kept[str(path)] = "not an Enact branch"
         elif "locked" in entry:
@@ -2783,15 +2822,14 @@ def worktree_bead(repo: Repo, path: Path) -> dict[str, Any] | None:
     # Includes legacy worktrees named after a bead, created before pointers
     # were recorded. Never let omitting --bead bypass ownership checks.
     slot = is_slot(repo, path)
-    slot_branch = repo.git("rev-parse", "--abbrev-ref", "HEAD", cwd=path, check=False) \
-        if slot and path.is_dir() else ""
+    current = tree_branch(repo, path) if slot and path.is_dir() else ""
     for bead in Beads(repo).all():
         if path == repo.worktree_root() / bead["id"] or (
                 meta(bead, "enact_worktree_host") == host_name() and
-                (owns_slot(bead, path, slot_branch) if slot
+                (owns_slot(bead, path, current) if slot
                  else meta(bead, "enact_worktree") == str(path))) or any(
                     r.get("host") == host_name() and r.get("path") == str(path)
-                    and (not slot or r.get("branch") == slot_branch)
+                    and (not slot or r.get("branch") == current)
                     for r in recovery_records(bead)):
             return bead
     return None
@@ -2799,7 +2837,7 @@ def worktree_bead(repo: Repo, path: Path) -> dict[str, Any] | None:
 
 def verified_worktree(repo: Repo, path: Path, branch: str) -> None:
     if (not path.is_dir() or find_repo(path).common != repo.common or
-            repo.git("rev-parse", "--abbrev-ref", "HEAD", cwd=path) != branch):
+            tree_branch(repo, path) != branch):
         raise Fail(f"recovery worktree does not match recorded repository/branch: {path}", code=2)
 
 

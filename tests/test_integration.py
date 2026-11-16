@@ -735,6 +735,38 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         swept = self.a.enact("worktree", "prune")
         self.assertEqual(swept["kept"][str(path)], "idle slot")
 
+    def test_a_slot_stopped_mid_rebase_is_never_handed_to_another_tree(self):
+        config = self.a.path / ".enact.toml"
+        config.write_text(config.read_text() + "[worktree]\nslots = 1\n")
+        self.a.git("commit", "-q", "-am", "use slots")
+        self.a.git("push", "-q", "origin", "HEAD:master", "HEAD:staging")
+        bead = self.a.create("rebasing")
+        path = Path(self.a.enact("worktree", "create", bead)["path"])
+        self.assertEqual(path.name, "slot-01")
+        self.a.commit_file("shared", "mine", cwd=path)
+        # Staging moves under it with a conflicting change, as in a push's rebase.
+        self.a.commit_file("shared", "theirs")
+        self.a.git("push", "-q", "origin", "HEAD:staging")
+        self.a.git("fetch", "-q", "origin", cwd=path)
+        stopped = subprocess.run(["git", "rebase", "origin/staging"], cwd=path,
+                                 capture_output=True, text=True, check=False)
+        self.assertNotEqual(stopped.returncode, 0)
+        # The rebase detached HEAD; the half-resolved file is the owner's work.
+        self.assertEqual(self.a.git("rev-parse", "--abbrev-ref", "HEAD", cwd=path), "HEAD")
+        (path / "shared").write_text("resolved")
+        # Neither another bead nor an ad hoc tree takes the slot.
+        other = Path(self.a.enact("worktree", "create", self.a.create("other"))["path"])
+        ad_hoc = Path(self.a.enact("worktree", "create", "ad-hoc")["path"])
+        self.assertNotIn(path, (other, ad_hoc))
+        self.assertEqual((path / "shared").read_text(), "resolved")
+        self.assertTrue((path / self.a.git("rev-parse", "--git-path", "rebase-merge",
+                                           cwd=path)).is_dir())
+        # Its owner still finds it, and the sweep keeps it.
+        again = self.a.enact("worktree", "create", bead)
+        self.assertEqual((Path(again["path"]), again["recovered"]), (path, True))
+        swept = self.a.enact("worktree", "prune")
+        self.assertEqual(swept["kept"][str(path)], "slot with a stopped rebase or merge")
+
     def test_an_ad_hoc_worktree_reuses_the_newest_free_slot(self):
         config = self.a.path / ".enact.toml"
         config.write_text(config.read_text() + "[worktree]\nslots = 2\n")

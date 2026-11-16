@@ -293,6 +293,17 @@ inspection; uncertainty never authorizes releasing ownership.
   ignored the incremental caches; most of those trees were ad hoc. A recovery
   record pointing at a slot now matches a tree only on the same branch, since
   later occupants share the path.
+- Stopped rebases keep their slot (2026-11-15): a slot whose git dir holds
+  `rebase-merge`, `rebase-apply`, `CHERRY_PICK_HEAD`, `MERGE_HEAD` or
+  `REVERT_HEAD`, or that has unmerged paths, is not free even though its HEAD
+  is detached. Its owner is read from the rebase's `head-name` file, since
+  `rev-parse --abbrev-ref HEAD` prints `HEAD` until the rebase ends. Before
+  this, a push stopped on rebase conflicts left its slot looking parked, and
+  three times in one day on Beryl another session checked its own branch out
+  there within a minute, discarding the conflict resolution in progress. A
+  slot abandoned mid-rebase stays busy until someone aborts or finishes it;
+  the pool then makes another slot or a named directory, which costs a cold
+  build, never someone's work.
 - Reused slow-CI tree (2026-11-14): `[checks] slow_tree = "<name>"` makes
   every slow-CI run check its tip out, detached, in one worktree of that name
   instead of a new `ci-<tip>` tree that is removed afterwards. The reset,
