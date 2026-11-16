@@ -1,8 +1,9 @@
 /// <reference types="vite/client" />
 
 import {env, exports} from "cloudflare:workers";
-import {runInDurableObject} from "cloudflare:test";
+import {evictDurableObject, runDurableObjectAlarm, runInDurableObject} from "cloudflare:test";
 import {expect, test} from "vitest";
+import {ChangeFeed} from "./change-feed";
 import {ApiError, type Blocker, type Edge, type Ticket} from "./ticket-types";
 
 type ShownTicket = Ticket & {
@@ -25,11 +26,13 @@ async function fixture(project: string) {
     store.sql.exec("INSERT INTO meta VALUES ('token_hashes', ?)", JSON.stringify([hash]));
   });
   const request = (path: string, init?: RequestInit) => exports.default.fetch(`https://example.com/${project}/api${path}`, init);
-  const post = (ops: object[], conditions: object[] = [], actor = "worker") => request("/batch", {
+  const write = (path: string, body: object, actor = "worker") => request(path, {
     method: "POST",
     headers: {Authorization: `Bearer ${bearer}`, "X-Actor": actor},
-    body: JSON.stringify({if: conditions, ops}),
+    body: JSON.stringify(body),
   });
+  const post = (ops: object[], conditions: object[] = [], actor = "worker") =>
+    write("/batch", {if: conditions, ops}, actor);
   const checked = async <T>(pending: Promise<Response>): Promise<T> => {
     const response = await pending;
     expect(response.status, await response.clone().text()).toBe(200);
@@ -38,7 +41,7 @@ async function fixture(project: string) {
   const batch = (ops: object[], conditions?: object[]) => checked<BatchReply>(post(ops, conditions));
   const show = (id: string, query = "") => checked<ShownTicket>(request(`/tickets/${id}${query}`));
   const list = (query = "") => checked<ShownTicket[]>(request(`/tickets${query}`));
-  return {stub, request, post, batch, show, list, checked};
+  return {stub, request, write, post, batch, show, list, checked};
 }
 
 function create(title: string, parent?: string, fields: object = {}, extra: object = {}) {
@@ -418,5 +421,222 @@ test("serves the live graph, listing and a conditional batch with 5,000 stored t
     }
     expect(samples.some(({coldGraph}) => coldGraph > 0)).toBe(true);
     console.log(`coldArchive median was ${median(samples.map(({coldArchive}) => coldArchive)).toFixed(2)} ms`);
+  }
+});
+
+async function connectFeed(request: (path: string, init?: RequestInit) => Promise<Response>) {
+  const response = await request("/feed", {headers: {Upgrade: "websocket"}});
+  expect(response.status).toBe(101);
+  const socket = response.webSocket!;
+  socket.accept();
+  return socket;
+}
+
+function nextMessage(socket: WebSocket): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    socket.addEventListener("message", ({data}) => resolve(JSON.parse(data)), {once: true});
+    socket.addEventListener("close", ({code, reason}) => reject(new Error(`Feed closed: ${code} ${reason}`)), {once: true});
+  });
+}
+
+test("a hibernated subscriber wakes to recheck readiness after a committed change", async () => {
+  const {stub, request, batch, post, list} = await fixture("wait-ready");
+  const {seq, results: [{id: blocker}, {id: waiting}]} = await batch([
+    create("Prerequisite", undefined, {status: "in_progress"}),
+    create("Waiting", undefined, {}, {deps: ["$0"]}),
+  ]);
+  expect(await list("?ready=1")).toEqual([]);
+
+  const socket = await connectFeed(request);
+  try {
+    const catchup = nextMessage(socket);
+    socket.send('{"since":0}');
+    expect(await catchup).toEqual({seq, tickets: [blocker, waiting], leases: [], events: [], cutover: "before"});
+    await evictDurableObject(stub);
+
+    const wake = nextMessage(socket);
+    const rejected = await post([{op: "comment", id: waiting, text: "This must roll back"}, {op: "claim", id: "missing"}]);
+    expect(rejected.status).toBe(404);
+    const closed = await batch([{op: "close", id: blocker, reason: "Done"}]);
+    expect(await wake).toEqual({seq: closed.seq, tickets: [blocker], leases: [], events: [], cutover: "before"});
+    expect((await list("?ready=1")).map(({id}) => id)).toEqual([waiting]);
+  } finally {
+    socket.close();
+  }
+});
+
+test("catch-up includes comment and dependency changes with unchanged ticket versions", async () => {
+  const {stub, request, batch, show} = await fixture("feed-catchup");
+  const {seq, results: [{id: first}, {id: second}]} = await batch([create("First"), create("Second")]);
+  const version = (await show(first)).version;
+  const closed = await batch([
+    {op: "comment", id: first, text: "An update"},
+    {op: "dep_add", id: first, on: second},
+  ]);
+  expect((await show(first)).version).toBe(version);
+  await evictDurableObject(stub);
+
+  const socket = await connectFeed(request);
+  try {
+    const catchup = nextMessage(socket);
+    socket.send(JSON.stringify({since: seq}));
+    expect(await catchup).toEqual({
+      seq: closed.seq, tickets: [first, second], leases: [], events: [], cutover: "before",
+    });
+  } finally {
+    socket.close();
+  }
+});
+
+test("a reconnect with more than 500 changed tickets requests a resync", async () => {
+  const {request, batch} = await fixture("feed-resync");
+  await batch(Array.from({length: 501}, (_, index) => create(`Imported ticket ${index}`, undefined, {status: "closed"})));
+  const socket = await connectFeed(request);
+  try {
+    const catchup = nextMessage(socket);
+    socket.send('{"since":0}');
+    expect(await catchup).toEqual({resync: true});
+  } finally {
+    socket.close();
+  }
+});
+
+test("a public feed stays inside its project and requires a WebSocket upgrade", async () => {
+  const first = await fixture("feed-first");
+  const second = await fixture("feed-second");
+  expect((await first.request("/feed")).status).toBe(400);
+  const socket = await connectFeed(first.request);
+  try {
+    const change = nextMessage(socket);
+    socket.send('{"since":0}');
+    await second.batch([create("Out of scope")]);
+    const {seq, results: [{id}]} = await first.batch([create("Visible")]);
+    expect(await change).toEqual({seq, tickets: [id], leases: [], events: [], cutover: "before"});
+  } finally {
+    socket.close();
+  }
+});
+
+test("two commits in one turn share a frame with unique ticket IDs", async () => {
+  const {stub, request, batch} = await fixture("coalesce-feed");
+  const {seq, results: [{id}]} = await batch([create("Initial")]);
+  const socket = await connectFeed(request);
+  try {
+    const catchup = nextMessage(socket);
+    socket.send('{"since":0}');
+    await catchup;
+    const message = nextMessage(socket);
+    const nextSeq = await runInDurableObject(stub, ({store}, state) => {
+      // Both commits happen in the same turn, regardless of simulator speed.
+      const feed = new ChangeFeed(state, store);
+      for (const offset of [1, 2]) {
+        const change = {previous: seq + offset - 1, seq: seq + offset, tickets: [id]};
+        state.storage.transactionSync(() => {
+          store.sql.exec("UPDATE meta SET value = ? WHERE key = 'seq'", String(change.seq));
+          feed.record(change);
+        });
+        feed.publish(change);
+      }
+      return seq + 2;
+    });
+    expect(await message).toEqual({seq: nextSeq, tickets: [id], leases: [], events: [], cutover: "before"});
+  } finally {
+    socket.close();
+  }
+});
+
+test("replay crosses the journal wrap in sequence order", async () => {
+  const {stub, request, batch} = await fixture("feed-journal-wrap");
+  await runInDurableObject(stub, ({store}) => {
+    store.sql.exec("INSERT INTO meta VALUES ('seq', '4094')");
+  });
+  const first = await batch([create("Before wrap")]);
+  const second = await batch([create("After wrap")]);
+  const socket = await connectFeed(request);
+  try {
+    const message = nextMessage(socket);
+    socket.send('{"since":4094}');
+    expect(await message).toEqual({
+      seq: second.seq, tickets: [first.results[0].id, second.results[0].id],
+      leases: [], events: [], cutover: "before",
+    });
+  } finally {
+    socket.close();
+  }
+});
+
+
+test("feed replay includes lease names, event kinds and cutover state", async () => {
+  const {request, write, checked} = await fixture("feed-project-changes");
+  const lease = "vizier/epic/loop";
+  await checked(write("/leases/vizier%2Fepic%2Floop", {op: "acquire", holder: "worker", ttl_s: 180}));
+  await checked(write("/events", {kind: "machine", data: {drained: true}}));
+  const {seq} = await checked<{seq: number}>(write("/state", {cutover: "paused"}));
+
+  const socket = await connectFeed(request);
+  try {
+    const catchup = nextMessage(socket);
+    socket.send('{"since":0}');
+    expect(await catchup).toEqual({seq, tickets: [], leases: [lease], events: ["machine"], cutover: "paused"});
+  } finally {
+    socket.close();
+  }
+});
+
+test("the earliest lease expiry wakes a waiter and the alarm advances to the next deadline", async () => {
+  const {stub, request, write, checked} = await fixture("lease-feed-expiry");
+  const acquire = (name: string, ttl_s: number) =>
+    checked<{expires_at: string}>(write(`/leases/${name}`, {op: "acquire", holder: "owner", ttl_s}));
+  const late = await acquire("late", 600);
+  const early = await acquire("early", 300);
+  expect((await write("/leases/early", {op: "acquire", holder: "waiter", ttl_s: 300}, "waiter")).status).toBe(409);
+  const alarm = () => runInDurableObject(stub, (_instance, state) => state.storage.getAlarm());
+  const day = 86_400_000;
+  const midnight = (Math.floor((Date.parse(early.expires_at) - 300_000) / day) + 1) * day;
+  expect(await alarm()).toBe(Math.min(midnight, Date.parse(early.expires_at)));
+
+  const socket = await connectFeed(request);
+  try {
+    const catchup = nextMessage(socket);
+    socket.send('{"since":0}');
+    const {seq} = await catchup as {seq: number};
+    await runInDurableObject(stub, ({store}) => {
+      const expired = new Date(Date.now() - 1).toISOString();
+      store.sql.exec("UPDATE leases SET expires_at = ? WHERE name = 'early'", expired);
+    });
+
+    const wake = nextMessage(socket);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await wake).toEqual({seq: seq + 1, tickets: [], leases: ["early"], events: [], cutover: "before"});
+    expect(await alarm()).toBe(Math.min(midnight, Date.parse(late.expires_at)));
+    const reply = await checked<{holder: string}>(write("/leases/early", {op: "acquire", holder: "waiter", ttl_s: 300}, "waiter"));
+    expect(reply.holder).toBe("waiter");
+  } finally {
+    socket.close();
+  }
+});
+
+test("an alarm wakes a ready waiter when an open ticket's defer time passes", async () => {
+  const {stub, request, batch, list} = await fixture("defer-feed-expiry");
+  const future = "2999-01-01T00:00:00.000Z";
+  const {seq, results: [{id}]} = await batch([create("Timed task", undefined, {defer_until: future})]);
+  expect(await list("?ready=1")).toEqual([]);
+
+  const socket = await connectFeed(request);
+  try {
+    const catchup = nextMessage(socket);
+    socket.send('{"since":0}');
+    await catchup;
+    await runInDurableObject(stub, ({store}) => {
+      const passed = new Date(Date.now() - 2).toISOString();
+      store.sql.exec("UPDATE tickets SET defer_until = ? WHERE id = ?", passed, id);
+      store.invalidateIndex();
+    });
+    const wake = nextMessage(socket);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await wake).toEqual({seq: seq + 1, tickets: [id], leases: [], events: [], cutover: "before"});
+    expect((await list("?ready=1")).map((ticket) => ticket.id)).toEqual([id]);
+  } finally {
+    socket.close();
   }
 });

@@ -146,7 +146,6 @@ export function importTickets(write: ProjectWrite, project: string, body: unknow
   }
   const parents = new Map<string, string | null>();
   const seen = new Set<string>();
-  const changed: string[] = [];
   for (const input of snapshots) {
     const ticket = fields(input);
     const {id} = ticket;
@@ -172,11 +171,11 @@ export function importTickets(write: ProjectWrite, project: string, body: unknow
       if (!current || ticket.parent !== current.parent) parents.set(id, ticket.parent);
     }
     importRelated(write, project, id, input);
-    if (write.rowsWritten !== before) changed.push(id);
+    if (write.rowsWritten !== before) write.tickets.push(id);
   }
   checkParents(write.sql, parents);
-  if (changed.length) write.advance(historyFloor);
-  return {seq: write.seq, imported: changed.length, rows_written: write.rowsWritten};
+  if (write.tickets.length) write.advance(historyFloor);
+  return {seq: write.seq, imported: write.tickets.length, rows_written: write.rowsWritten};
 }
 
 type ExportRow = TicketRow & {edges: string; comments: string; history: string; aliases: string};

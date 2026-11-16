@@ -1,10 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import { version } from "../package.json";
-import { cutoverState, dayMilliseconds, events, leases, ProjectWrite, type Identity } from "./project-state";
+import { ChangeFeed, type FeedChange } from "./change-feed";
+import { ProjectDeadlines } from "./project-deadlines";
+import { cutoverState, dayMilliseconds, events, leases, ProjectWrite } from "./project-state";
 import { ProjectUsage } from "./project-usage";
 import { exportTickets, importTickets } from "./ticket-transfer";
 import { TicketStore } from "./ticket-store";
-import { ApiError, bad } from "./ticket-types";
+import { ApiError } from "./ticket-types";
+import { authorizeWrite, registeredMachine, type Identity } from "./token-auth";
 
 declare global {
   namespace Cloudflare {
@@ -27,18 +30,11 @@ function apiPath(pathname: string): RegExpExecArray | null {
 export class ProjectTickets extends DurableObject<Cloudflare.Env> {
   readonly store = new TicketStore(this.ctx.storage);
 
-  // GitHub refresh will populate this set with each token's registered machine.
-  private async authorize(request: Request): Promise<Identity> {
-    const token = /^Bearer (\S+)$/i.exec(request.headers.get("Authorization") ?? "")?.[1];
-    if (token) {
-      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
-      const hash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-      const accepted = JSON.parse(this.store.meta("token_hashes") ?? "[]") as string[] | Record<string, string>;
-      const actor = request.headers.get("X-Actor")?.trim();
-      const machine = Array.isArray(accepted) ? (accepted.includes(hash) ? actor ?? "" : undefined) : accepted[hash];
-      if (machine !== undefined) return {actor: actor || bad("Missing X-Actor"), machine};
-    }
-    throw new ApiError(401, {error: "Missing or unknown token"});
+  private readonly feed = new ChangeFeed(this.ctx, this.store);
+  private readonly deadlines = new ProjectDeadlines(this.store);
+
+  override webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
+    this.feed.subscribe(socket, message);
   }
 
   private state(usage: ProjectUsage) {
@@ -47,6 +43,7 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
 
   private get(project: string, path: string, request: Request, query: URLSearchParams, usage: ProjectUsage, now: number) {
     const sql = this.store.sql;
+    if (path === "/feed") return this.feed.upgrade(request);
     if (path === "/graph") return this.store.graph(request.headers.get("If-None-Match"), query);
     if (path === "/tickets") return Response.json(this.store.list(project, query));
     if (path === "/state") return Response.json(this.state(usage));
@@ -61,22 +58,42 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
   private write(project: string, path: string, lease: string | undefined, identity: Identity, body: unknown, now: number, usage: ProjectUsage) {
     usage.check(0);
     if (path === "/batch") {
-      return {body: this.store.batch(project, identity.actor, body, (rows) => {
-        usage.check(rows);
-        usage.record(rows);
-      })};
+      const previous = this.store.tickets.seq;
+      let change: FeedChange | undefined;
+      const reply = this.store.batch(project, identity.actor, body, (rows, changes) => {
+        if (changes.seq !== previous) change = {previous, seq: changes.seq, tickets: [...changes.changed]};
+        this.record(usage, rows, change);
+      });
+      if (change) this.feed.publish(change);
+      const armDeadlines = change?.tickets?.some((id) => {
+        const ticket = this.store.tickets.live.get(id);
+        return ticket?.status === "open" && ticket.defer_until && Date.parse(ticket.defer_until) >= now;
+      });
+      return {body: reply, status: 200, armDeadlines};
     }
 
     const write = new ProjectWrite(this.store.sql, now);
+    const previous = write.seq;
+    let change: FeedChange | undefined;
     const result = this.ctx.storage.transactionSync(() => {
       const reply = this.mutate(project, path, lease, identity, body, write);
-      usage.check(write.rowsWritten);
-      usage.record(write.rowsWritten);
+      if (write.seq !== previous) {
+        change = {previous, seq: write.seq, tickets: write.tickets, leases: write.leases, events: write.events};
+      }
+      this.record(usage, write.rowsWritten, change);
       return reply;
     });
-    if (path === "/import" && write.rowsWritten) this.store.invalidateIndex();
+    if (path === "/import" && change) this.store.invalidateIndex();
     else this.store.advanceSequence(write.seq);
-    return result ?? {body: this.state(usage)};
+    if (change) this.feed.publish(change);
+    const armDeadlines = change && (lease !== undefined || path === "/import");
+    return {...(result ?? {body: this.state(usage)}), armDeadlines};
+  }
+
+  private record(usage: ProjectUsage, rows: number, change?: FeedChange): void {
+    const total = rows + (change ? this.feed.record(change) : 0);
+    usage.check(total);
+    usage.record(total);
   }
 
   private mutate(project: string, path: string, lease: string | undefined, identity: Identity, body: unknown, write: ProjectWrite):
@@ -96,18 +113,21 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
     let accounted = false;
     try {
       if (request.method === "POST" && (lease !== undefined || ["/batch", "/state", "/events", "/import"].includes(path))) {
-        const identity = await this.authorize(request);
+        const identity = await authorizeWrite(request, (hash) => registeredMachine(this.store.meta("token_hashes"), hash));
         const body = await request.json();
         if (path === "/events") {
           // Arm retention before writing the first event so an eviction cannot
           // strand events in a project that then receives no more requests.
-          await this.ctx.blockConcurrencyWhile(async () => {
-            if (await this.ctx.storage.getAlarm() === null) await this.scheduleRetention();
-          });
+          await this.scheduleAlarm();
         }
         const now = Date.now();
         const result = this.write(project, path, lease, identity, body, now, new ProjectUsage(this.store.sql, now));
         accounted = true;
+        if (result.armDeadlines) {
+          const at = Date.now();
+          const {next, tickets, leases} = this.deadlines.scan(at);
+          await this.scheduleAlarm(tickets.length || leases.length ? at : next);
+        }
         return Response.json(result.body, {status: result.status ?? 200});
       }
       const now = Date.now();
@@ -126,27 +146,45 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
     }
   }
 
-  private scheduleRetention() {
+  private async scheduleAlarm(deadline = Infinity): Promise<void> {
     const nextDay = (Math.floor(Date.now() / dayMilliseconds) + 1) * dayMilliseconds;
-    return this.ctx.storage.setAlarm(nextDay);
+    const next = Math.min(nextDay, deadline);
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || next < current) await this.ctx.storage.setAlarm(next);
   }
 
   override async alarm(): Promise<void> {
     const now = Date.now();
     const usage = new ProjectUsage(this.store.sql, now);
+    const {tickets, leases, next} = this.deadlines.scan(now);
+    const write = new ProjectWrite(this.store.sql, now);
+    const day = usage.state().day;
+    let change: FeedChange | undefined;
     try {
       this.ctx.storage.transactionSync(() => {
         usage.check(0);
-        const write = new ProjectWrite(this.store.sql, now);
-        write.pruneEvents();
-        usage.check(write.rowsWritten);
-        usage.record(write.rowsWritten);
+        if (this.store.meta("last_retention_day") !== day) {
+          write.pruneEvents();
+          write.write("INSERT OR REPLACE INTO meta VALUES ('last_retention_day', ?)", day);
+        }
+        if (tickets.length || leases.length) {
+          const previous = write.seq;
+          change = {previous, seq: write.advance(), tickets, leases};
+          write.rowsWritten += this.deadlines.acknowledge(now);
+        }
+        this.record(usage, write.rowsWritten, change);
       });
     } catch (error) {
       if (!(error instanceof ApiError && error.status === 429)) throw error;
       usage.record();
+      await this.scheduleAlarm();
+      return;
     }
-    await this.scheduleRetention();
+    if (change) {
+      this.store.advanceSequence(change.seq);
+      this.feed.publish(change);
+    }
+    await this.scheduleAlarm(next);
   }
 }
 

@@ -1,4 +1,5 @@
 import {bad, choice, integer, name, object} from "./ticket-types";
+import type {Identity} from "./token-auth";
 
 export const dayMilliseconds = 86_400_000;
 const waiterLifetime = 60_000;
@@ -6,7 +7,6 @@ const eventKinds = ["session", "ci", "machine", "cutover", "usage"] as const;
 const cutoverStates = ["before", "paused", "after"] as const;
 type Cutover = typeof cutoverStates[number];
 
-export type Identity = {actor: string; machine: string};
 type Waiter = {holder: string; since: string};
 type Lease = {
   name: string;
@@ -62,6 +62,9 @@ export function cutoverState(sql: SqlStorage): {cutover: Cutover; cutover_at: st
 }
 
 export class ProjectWrite {
+  readonly tickets: string[] = [];
+  readonly leases: string[] = [];
+  readonly events: string[] = [];
   rowsWritten = 0;
   private sequence?: number;
 
@@ -112,6 +115,7 @@ export class ProjectWrite {
     const event = {seq: this.advance(), at: new Date(this.now).toISOString(), kind, machine, actor, data: input.data};
     this.write("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)",
       event.seq, event.at, kind, machine, actor, JSON.stringify(event.data));
+    this.events.push(kind);
     return event;
   }
 
@@ -148,6 +152,7 @@ export class ProjectWrite {
     if (op === "release" && !waiters.length) {
       this.write("DELETE FROM leases WHERE name = ?", leaseName);
       this.advance();
+      this.leases.push(leaseName);
       return {status: 200, body: {...current, expires_at: at, waiters}};
     }
     const next = {
@@ -162,6 +167,7 @@ export class ProjectWrite {
         expires_at = excluded.expires_at, payload = excluded.payload, waiters = excluded.waiters
     `, next.name, holder, machine, next.expires_at, JSON.stringify(next.payload), JSON.stringify(next.waiters));
     this.advance();
+    this.leases.push(leaseName);
     return {status: 200, body: next};
   }
 }

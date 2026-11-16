@@ -2018,8 +2018,15 @@ idle connection costs nothing.
   Changes within 100 ms are sent as one message.
 - Client to server, once after connecting: `{since: <seq>}`. If the server's
   `seq` differs, it replies with one message listing everything changed
-  since, or `{resync: true}` if that is more than 500 tickets.
-- A lease's expiry is announced by an alarm set for the earliest expiry.
+  since, or `{resync: true}` if that is more than 500 tickets or the
+  cursor is outside the journal's replay window.
+- One bounded SQLite journal row records each committed change alongside
+  the operation. The journal holds the latest 4,096 sequence slots and
+  replays at most 1,000 commits per subscription. A stale or missing
+  cursor can therefore never make a replay scan the whole database.
+- One alarm announces lease expiries and the end of a time-based readiness
+  block. It wakes at the earliest pending deadline and advances the
+  sequence so waiters recheck the state.
 - `tk wait` and the dashboard are the only clients. The dashboard fetches
   the HTML fragments for the tickets named and swaps them in.
 
@@ -2136,8 +2143,9 @@ the shared `meta.seq` row once. Excluding that row:
 
 The table estimates operation rows. A shared sequence write per changed
 request adds up to 13,000 rows. Exact durable request accounting can add
-another 31,500 rows, for about 73,500 in total before child allocation and
-Cloudflare's alarm scheduling writes. The daily counters reset at 00:00 UTC.
+another 31,500 rows, and the feed journal up to 13,000. Together that is
+about 86,500 rows before child allocation and Cloudflare's alarm scheduling
+writes. The daily counters reset at 00:00 UTC.
 The usage row itself counts toward the limit. When the row counter reaches
 the 90 percent threshold, accounting stops writing and public reads remain
 available. The server review verifies the remaining margin for both projects

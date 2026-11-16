@@ -117,18 +117,19 @@ test("counts committed rows, rejects quota-breaking batches atomically, and rese
   await json(batch("first"));
   await json(post("/leases/staging", {op: "acquire", holder: "worker", ttl_s: 180}));
   // The create writes five data rows including the sequence. The lease
-  // writes two. All four requests write one usage row each.
-  expect(await json(get("/state"))).toMatchObject({requests: 4, rows_written: 11, seq: 2});
+  // writes two. Both changes write one feed row, and every request writes
+  // one usage row.
+  expect(await json(get("/state"))).toMatchObject({requests: 4, rows_written: 13, seq: 2});
   const seed = (rows: number, requests: number, day: string) => sql((db) => {
     db.exec("UPDATE meta SET value = ? WHERE key = 'daily_usage'", JSON.stringify({rows_written: rows, requests, day}));
   });
   const today = new Date().toISOString().slice(0, 10);
-  await seed(89_995, 4, today);
+  await seed(89_994, 4, today);
   expect(await json(batch("rolled back"), 429)).toEqual({limit: "rows_written"});
   expect(await json<Ticket[]>(get("/tickets"))).toHaveLength(1);
-  expect(await json(get("/state"))).toMatchObject({requests: 7, rows_written: 89_998, seq: 2});
-  await seed(89_997, 7, today);
-  // A lease can use the last three rows including the usage and sequence rows.
+  expect(await json(get("/state"))).toMatchObject({requests: 7, rows_written: 89_997, seq: 2});
+  await seed(89_996, 7, today);
+  // A lease release can use the last four rows, including the feed row.
   await json(post("/leases/staging", {op: "release", holder: "worker"}));
   expect(await json(get("/state"))).toMatchObject({rows_written: 90_000, seq: 3});
   expect(await json(batch("at limit"), 429)).toEqual({limit: "rows_written"});
@@ -167,7 +168,7 @@ test("whole ticket snapshots export, replay idempotently, and reconcile changed 
   expect(first).toMatchObject({seq: 1, imported: 3});
   expect(first.rows_written).toBeGreaterThan(3);
   expect(await json(send(child, parent, other))).toEqual({seq: 1, imported: 0, rows_written: 0});
-  expect(await json(get("/state"))).toMatchObject({seq: 1, requests: 3, rows_written: first.rows_written + 3});
+  expect(await json(get("/state"))).toMatchObject({seq: 1, requests: 3, rows_written: first.rows_written + 4});
   expect(await json(get("/tickets/transfer-old"))).toMatchObject({id: "parent", children: ["parent.3"]});
   expect(await json(get("/tickets/parent.3?comments=1&history=1"))).toMatchObject({
     id: child.id, edges: child.edges, comments: child.comments, history: child.history,
