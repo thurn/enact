@@ -8,6 +8,8 @@ import io
 import json
 import multiprocessing
 import os
+import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -23,6 +25,129 @@ spec = importlib.util.spec_from_file_location("enact", SCRIPT)
 enact = importlib.util.module_from_spec(spec)
 sys.modules["enact"] = enact
 spec.loader.exec_module(enact)
+
+
+class TicketContractTests(unittest.TestCase):
+    def test_schema_and_api_cover_the_design(self):
+        root = SCRIPT.parents[1]
+        contract = (root / "docs" / "design.md").read_text(encoding="utf-8").split(
+            "## Cloudflare ticket system contract", 1
+        )[1]
+        files = root / "server" / "contract"
+        schema = (files / "schema.sql").read_text(encoding="utf-8")
+        self.assertEqual(schema, contract.split("```sql\n", 1)[1].split("```", 1)[0])
+        db = sqlite3.connect(":memory:")
+        self.addCleanup(db.close)
+        db.executescript(schema)
+        self.assertEqual(
+            {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")},
+            {"meta", "tickets", "edges", "comments", "history", "leases", "events", "aliases"},
+        )
+
+        api = json.loads((files / "api.json").read_text(encoding="utf-8"))
+        routes = re.findall(r"^\| `(GET|POST) (/[^?`]*)(?:\?[^`]*)?`", contract, re.M)
+        self.assertCountEqual(routes, [(route["method"], route["path"]) for route in api["routes"]])
+        for route in api["routes"]:
+            self.assertTrue(route["statuses"])
+            self.assertIn("request", route)
+            self.assertIn("response", route)
+        operations = contract.split("- Operations in `ops`:", 1)[1].split("- Result:", 1)[0]
+        self.assertEqual(set(re.findall(r"`([a-z_]+)`", re.sub(r"\([^)]*\)", "", operations))),
+                         set(api["batch"]["operations"]))
+        preconditions = contract.split("- Preconditions in `if`:", 1)[1].split("- Operations", 1)[0]
+        self.assertEqual(set(re.findall(r"`\{(?:id, )?(\w+)\}`", preconditions)),
+                         set(api["batch"]["preconditions"]))
+        lease = contract.split("### 5. Leases", 1)[1].split("### 6. The feed", 1)[0]
+        self.assertEqual(set(re.findall(r"`(acquire|renew|release)`", lease)),
+                         set(api["lease_operations"]))
+        self.assertEqual({"subscribe", "change", "resync"}, set(api["feed_messages"]))
+        cli = contract.split("### 9. The `tk` command line", 1)[1].split("```")[1]
+        self.assertEqual(set(re.findall(r"\btk ([a-z]+)", cli)), set(api["cli"]["commands"]))
+        self.assertEqual({"0", "1", "3", "4", "5", "6"}, set(api["cli"]["exit_codes"]))
+
+    def test_stub_readiness_and_atomic_batch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**os.environ, "TK_STUB_DB": str(Path(tmp) / "tickets.sqlite")}
+
+            def tk(*args, data=None, code=0, actor="worker"):
+                result = subprocess.run(
+                    [sys.executable, SCRIPT.with_name("tk_stub.py"), "--actor", actor, "--json", *args],
+                    input=json.dumps(data), capture_output=True, text=True, env=env,
+                )
+                self.assertEqual(result.returncode, code, result.stderr or result.stdout)
+                return json.loads(result.stdout)
+
+            def batch(*ops, conditions=(), code=0, actor="worker"):
+                return tk("batch", data={"if": conditions, "ops": ops}, code=code, actor=actor)
+
+            def create(title, **options):
+                return {"op": "create", "fields": {"title": title}, **options}
+
+            def close(name):
+                return {"op": "close", "id": name, "reason": "done"}
+
+            def blockers(name):
+                ticket = tk("show", "by-" + name)
+                self.assertEqual(ticket["ready"], not ticket["blocked_by"])
+                return {(entry["id"], entry["rule"]) for entry in ticket["blocked_by"]}
+
+            result = batch(
+                create("Parent"),
+                create("First", parent="$0"),
+                {"op": "create", "fields": {"title": "Audit", "last": 1}, "parent": "$0"},
+                create("Direct blocker"),
+                create("Inherited blocker"),
+            )
+            parent, first, last, direct, inherited = [item["id"] for item in result["results"]]
+            self.assertEqual((first, last), (parent + ".1", parent + ".2"))
+            self.assertEqual(blockers(parent), {(first, 5), (last, 5)})
+            self.assertEqual(blockers(first), set())
+            self.assertEqual(blockers(last), {(first, 4)})
+            batch(
+                {"op": "update", "id": first, "set": {"defer_until": "9999-01-01"}},
+                {"op": "dep_add", "id": first, "on": direct, "kind": "conditional-blocks"},
+                {"op": "dep_add", "id": parent, "on": inherited, "kind": "waits-for"},
+                {"op": "dep_add", "id": first, "on": last, "kind": "related"},
+            )
+            self.assertEqual(blockers(first), {(first, 1), (direct, 2), (inherited, 3)})
+            batch(
+                {"op": "update", "id": first, "set": {"defer_until": "2000-01-01"}},
+                create("Child of blocker", parent=direct),
+                close(direct),
+                close(inherited),
+            )
+            self.assertEqual(blockers(first), {(direct, 2)})
+            batch(close(direct + ".1"))
+            self.assertEqual(blockers(first), set())
+
+            before = tk("graph")
+            current = tk("show", first, "--comments", "--history")
+            result = batch(create("Rolled back", parent=parent),
+                           conditions=[{"seq": before["seq"]}, {"id": first, "status": "closed"}],
+                           code=3)
+            self.assertEqual(result["failed"], 1)
+            self.assertEqual(result["current"]["id"], first)
+            self.assertEqual(tk("graph"), before)
+            self.assertEqual(tk("show", first, "--comments", "--history"), current)
+            self.assertEqual(tk("show", parent)["next_child"], 3)
+
+            batch({"op": "claim", "id": first}, conditions=[
+                {"id": first, "assignee": None}, {"id": first, "version": current["version"]},
+            ])
+            self.assertEqual(blockers(first), {(first, 1)})
+            before = tk("graph")
+            batch({"op": "comment", "id": first, "text": "rolled back"},
+                  {"op": "claim", "id": first}, code=3, actor="other")
+            self.assertEqual(tk("graph"), before)
+            self.assertEqual(tk("show", first, "--comments")["comments"], [])
+            batch(close(first))
+            self.assertEqual(blockers(last), set())
+            result = batch(close(last))
+            self.assertEqual(result["results"][0]["closed"], [parent])
+            self.assertEqual(tk("show", parent)["status"], "closed")
+            self.assertEqual(tk("list", "--ancestor", parent), [])
+            self.assertEqual({ticket["id"] for ticket in tk("list", "--ancestor", parent, "--all")},
+                             {first, last})
 
 
 def lock_log_holder(root, connection):

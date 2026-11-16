@@ -1793,3 +1793,311 @@ instead of adopting it needs the plan's context.
   above; other machines see them a few seconds later.
 - `ENACT_SYNC_NOW` still makes every sync push before returning. The
   integration tests set it.
+
+## Cloudflare ticket system contract
+
+This is the settled design every child ticket builds against. A ticket that
+finds it wrong changes it here, in the same session, and comments on the epic
+with what changed and why; it does not work around it.
+
+### 1. Storage
+
+One Durable Object per project, named by the project key (`by`, `en`). Its
+SQLite database is `server/contract/schema.sql`:
+
+```sql
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+-- keys: seq (global change counter), cutover (before|paused|after),
+-- cutover_at, day (UTC date of the counters), requests, rows_written,
+-- token_hashes (JSON array), token_fetched_at
+
+CREATE TABLE tickets (
+  id          TEXT PRIMARY KEY,          -- 'q44s.7.24', no project prefix
+  parent      TEXT,                      -- id with the last dotted part removed
+  next_child  INTEGER NOT NULL DEFAULT 1,-- next number handed to a child
+  title       TEXT NOT NULL,
+  body        TEXT NOT NULL DEFAULT '',
+  acceptance  TEXT NOT NULL DEFAULT '',
+  design      TEXT NOT NULL DEFAULT '',
+  notes       TEXT NOT NULL DEFAULT '',
+  type        TEXT NOT NULL DEFAULT 'task',   -- task|epic|bug|feature|chore|decision|spike|story|milestone
+  status      TEXT NOT NULL DEFAULT 'open',   -- open|in_progress|blocked|deferred|closed
+  priority    INTEGER NOT NULL DEFAULT 2,     -- 0..4
+  assignee    TEXT,
+  last        INTEGER NOT NULL DEFAULT 0,     -- 1: runs after its siblings (section 4)
+  labels      TEXT NOT NULL DEFAULT '[]',     -- JSON array of strings
+  metadata    TEXT NOT NULL DEFAULT '{}',     -- JSON object (Enact's enact_* keys)
+  defer_until TEXT,
+  close_reason TEXT,
+  created_at  TEXT NOT NULL, created_by TEXT NOT NULL,
+  updated_at  TEXT NOT NULL, closed_at TEXT,
+  version     INTEGER NOT NULL                -- value of seq at the last change
+) WITHOUT ROWID;
+CREATE INDEX tickets_live ON tickets(status) WHERE status != 'closed';
+CREATE INDEX tickets_parent ON tickets(parent) WHERE parent IS NOT NULL;
+
+CREATE TABLE edges (                       -- src depends on dst
+  src TEXT NOT NULL, dst TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'blocks',     -- blocks|conditional-blocks|waits-for|related|discovered-from
+  PRIMARY KEY (src, dst)
+) WITHOUT ROWID;
+CREATE INDEX edges_dst ON edges(dst);
+
+CREATE TABLE comments (
+  ticket TEXT NOT NULL, n INTEGER NOT NULL,
+  author TEXT NOT NULL, at TEXT NOT NULL, text TEXT NOT NULL,
+  PRIMARY KEY (ticket, n)
+) WITHOUT ROWID;
+
+CREATE TABLE history (                     -- the changelog
+  ticket TEXT NOT NULL, seq INTEGER NOT NULL,
+  actor TEXT NOT NULL, at TEXT NOT NULL,
+  change TEXT NOT NULL,                    -- JSON: {field: [old, new], ...}
+  PRIMARY KEY (ticket, seq)
+) WITHOUT ROWID;
+
+CREATE TABLE leases (
+  name TEXT PRIMARY KEY, holder TEXT NOT NULL, machine TEXT NOT NULL,
+  expires_at TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}',
+  waiters TEXT NOT NULL DEFAULT '[]'       -- JSON array of {holder, since}, arrival order
+) WITHOUT ROWID;
+
+CREATE TABLE events (
+  seq INTEGER PRIMARY KEY, at TEXT NOT NULL,
+  kind TEXT NOT NULL,                      -- session|ci|machine|cutover|usage
+  machine TEXT NOT NULL, actor TEXT NOT NULL, data TEXT NOT NULL  -- JSON
+);
+CREATE INDEX events_kind ON events(kind, seq);
+
+CREATE TABLE aliases (alias TEXT PRIMARY KEY, id TEXT NOT NULL) WITHOUT ROWID;
+```
+
+- Labels and metadata are JSON in the ticket's row, not tables. Filtering by
+  label scans the live tickets, of which there are a few hundred.
+- When the object wakes it loads every ticket whose status is not `closed`,
+  and the edges among them, into memory. `graph`, `ready` and readiness are
+  answered from memory; writes go to SQLite and memory in one transaction.
+- An imported bead's whole changelog is one `history` row (`seq` 0, `change`
+  a JSON array of the old events). This keeps a full import near 40,000 rows
+  written, inside one day's limit; the importer ticket measures the real
+  figure.
+- Events older than 30 days are deleted by a daily alarm.
+
+### 2. IDs
+
+- Alphabet: `0123456789abcdefghjkmnpqrstvwxyz` (base32 without `i l o u`).
+- A new root is 4 characters, the first one a letter, chosen at random and
+  retried on collision with a ticket or an alias.
+- A child's ID is `<parent>.<next_child>`, taking and incrementing the
+  parent's `next_child` in the same transaction. Depth is not limited.
+- Every lookup strips a leading `<project>-` and then consults `aliases`. The
+  importer sets each parent's `next_child` to one past its highest child.
+  Imported roots keep whatever characters they have.
+
+### 3. HTTP API
+
+All routes are under `/<project>/api`. Reads need no token. Writes need
+`Authorization: Bearer <token>` and take the session's name from
+`X-Actor` and the machine's from the token's registration.
+
+| Route | Does |
+| --- | --- |
+| `GET /state` | `{cutover, cutover_at, seq, day, requests, rows_written, limits}` |
+| `GET /tickets/<id>?comments=1&history=1` | One ticket with its edges in both directions, children, `ready` and `blocked_by` |
+| `GET /tickets?status=&type=&parent=&ancestor=&label=&assignee=&ready=1&all=1&limit=` | A list; closed tickets only with `all=1` or `status=closed` |
+| `GET /graph` | Every live ticket (all fields except `body`, `design`, `notes`) with edges and `seq`; `ETag` is `seq`, so `If-None-Match` gives 304 |
+| `POST /batch` | The only way to write tickets (below) |
+| `POST /leases/<name>` | `{op: acquire\|renew\|release, holder, ttl_s, payload}` |
+| `GET /leases` | Every lease with its holder, expiry and waiters |
+| `POST /events` | `{kind, data}` |
+| `GET /events?kind=&since=&limit=` | Events after `since` |
+| `GET /feed` | WebSocket (section 6) |
+| `POST /import` | Up to 200 tickets with edges, comments and history; idempotent |
+| `GET /export?after=<id>` | JSON lines of whole tickets sorted by ID, paged |
+| `POST /state` | `{cutover}`; only moves forward, except `paused` to `before` |
+
+`POST /batch` takes `{if: [...], ops: [...]}` and applies all of it in one
+transaction or none of it.
+
+- Preconditions in `if`: `{id, version}`, `{id, assignee}` (null for
+  unassigned), `{id, status}`, `{seq}` (nothing at all has changed since).
+- Operations in `ops`: `create` (fields; `parent`; `deps`; returns the new
+  ID, which later operations in the batch may name as `$0`, `$1`), `update`
+  (`set` fields, `add_labels`, `remove_labels`, `set_meta`, `unset_meta`),
+  `claim` (sets `assignee` to the actor and `status` to `in_progress`; fails
+  if assigned to anyone else), `close` (`reason`), `reopen`, `defer`
+  (`until`), `comment` (`text`), `dep_add`, `dep_remove` (`on`, `kind`).
+- Result: `{seq, results: [...]}`, or status 409 with
+  `{failed: <index of the precondition or operation>, current: <ticket>}`.
+- Closing a ticket also closes each ancestor whose descendants are now all
+  closed, in the same transaction, and reports them in the result.
+
+Status codes: 200; 304; 400 malformed; 401 missing or unknown token; 404 no
+such ticket; 409 precondition failed or claim or lease lost; 429 with
+`{limit: requests|rows_written}` when the object's own count says the write
+would pass 90 percent of a daily limit.
+
+There are no endpoints written specially for Enact. Its scheduler stays in
+Python: `enact next` is one `GET /graph` (usually a 304 against the copy the
+helper cached on disk) and one `POST /batch` whose preconditions make the
+reservation atomic. `enact start` and `enact close` are one batch each, the
+close with `--continue` reading the reply's graph delta to pick the lane's
+next ticket and claiming it in a second batch. So an Enact command makes at
+most two requests (three for a lane continuation), and none under a lock.
+
+### 4. Readiness
+
+A ticket is **ready** when all of these hold:
+
+1. Its status is `open`, and `defer_until` is absent or in the past.
+2. Every `edges` row from it of kind `blocks`, `conditional-blocks` or
+   `waits-for` points at a ticket that is closed and, if that ticket has
+   children, has no live descendant.
+3. The same holds for every ancestor's blocking edges.
+4. If `last` is 1: every other descendant of its parent whose `last` is 0 is
+   closed.
+5. It has no live child. A ticket with children is a container and closes
+   by itself.
+
+`GET /tickets/<id>` reports `blocked_by` as the list of ticket IDs that make
+it not ready, with which rule each came from, so a listing can always say
+why. Nothing is hidden from listings for being blocked.
+
+### 5. Leases
+
+A lease is a named, expiring claim. Names in use: `staging` (the merge
+queue's lock, `ttl_s` 180, renewed every 60 s while a batch is checked),
+`justiciar/<machine>`, and `vizier/<epic>/<vizier>` (the liveness leases
+that are files under the clone's state directory today).
+
+- `acquire`: succeeds if there is no row, the row has expired, or the caller
+  already holds it. Otherwise the caller is appended to `waiters` if absent
+  and gets 409 with the holder, expiry and its position. An expired lease
+  goes to the first waiter that asks; a waiter that has not asked for 60 s
+  is dropped.
+- `renew` and `release` succeed only for the holder; anyone else gets 409,
+  which is how a holder learns it lost the lease (`LeaseLost` in Enact).
+- A waiter does not poll: it holds the feed and asks again when told the
+  lease changed or reached its expiry.
+
+### 6. The feed
+
+`GET /feed` upgrades to a WebSocket, accepted with the hibernation API so an
+idle connection costs nothing.
+
+- Server to client, after each committed change:
+  `{seq, tickets: [ids], leases: [names], events: [kinds], cutover}`.
+  Changes within 100 ms are sent as one message.
+- Client to server, once after connecting: `{since: <seq>}`. If the server's
+  `seq` differs, it replies with one message listing everything changed
+  since, or `{resync: true}` if that is more than 500 tickets.
+- A lease's expiry is announced by an alarm set for the earliest expiry.
+- `tk wait` and the dashboard are the only clients. The dashboard fetches
+  the HTML fragments for the tickets named and swaps them in.
+
+### 7. Cutover state and the shim
+
+- The shim caches `GET /state` in a file for 5 seconds for calls that only
+  read. A call that writes always fetches it first.
+- `before`: run the real `bd`. If the server cannot be reached, also run the
+  real `bd`.
+- `paused`: on first seeing it, publish the machine's bead store (`enact
+  sync` with `ENACT_SYNC_NOW`) and post a `machine` event `{drained: true}`;
+  then wait on the feed for the state to change.
+- `after`: answer from the server.
+- The cutover session sets `paused`, waits until every machine that posted a
+  `machine` event in the previous 10 minutes has posted `drained` (at most 5
+  minutes, else it sets `before` again and stops), pulls the bead store, runs
+  the final import and comparison, and sets `after`.
+- One hour later it pulls the bead store's remote once more and imports any
+  bead changed after `cutover_at`, to catch a write that was in flight on a
+  machine that was asleep during the pause.
+
+### 8. Tokens
+
+- `tk register` writes 32 random bytes, hex encoded, to
+  `~/.config/enact/token` (`%APPDATA%\enact\token` on Windows), and pushes
+  the ref `refs/enact/tokens/<machine>/<sha256 of the token>` to the
+  project's GitHub remote, pointing at the repository's first commit. It
+  deletes the machine's older refs.
+- On a write whose token hash is not in `meta.token_hashes`, the server
+  calls GitHub's public `git/matching-refs/enact/tokens` for the project's
+  repository, at most once a minute, replaces the stored set with the ref
+  names, and decides. The repository for each project is a Worker variable.
+
+### 9. The `tk` command line
+
+Global options: `--project`, `--actor`, `--json`, `--retry-for <seconds>`
+(default 120). The server's address and the project come from `[tickets]`
+in `.enact.toml`.
+
+```
+tk show <id> [--comments] [--history]
+tk list [--status S] [--type T] [--parent ID] [--ancestor ID] [--label L]...
+        [--assignee A] [--all] [--limit N]
+tk ready [--ancestor ID] [--label L]...
+tk graph
+tk create --title T [--type T] [-p N] [--parent ID] [--labels a,b]
+          [--body-file F] [--acceptance A] [--design-file F] [--dep ID]... [--last]
+tk update <id> [--title T] [--status S] [-p N] [--assignee A] [--parent ID]
+          [--body-file F] [--acceptance A] [--notes N] [--add-label L]...
+          [--remove-label L]... [--set k=v]... [--unset k]... [--last|--no-last]
+          [--if-version N] [--if-assignee A]
+tk claim <id>
+tk close <id> --reason R
+tk reopen <id>
+tk defer <id> --until DATE
+tk comment <id> [TEXT | --body-file F]
+tk dep add|remove <id> <on> [--kind K]
+tk batch                      # the /batch JSON on stdin
+tk lease acquire|renew|release <name> [--ttl S] [--holder H] [--payload JSON]
+tk leases
+tk event <kind> <json>
+tk events [--kind K] [--since SEQ]
+tk wait ready [--ancestor ID] [--label L]... | ticket <id> [--status S]
+        | lease <name> | change   --timeout S
+tk state [--set-cutover before|paused|after]
+tk export | tk import <bd-export.jsonl> [--history-dir D] | tk compare
+tk register | tk bench | tk version
+```
+
+Without `--json` a command prints a short human-readable form; with it, the
+server's JSON. Exit codes: 0 done; 1 bad usage, not found or a malformed
+request; 3 a precondition failed or a claim or lease belongs to someone else
+(the code Enact already uses for a lost race); 4 the server could not be
+reached within `--retry-for`; 5 a daily limit was hit and did not clear
+within `--retry-for`; 6 `tk wait` timed out. Retries back off from 0.2 s to
+10 s. Only reads and operations with preconditions are retried without
+asking the server whether the first attempt landed; a `create` carries a
+client-chosen request key that the server remembers for a day, so a retry
+never creates twice.
+
+Invoked as `bd`, the binary is the shim (section 7).
+
+### 10. Budget
+
+Rows written count index entries. Per operation: `create` about 4, plus 2 for
+each dependency; `update`, `claim`, `close` about 3 (the ticket, its
+history row, and a `tickets_live` entry when the status changes); `comment`
+1; `event` 2; a lease operation 1.
+
+| A normal day | Count | Requests | Rows written |
+| --- | --- | --- | --- |
+| Ticket writes (create, update, claim, close) | 6,000 | 6,000 | 20,000 |
+| Comments | 1,000 | 1,000 | 1,000 |
+| Reads by sessions (`show`, `list`, `graph`, `state`) | 15,000 | 15,000 | 0 |
+| Lease operations, staging renewals included | 4,000 | 4,000 | 4,000 |
+| Session, CI and machine events | 2,000 | 2,000 | 4,000 |
+| Dashboard pages and fragments | 3,000 | 3,000 | 0 |
+| Feed connections and messages | | 500 | 0 |
+| **Total** | | **31,500 of 100,000** | **29,000 of 100,000** |
+
+Rows read stay far below 5 million because live tickets are served from
+memory. Static assets are not counted as requests. The server refuses writes
+at 90 percent of a limit and the dashboard shows both counters, so a runaway
+caller is seen long before it stops the fleet.
+
+
+### 11. Deployment target
+
+Use the existing `tickets` Worker in Cloudflare account `0cc730645e29feff389c14f36cb9cf4c` and its enabled `thurn.workers.dev` account subdomain. Set the Worker name to `tickets` and deploy the server to `https://tickets.thurn.workers.dev/`. The existing dashboard-created version serves `Hello World!`; replace that version when the deployment bead is ready. The account subdomain and Worker route were verified through Cloudflare on 2026-11-16, and the placeholder returned HTTP 200 over HTTPS. The dashboard is at https://dash.cloudflare.com/0cc730645e29feff389c14f36cb9cf4c/workers/services/view/tickets/production. Do not create a second Worker or change the account subdomain.

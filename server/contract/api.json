@@ -1,0 +1,181 @@
+{
+  "base": "/<project>/api",
+  "write_headers": {"Authorization": "Bearer <token>", "X-Actor": "string"},
+  "statuses": {
+    "200": "Success",
+    "304": "Graph unchanged",
+    "400": "Malformed request",
+    "401": "Missing or unknown token",
+    "404": "Ticket not found",
+    "409": "Precondition failed, or claim or lease lost",
+    "429": "Daily write threshold reached"
+  },
+  "error_bodies": {
+    "429": {"limit": "requests|rows_written"}
+  },
+  "types": {
+    "Ticket input fields": {
+      "title": "string (required on create)", "parent": "ticket ID|null", "body": "string", "acceptance": "string",
+      "design": "string", "notes": "string", "type": "task|epic|bug|feature|chore|decision|spike|story|milestone",
+      "status": "open|in_progress|blocked|deferred|closed", "priority": "0..4", "assignee": "string|null",
+      "last": "0|1", "labels": "string[]", "metadata": "object", "defer_until": "timestamp|null"
+    },
+    "Ticket": {
+      "input fields": "Ticket input fields", "id": "ticket ID", "next_child": "integer", "created_at": "timestamp",
+      "created_by": "string", "updated_at": "timestamp", "closed_at": "timestamp|null", "close_reason": "string|null",
+      "version": "seq"
+    },
+    "Edge": {"src": "ticket ID", "dst": "ticket ID", "kind": "blocks|conditional-blocks|waits-for|related|discovered-from"},
+    "Comment": {"ticket": "ticket ID", "n": "integer", "author": "string", "at": "timestamp", "text": "string"},
+    "History": {"ticket": "ticket ID", "seq": "integer", "actor": "string", "at": "timestamp", "change": "field changes or imported event array"},
+    "Lease": {"name": "string", "holder": "string", "machine": "string", "expires_at": "timestamp", "payload": "object", "waiters": "{holder, since}[]"},
+    "Event": {"seq": "integer", "at": "timestamp", "kind": "session|ci|machine|cutover|usage", "machine": "string", "actor": "string", "data": "JSON"}
+  },
+  "routes": [
+    {
+      "method": "GET", "path": "/state", "request": {},
+      "response": {"cutover": "before|paused|after", "cutover_at": "timestamp|null", "seq": "integer", "day": "date", "requests": "integer", "rows_written": "integer", "limits": "object"},
+      "statuses": [200]
+    },
+    {
+      "method": "GET", "path": "/tickets/<id>",
+      "request": {"path": {"id": "ticket ID"}, "query": {"comments": "1?", "history": "1?"}},
+      "response": {"ticket fields": "Ticket", "edges": "Edge[] (both directions)", "children": "ticket ID[]", "ready": "boolean", "blocked_by": "{id, rule}[]", "comments": "Comment[]?", "history": "History[]?"},
+      "statuses": [200, 400, 404]
+    },
+    {
+      "method": "GET", "path": "/tickets",
+      "request": {"query": {"status": "string?", "type": "string?", "parent": "ticket ID?", "ancestor": "ticket ID?", "label": "string[]?", "assignee": "string?", "ready": "1?", "all": "1?", "limit": "integer?"}},
+      "response": {"body": "Ticket[] (closed only with all=1 or status=closed)"},
+      "statuses": [200, 400]
+    },
+    {
+      "method": "GET", "path": "/graph",
+      "request": {"headers": {"If-None-Match": "seq?"}},
+      "response": {"tickets": "Ticket[] (live, omitting body, design and notes)", "edges": "Edge[]", "seq": "integer", "headers": {"ETag": "seq"}},
+      "statuses": [200, 304]
+    },
+    {
+      "method": "POST", "path": "/batch",
+      "request": {"body": {"if": "Precondition[]", "ops": "Operation[]"}},
+      "response": {"seq": "integer", "results": "OperationResult[]"},
+      "conflict": {"failed": "zero-based precondition or operation index", "current": "Ticket|null"},
+      "statuses": [200, 400, 401, 404, 409, 429]
+    },
+    {
+      "method": "POST", "path": "/leases/<name>",
+      "request": {"path": {"name": "lease name"}, "body": {"op": "acquire|renew|release", "holder": "string", "ttl_s": "integer?", "payload": "object?"}},
+      "response": {"body": "Lease"},
+      "statuses": [200, 400, 401, 409, 429]
+    },
+    {
+      "method": "GET", "path": "/leases", "request": {},
+      "response": {"body": "Lease[]"},
+      "statuses": [200]
+    },
+    {
+      "method": "POST", "path": "/events",
+      "request": {"body": {"kind": "session|ci|machine|cutover|usage", "data": "JSON"}},
+      "response": {"body": "Event"},
+      "statuses": [200, 400, 401, 429]
+    },
+    {
+      "method": "GET", "path": "/events",
+      "request": {"query": {"kind": "string?", "since": "seq?", "limit": "integer?"}},
+      "response": {"body": "Event[]"},
+      "statuses": [200, 400]
+    },
+    {
+      "method": "GET", "path": "/feed",
+      "request": {"headers": {"Upgrade": "websocket"}},
+      "response": {"upgrade": "WebSocket"},
+      "statuses": [101, 400]
+    },
+    {
+      "method": "POST", "path": "/import",
+      "request": {"body": "up to 200 whole tickets with edges, comments and history"},
+      "response": {"body": "success acknowledgement (fields unspecified)"},
+      "statuses": [200, 400, 401, 429]
+    },
+    {
+      "method": "GET", "path": "/export",
+      "request": {"query": {"after": "ticket ID?"}},
+      "response": {"body": "JSON lines of whole tickets ordered by ID, paged"},
+      "statuses": [200, 400]
+    },
+    {
+      "method": "POST", "path": "/state",
+      "request": {"body": {"cutover": "before|paused|after"}},
+      "response": {"cutover": "before|paused|after", "cutover_at": "timestamp|null", "seq": "integer", "day": "date", "requests": "integer", "rows_written": "integer", "limits": "object"},
+      "statuses": [200, 400, 401, 429]
+    }
+  ],
+  "batch": {
+    "preconditions": {
+      "version": {"request": {"id": "ticket ID", "version": "integer"}, "statuses": [200, 409]},
+      "assignee": {"request": {"id": "ticket ID", "assignee": "string|null"}, "statuses": [200, 409]},
+      "status": {"request": {"id": "ticket ID", "status": "string"}, "statuses": [200, 409]},
+      "seq": {"request": {"seq": "integer"}, "statuses": [200, 409]}
+    },
+    "precondition_response": {"success": "Batch result", "conflict": "{failed, current}"},
+    "operations": {
+      "create": {"request": {"fields": "Ticket input fields", "parent": "ticket ID?", "deps": "dependency[]?", "request_key": "string?"}, "response": {"id": "new ticket ID (referenced as $<operation index>)"}, "statuses": [200, 400, 404]},
+      "update": {"request": {"id": "ticket ID", "set": "Ticket input fields?", "add_labels": "string[]?", "remove_labels": "string[]?", "set_meta": "object?", "unset_meta": "string[]?"}, "response": {"id": "ticket ID"}, "statuses": [200, 400, 404]},
+      "claim": {"request": {"id": "ticket ID"}, "response": {"id": "claimed ticket ID"}, "statuses": [200, 404, 409]},
+      "close": {"request": {"id": "ticket ID", "reason": "string"}, "response": {"id": "closed ticket ID", "closed": "automatically closed ancestor IDs (remove these and id from the cached live graph)"}, "statuses": [200, 404]},
+      "reopen": {"request": {"id": "ticket ID"}, "response": {"id": "reopened ticket ID"}, "statuses": [200, 404]},
+      "defer": {"request": {"id": "ticket ID", "until": "timestamp"}, "response": {"id": "deferred ticket ID"}, "statuses": [200, 404]},
+      "comment": {"request": {"id": "ticket ID", "text": "string"}, "response": {"id": "ticket ID"}, "statuses": [200, 404]},
+      "dep_add": {"request": {"id": "ticket ID", "on": "ticket ID", "kind": "edge kind?"}, "response": {"id": "dependent ticket ID"}, "statuses": [200, 400, 404]},
+      "dep_remove": {"request": {"id": "ticket ID", "on": "ticket ID", "kind": "edge kind?"}, "response": {"id": "dependent ticket ID"}, "statuses": [200, 404]}
+    }
+  },
+  "lease_operations": {
+    "acquire": {"request": {"holder": "string", "ttl_s": "integer", "payload": "object?"}, "response": {"body": "Lease"}, "conflict": {"holder": "string", "expires_at": "timestamp", "position": "integer"}, "statuses": [200, 409]},
+    "renew": {"request": {"holder": "string", "ttl_s": "integer", "payload": "object?"}, "response": {"body": "Lease"}, "conflict": {"holder": "string|null", "expires_at": "timestamp|null"}, "statuses": [200, 409]},
+    "release": {"request": {"holder": "string"}, "response": {"body": "released Lease"}, "conflict": {"holder": "string|null", "expires_at": "timestamp|null"}, "statuses": [200, 409]}
+  },
+  "feed_messages": {
+    "subscribe": {"direction": "client to server", "request": {"since": "seq"}, "response": "change or resync when seq differs"},
+    "change": {"direction": "server to client", "response": {"seq": "integer", "tickets": "ticket ID[]", "leases": "lease name[]", "events": "event kind[]", "cutover": "before|paused|after"}},
+    "resync": {"direction": "server to client", "response": {"resync": true}}
+  },
+  "cli": {
+    "global_options": ["--project", "--actor", "--json", "--retry-for <seconds>"],
+    "commands": {
+      "show": "<id> [--comments] [--history]",
+      "list": "[--status S] [--type T] [--parent ID] [--ancestor ID] [--label L]... [--assignee A] [--all] [--limit N]",
+      "ready": "[--ancestor ID] [--label L]...",
+      "graph": "",
+      "create": "--title T [--type T] [-p N] [--parent ID] [--labels a,b] [--body-file F] [--acceptance A] [--design-file F] [--dep ID]... [--last]",
+      "update": "<id> [--title T] [--status S] [-p N] [--assignee A] [--parent ID] [--body-file F] [--acceptance A] [--notes N] [--add-label L]... [--remove-label L]... [--set k=v]... [--unset k]... [--last|--no-last] [--if-version N] [--if-assignee A]",
+      "claim": "<id>",
+      "close": "<id> --reason R",
+      "reopen": "<id>",
+      "defer": "<id> --until DATE",
+      "comment": "<id> [TEXT | --body-file F]",
+      "dep": "add|remove <id> <on> [--kind K]",
+      "batch": "batch JSON on stdin",
+      "lease": "acquire|renew|release <name> [--ttl S] [--holder H] [--payload JSON]",
+      "leases": "",
+      "event": "<kind> <json>",
+      "events": "[--kind K] [--since SEQ]",
+      "wait": "ready [--ancestor ID] [--label L]... | ticket <id> [--status S] | lease <name> | change --timeout S",
+      "state": "[--set-cutover before|paused|after]",
+      "export": "",
+      "import": "<bd-export.jsonl> [--history-dir D]",
+      "compare": "",
+      "register": "",
+      "bench": "",
+      "version": ""
+    },
+    "exit_codes": {
+      "0": "Done",
+      "1": "Bad usage, not found or malformed request",
+      "3": "Failed precondition or lost claim or lease",
+      "4": "Server unreachable within retry window",
+      "5": "Daily limit did not clear within retry window",
+      "6": "Wait timed out"
+    }
+  }
+}
