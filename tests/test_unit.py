@@ -25,6 +25,19 @@ sys.modules["enact"] = enact
 spec.loader.exec_module(enact)
 
 
+def lock_log_holder(root, connection):
+    """Hold the ownership lock as `enact.py meta by-x`, with one 50 ms sync,
+    until told to let go."""
+    sys.argv = ["enact.py", "meta", "by-x"]
+    root = Path(root)
+    repo = enact.Repo(root, root, root / ".git", enact.Config())
+    enact.sync_unlogged = lambda repo, force: time.sleep(0.05) or {}
+    with enact.ownership_lock(repo):
+        enact.sync(repo)
+        connection.send("held")
+        connection.recv()
+
+
 def lock_runner(path, mode, connection):
     """A real contender, with barriers at the two former race windows."""
     path = Path(path)
@@ -1419,6 +1432,66 @@ class OwnershipLockWaitTest(unittest.TestCase):
         with enact.ownership_lock(self.repo, wait=1):
             pass
         self.assertEqual(list(queue.iterdir()), [])
+
+    def lock_log(self):
+        text = (self.repo.state / "lock-waits.jsonl").read_text()
+        return [json.loads(line) for line in text.splitlines()]
+
+    def test_a_contended_wait_logs_both_holds(self):
+        context = multiprocessing.get_context("spawn")
+        parent, child = context.Pipe()
+        holder = context.Process(target=lock_log_holder,
+                                 args=(str(self.repo.main), child))
+        holder.start()
+        self.addCleanup(holder.join, 30)
+        self.assertTrue(parent.poll(60))
+        self.assertEqual(parent.recv(), "held")
+        # Let go only once this process has waited for over a second.
+        release = threading.Timer(1.5, parent.send, ("release",))
+        release.start()
+        self.addCleanup(release.join)
+        with enact.ownership_lock(self.repo, wait=60):
+            pass
+        first, second = self.lock_log()
+        self.assertEqual(first["command"], "enact.py meta by-x")
+        self.assertEqual(first["outcome"], "acquired")
+        self.assertGreaterEqual(first["held_s"], 1.5)
+        self.assertEqual(first["syncs"], 1)
+        self.assertGreaterEqual(first["sync_s"], 0.05)
+        self.assertLessEqual(first["sync_s"], first["held_s"])
+        self.assertEqual(second["outcome"], "acquired")
+        self.assertEqual(second["pid"], os.getpid())
+        self.assertGreaterEqual(second["waited_s"], 1.0)
+        self.assertEqual(second["holder"], "enact.py meta by-x")
+        self.assertEqual((second["syncs"], second["sync_s"]), (0, 0))
+        self.assertGreaterEqual(second["held_s"], 0)
+        self.assertRegex(second["time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+
+    def test_a_give_up_is_logged(self):
+        guard = self.hold()
+        self.addCleanup(enact.release_lock, self.path, guard)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(enact.Fail):
+            with enact.ownership_lock(self.repo, wait=0.2):
+                pass
+        [line] = self.lock_log()
+        self.assertEqual(line["outcome"], "gave_up")
+        self.assertEqual(line["holder"], "enact sync")
+        self.assertGreaterEqual(line["waited_s"], 0.2)
+        self.assertIsNone(line["held_s"])
+
+    def test_the_lock_log_is_capped_and_never_fails_a_command(self):
+        log_path = self.repo.state / "lock-waits.jsonl"
+        log_path.write_text("x" * 100)
+        with mock.patch.object(enact, "LOCK_LOG_BYTES", 100):
+            with enact.ownership_lock(self.repo):
+                pass
+        self.assertEqual(self.repo.state.joinpath("lock-waits.1.jsonl").read_text(), "x" * 100)
+        self.assertEqual(len(self.lock_log()), 1)
+        # An unwritable log is skipped.
+        log_path.unlink()
+        log_path.mkdir()
+        with enact.ownership_lock(self.repo):
+            pass
 
     def test_the_holder_record_is_removed_on_release(self):
         with enact.ownership_lock(self.repo):

@@ -613,6 +613,36 @@ def lock_holder(path: Path) -> str:
         return "unknown holder"
 
 
+def lock_holder_command(path: Path) -> str | None:
+    """The command in the `.holder` record next to the lock at `path`, if any."""
+    try:
+        command = json.loads(path.with_name(path.name + ".holder").read_text())["command"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return command if isinstance(command, str) else None
+
+
+# One JSON line per ownership-lock acquisition or give-up, in the clone's state
+# directory, for the efficiency dashboard (fields in docs/design.md). Once the
+# file passes LOCK_LOG_BYTES it replaces the previous `.1` file, so the two
+# together never exceed twice that.
+LOCK_LOG = "lock-waits.jsonl"
+LOCK_LOG_BYTES = 8 << 20
+# Seconds spent in `sync` while holding each ownership lock, by lock path.
+_lock_syncs: dict[Path, list[float]] = {}
+
+
+def log_lock_wait(path: Path, entry: dict[str, Any]) -> None:
+    """Append `entry` to the lock log next to the lock at `path`. Never raises."""
+    log_path = path.with_name(LOCK_LOG)
+    with contextlib.suppress(OSError, ValueError):
+        if log_path.stat().st_size >= LOCK_LOG_BYTES:
+            log_path.replace(log_path.with_name("lock-waits.1.jsonl"))
+    with contextlib.suppress(OSError, ValueError):
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+
+
 # A waiter whose ticket is this old has died without removing it: live waiters
 # refresh theirs every TICKET_REFRESH seconds.
 TICKET_STALE = 30
@@ -662,7 +692,10 @@ def ownership_lock(repo: Repo, wait: float = OWNERSHIP_WAIT):
     if path in _ownership_locks:
         yield
         return
+    began = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     start = time.monotonic()
+    command = " ".join(sys.argv[:4])
+    holder_seen: str | None = None
     deadline = start + wait
     next_report = start + 60
     queue = repo.state / "ownership.queue"
@@ -677,8 +710,16 @@ def ownership_lock(repo: Repo, wait: float = OWNERSHIP_WAIT):
         while (ticket is not None and not first_in_line(queue, ticket)) or \
                 (guard := try_lock(path)) is None:
             now = time.monotonic()
+            if holder_seen is None and now - start > 1:
+                holder_seen = lock_holder_command(path) or ""
             if now >= deadline:
                 holder = lock_holder(path)
+                log_lock_wait(path, {
+                    "time": began, "pid": os.getpid(), "command": command,
+                    "outcome": "gave_up", "waited_s": round(now - start, 3),
+                    "held_s": None, "sync_s": None, "syncs": None,
+                    "holder": lock_holder_command(path) or holder_seen or None,
+                })
                 log(f"gave up waiting for the ownership lock after {int(now - start)} s; "
                     f"held by {holder}")
                 raise Fail(f"ownership operation busy (held by {holder}); retry", code=3)
@@ -693,19 +734,30 @@ def ownership_lock(repo: Repo, wait: float = OWNERSHIP_WAIT):
     finally:
         if ticket is not None:
             ticket.unlink(missing_ok=True)
+    acquired = time.monotonic()
     holder_path = path.with_name(path.name + ".holder")
     try:
-        write_json(holder_path, {"pid": os.getpid(), "command": " ".join(sys.argv[:4]),
+        write_json(holder_path, {"pid": os.getpid(), "command": command,
                                  "since": time.time()})
     except OSError:
         pass
     _ownership_locks.add(path)
     _beads_reads[repo.common] = {}
+    syncs = _lock_syncs[path] = []
     try:
         yield
     finally:
         _ownership_locks.remove(path)
         _beads_reads.pop(repo.common, None)
+        _lock_syncs.pop(path, None)
+        # Written before the release, so holders' appends never interleave.
+        log_lock_wait(path, {
+            "time": began, "pid": os.getpid(), "command": command, "outcome": "acquired",
+            "waited_s": round(acquired - start, 3),
+            "held_s": round(time.monotonic() - acquired, 3),
+            "sync_s": round(sum(syncs), 3), "syncs": len(syncs),
+            "holder": holder_seen or None,
+        })
         holder_path.unlink(missing_ok=True)
         release_lock(path, guard)
 
@@ -795,7 +847,18 @@ def sync(repo: Repo, force: bool = False) -> dict[str, Any]:
     then compact an embedded store whose journal has grown (`compact_beads`).
 
     Without `force`, the sync is skipped when nothing was written here and the
-    remote has not moved since the last one (see `_beads_dirty`)."""
+    remote has not moved since the last one (see `_beads_dirty`). Its time is
+    added to the ownership lock's line in the lock log (`log_lock_wait`)."""
+    start = time.monotonic()
+    try:
+        return sync_unlogged(repo, force)
+    finally:
+        syncs = _lock_syncs.get(repo.state / "ownership.lock")
+        if syncs is not None:
+            syncs.append(time.monotonic() - start)
+
+
+def sync_unlogged(repo: Repo, force: bool) -> dict[str, Any]:
     if not force and repo.common not in _beads_dirty and remote_tip_known(repo):
         # Other processes' bd reads and writes on this host need no pull, but
         # cached reads must still see the latter.

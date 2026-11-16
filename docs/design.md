@@ -1527,3 +1527,26 @@ instead of adopting it needs the plan's context.
 - The store's remotes and branch are cached in
   `.git/enact/beads-dolt-settings.json`, keyed on the contents of Dolt's
   config files, which saves three Dolt launches per full sync.
+
+## Lock-wait log (2026-11-15)
+
+- Sessions wait on the ownership lock, but only a "still waiting" line on
+  stderr showed it, and nothing records how long. Over 7 days on Beryl's
+  Mac, `enact meta` took 48 s on average and `enact worktree` 76 s.
+- Each ownership-lock acquisition now appends one JSON line to
+  `.git/enact/lock-waits.jsonl` (`repo.state`, beside `ownership.lock`),
+  written just before the lock is released, so holders never interleave
+  their lines. A waiter that gives up writes its own line at once.
+- Fields: `time` (UTC, `YYYY-MM-DDTHH:MM:SSZ`, when the wait began), `pid`,
+  `command` (the first four words of `sys.argv`, as in the holder record),
+  `outcome` (`acquired` or `gave_up`), `waited_s`, `held_s`, `sync_s`
+  (seconds spent in `sync` while holding the lock, skipped syncs included),
+  `syncs` (how many `sync` calls), and `holder` (the holder record's
+  command, seen once the wait passed 1 s; for `gave_up`, the holder at that
+  moment; otherwise null). For `gave_up`, `held_s`, `sync_s` and `syncs` are
+  null. Times are seconds rounded to milliseconds.
+- When the file reaches 8 MB (about 40,000 lines) the next write first
+  renames it to `lock-waits.1.jsonl`, replacing the previous one, so the two
+  files together stay under 16 MB. A reader takes both.
+- Writing costs one stat and one append and never fails a command: any
+  `OSError` is ignored.
