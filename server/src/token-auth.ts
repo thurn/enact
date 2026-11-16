@@ -61,7 +61,7 @@ export class TokenRegistry {
     try {
       const response = await fetch(`https://api.github.com/repos/${repository}/git/matching-refs/enact/tokens`, {
         headers: {Accept: "application/vnd.github+json", "User-Agent": "enact-tickets"},
-        redirect: "error",
+        redirect: "manual",
         signal: AbortSignal.timeout(5_000),
       });
       if (!response.ok) return;

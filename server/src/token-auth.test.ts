@@ -20,7 +20,11 @@ test.each([
   let refs = [await tokenRef(machine, original)];
   let status = 200;
   const realFetch = globalThis.fetch;
-  const github = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json(refs, {status}));
+  const github = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    // Let the Worker runtime validate the outbound options before returning fixture refs.
+    new Request(input, init);
+    return Response.json(refs, {status});
+  });
   vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
     const address = input instanceof Request ? input.url : String(input);
     return address.startsWith("https://api.github.com/") ? github(input, init) : realFetch(input, init);
@@ -45,14 +49,15 @@ test.each([
       expect(Object.values(JSON.parse(store.meta("token_hashes")!))).toEqual([machine]);
       expect(Number(store.meta("token_fetched_at"))).toBeGreaterThan(0);
     });
-    expect(github).toHaveBeenCalledExactlyOnceWith(url, expect.objectContaining({redirect: "error"}));
+    expect(github).toHaveBeenCalledExactlyOnceWith(url, expect.objectContaining({redirect: "manual"}));
 
     expect((await write("still-unknown")).status).toBe(401);
     expect((await write(original)).status).toBe(200);
     expect(github).toHaveBeenCalledTimes(1);
 
     await allowRefresh();
-    status = 403;
+    status = 302;
+    refs = [await tokenRef(machine, rotated)];
     expect((await write(rotated)).status).toBe(401);
     expect((await write(rotated)).status).toBe(401);
     expect((await write(original)).status).toBe(200);
