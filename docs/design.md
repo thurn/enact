@@ -1576,6 +1576,15 @@ instead of adopting it needs the plan's context.
   command, seen once the wait passed 1 s; for `gave_up`, the holder at that
   moment; otherwise null). For `gave_up`, `held_s`, `sync_s` and `syncs` are
   null. Times are seconds rounded to milliseconds.
+- `sync_s` is split by step (2026-11-16), because a 227 s sync on Beryl's
+  Mac could not say where its time went: `tip_s` (`git ls-remote` for the
+  remote's data ref), `settings_s` (reading the store's remotes and branch),
+  `commit_s`, `pull_s` (with any conflict resolution), `check_s` (comparing
+  local and remote tips), `push_s`, `retry_s` (sleeps after a rejected
+  push) and `gc_s` (`compact_beads`). `busy_s` is the part of all of these
+  that `dolt` spent retrying because another process had the store open, so
+  it overlaps them rather than adding to them. Each is 0 when the step did
+  not run and null on a `gave_up` line.
 - When the file reaches 8 MB (about 40,000 lines) the next write first
   renames it to `lock-waits.1.jsonl`, replacing the previous one, so the two
   files together stay under 16 MB. A reader takes both.

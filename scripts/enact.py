@@ -535,9 +535,11 @@ def dolt(args: list[str], db: Path, check: bool = True) -> subprocess.CompletedP
     """Run the Dolt CLI on an embedded Beads database. While another process
     has the store open (any bd command, even a read), Dolt opens it read-only
     instead of waiting and every write fails; bd waits, so retry like it."""
-    deadline = time.monotonic() + DOLT_BUSY_SECONDS
+    began = time.monotonic()
+    deadline = began + DOLT_BUSY_SECONDS
     delay = 0.1
     while True:
+        attempt = time.monotonic()
         proc = run(["dolt", *args], db, check=False)
         output = proc.stdout + proc.stderr
         if (proc.returncode == 0 or time.monotonic() >= deadline or
@@ -545,6 +547,10 @@ def dolt(args: list[str], db: Path, check: bool = True) -> subprocess.CompletedP
             break
         time.sleep(random.uniform(delay, 2 * delay))
         delay = min(delay * 2, 2.0)
+    if attempt > began:
+        # Every attempt before the last found the store busy.
+        for steps in _lock_steps.values():
+            steps["busy"] += attempt - began
     if check and proc.returncode != 0:
         raise Fail(f"dolt {' '.join(args)} failed ({proc.returncode}): "
                    f"{(proc.stderr or proc.stdout).strip()[-2000:]}")
@@ -630,6 +636,28 @@ LOCK_LOG = "lock-waits.jsonl"
 LOCK_LOG_BYTES = 8 << 20
 # Seconds spent in `sync` while holding each ownership lock, by lock path.
 _lock_syncs: dict[Path, list[float]] = {}
+# Seconds spent in each step of those syncs, by lock path (`SYNC_STEPS`).
+_lock_steps: dict[Path, dict[str, float]] = {}
+# The steps of `sync`, each logged as `<step>_s`: `tip` asks the remote for its
+# Beads data ref, `settings` reads the store's remotes and branch, `commit`,
+# `pull`, `check` compares the local and remote tips, `push`, `retry` sleeps
+# after a rejected push, and `gc` is `compact_beads`. `busy` is the part of
+# any of them that Dolt spent retrying while another process had the store
+# open (`dolt`), so it overlaps the others.
+SYNC_STEPS = ("tip", "settings", "commit", "pull", "check", "push", "retry", "gc", "busy")
+
+
+@contextlib.contextmanager
+def sync_step(repo: Repo, name: str):
+    """Add the time spent in the block to step `name` of the ownership lock's
+    line in the lock log, when this process holds the lock."""
+    start = time.monotonic()
+    try:
+        yield
+    finally:
+        steps = _lock_steps.get(repo.state / "ownership.lock")
+        if steps is not None:
+            steps[name] += time.monotonic() - start
 
 
 def log_lock_wait(path: Path, entry: dict[str, Any]) -> None:
@@ -718,6 +746,7 @@ def ownership_lock(repo: Repo, wait: float = OWNERSHIP_WAIT):
                     "time": began, "pid": os.getpid(), "command": command,
                     "outcome": "gave_up", "waited_s": round(now - start, 3),
                     "held_s": None, "sync_s": None, "syncs": None,
+                    **{f"{step}_s": None for step in SYNC_STEPS},
                     "holder": lock_holder_command(path) or holder_seen or None,
                 })
                 log(f"gave up waiting for the ownership lock after {int(now - start)} s; "
@@ -744,18 +773,21 @@ def ownership_lock(repo: Repo, wait: float = OWNERSHIP_WAIT):
     _ownership_locks.add(path)
     _beads_reads[repo.common] = {}
     syncs = _lock_syncs[path] = []
+    steps = _lock_steps[path] = dict.fromkeys(SYNC_STEPS, 0.0)
     try:
         yield
     finally:
         _ownership_locks.remove(path)
         _beads_reads.pop(repo.common, None)
         _lock_syncs.pop(path, None)
+        _lock_steps.pop(path, None)
         # Written before the release, so holders' appends never interleave.
         log_lock_wait(path, {
             "time": began, "pid": os.getpid(), "command": command, "outcome": "acquired",
             "waited_s": round(acquired - start, 3),
             "held_s": round(time.monotonic() - acquired, 3),
             "sync_s": round(sum(syncs), 3), "syncs": len(syncs),
+            **{f"{step}_s": round(seconds, 3) for step, seconds in steps.items()},
             "holder": holder_seen or None,
         })
         holder_path.unlink(missing_ok=True)
@@ -859,7 +891,7 @@ def sync(repo: Repo, force: bool = False) -> dict[str, Any]:
 
 
 def sync_unlogged(repo: Repo, force: bool) -> dict[str, Any]:
-    if not force and repo.common not in _beads_dirty and remote_tip_known(repo):
+    if not force and repo.common not in _beads_dirty and known_tip(repo):
         # Other processes' bd reads and writes on this host need no pull, but
         # cached reads must still see the latter.
         _beads_reads.get(repo.common, {}).clear()
@@ -868,8 +900,14 @@ def sync_unlogged(repo: Repo, force: bool) -> dict[str, Any]:
     _beads_dirty.discard(repo.common)
     # Every local commit is on the remote now, deferred ones included.
     (repo.state / SYNC_PENDING).unlink(missing_ok=True)
-    compact_beads(repo)
+    with sync_step(repo, "gc"):
+        compact_beads(repo)
     return result
+
+
+def known_tip(repo: Repo) -> bool:
+    with sync_step(repo, "tip"):
+        return remote_tip_known(repo)
 
 
 # A full sync holds the ownership lock for 10-25 s on Beryl, mostly in the push
@@ -1019,33 +1057,16 @@ def sync_beads(repo: Repo) -> dict[str, Any]:
             return beads.raw("dolt", *args)
         return dolt(list(args), dolt_db_dir(repo), check=False)
 
-    cached = load_dolt_settings(repo) if embedded else None
-    if cached:
-        remote = subprocess.CompletedProcess(["dolt", "remote"], 0, cached["remotes"], "")
-        branch = cached["branch"]
-    else:
-        if embedded:
-            config = dict(line.split(" = ", 1) for line in
-                          command("config", "--list").stdout.splitlines() if " = " in line)
-            # bd supplies its own identity; the external CLI requires Dolt config.
-            # Preserve that fallback rather than adding a new setup requirement.
-            embedded = bool(config.get("user.name") and config.get("user.email"))
-        remote = command("remote") if embedded else beads.raw("dolt", "remote", "list")
-        if embedded and remote.returncode != 0:
-            raise Fail(f"dolt remote failed: {(remote.stderr or remote.stdout).strip()}")
-        if embedded and "origin" not in remote.stdout.split():
-            embedded = False  # retain bd's remote selection for custom Dolt remotes
-            remote = beads.raw("dolt", "remote", "list")
-        if remote.returncode != 0 or not remote.stdout.strip():
-            return {"remote": False, "dropped": []}
-        branch = (dolt_json(dolt_db_dir(repo), "select active_branch() as b")[0]["b"]
-                  if embedded else None)
-        if embedded:
-            save_dolt_settings(repo, remote.stdout, branch)
+    with sync_step(repo, "settings"):
+        settings_read = read_sync_settings(repo, beads, command, bool(embedded))
+    if settings_read is None:
+        return {"remote": False, "dropped": []}
+    embedded, branch = settings_read
     target = [repo.config.remote, branch] if embedded else []
     dropped: list[dict[str, Any]] = []
     for attempt in range(8):
-        committed = command("commit", *(["-A"] if embedded else []), "-m", "enact sync")
+        with sync_step(repo, "commit"):
+            committed = command("commit", *(["-A"] if embedded else []), "-m", "enact sync")
         if embedded and committed.returncode != 0:
             message = (committed.stdout + committed.stderr).lower()
             if "no changes added to commit" not in message and "nothing to commit" not in message:
@@ -1053,36 +1074,70 @@ def sync_beads(repo: Repo) -> dict[str, Any]:
         # A pull costs 2-6 s on Beryl. When this clone already has the commit at
         # the remote's data ref, the push fast-forwards without one; a push
         # rejected because the remote moved meanwhile pulls on the next attempt.
-        if not attempt and embedded and remote_tip_known(repo):
+        if not attempt and embedded and known_tip(repo):
             pull = subprocess.CompletedProcess(["dolt", "pull"], 0, "", "")
         else:
-            pull = command("pull", *target)
-        if pull.returncode != 0:
-            text = (pull.stdout + pull.stderr).lower()
-            if ("no branches found" in text or
-                    (embedded and f'branch "{branch}" not found on remote'.lower() in text)):
-                pass  # first push of this database to the remote
-            elif "conflict" in text:
-                dropped += resolve_remote_wins(repo)
-            else:
-                raise Fail(f"bd dolt pull failed: {(pull.stderr or pull.stdout).strip()}")
+            with sync_step(repo, "pull"):
+                pull = command("pull", *target)
+                if pull.returncode != 0:
+                    text = (pull.stdout + pull.stderr).lower()
+                    if ("no branches found" in text or
+                            (embedded and
+                             f'branch "{branch}" not found on remote'.lower() in text)):
+                        pass  # first push of this database to the remote
+                    elif "conflict" in text:
+                        dropped += resolve_remote_wins(repo)
+                    else:
+                        raise Fail(f"bd dolt pull failed: "
+                                   f"{(pull.stderr or pull.stdout).strip()}")
         if embedded:
             remote_ref = f"{repo.config.remote}/{branch}".replace("'", "''")
             try:
-                heads = dolt_json(dolt_db_dir(repo),
-                                  f"select hashof('HEAD') as local_tip, "
-                                  f"hashof('{remote_ref}') as remote_tip")[0]
+                with sync_step(repo, "check"):
+                    heads = dolt_json(dolt_db_dir(repo),
+                                      f"select hashof('HEAD') as local_tip, "
+                                      f"hashof('{remote_ref}') as remote_tip")[0]
             except Fail:
                 pass  # absent first-push ref or older CLI: use normal push
             else:
                 if heads["local_tip"] == heads["remote_tip"]:
                     return {"remote": True, "dropped": dropped}
-        push = command("push", *target)
+        with sync_step(repo, "push"):
+            push = command("push", *target)
         if push.returncode == 0:
             return {"remote": True, "dropped": dropped}
         log(f"beads push rejected (attempt {attempt + 1}); retrying")
-        time.sleep(random.uniform(0.5, 2.0) * (attempt + 1))
+        with sync_step(repo, "retry"):
+            time.sleep(random.uniform(0.5, 2.0) * (attempt + 1))
     raise Fail("could not push Beads after repeated attempts")
+
+
+def read_sync_settings(repo: Repo, beads: Beads, command, embedded: bool
+                       ) -> tuple[bool, str | None] | None:
+    """Whether to sync through the Dolt CLI, and the branch to sync; None when
+    the store has no remote."""
+    cached = load_dolt_settings(repo) if embedded else None
+    if cached:
+        return embedded, cached["branch"]
+    if embedded:
+        config = dict(line.split(" = ", 1) for line in
+                      command("config", "--list").stdout.splitlines() if " = " in line)
+        # bd supplies its own identity; the external CLI requires Dolt config.
+        # Preserve that fallback rather than adding a new setup requirement.
+        embedded = bool(config.get("user.name") and config.get("user.email"))
+    remote = command("remote") if embedded else beads.raw("dolt", "remote", "list")
+    if embedded and remote.returncode != 0:
+        raise Fail(f"dolt remote failed: {(remote.stderr or remote.stdout).strip()}")
+    if embedded and "origin" not in remote.stdout.split():
+        embedded = False  # retain bd's remote selection for custom Dolt remotes
+        remote = beads.raw("dolt", "remote", "list")
+    if remote.returncode != 0 or not remote.stdout.strip():
+        return None
+    branch = (dolt_json(dolt_db_dir(repo), "select active_branch() as b")[0]["b"]
+              if embedded else None)
+    if embedded:
+        save_dolt_settings(repo, remote.stdout, branch)
+    return embedded, branch
 
 
 # ---------------------------------------------------------------------------

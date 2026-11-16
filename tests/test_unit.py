@@ -1507,6 +1507,29 @@ class OwnershipLockWaitTest(unittest.TestCase):
         self.assertGreaterEqual(second["held_s"], 0)
         self.assertRegex(second["time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 
+    def test_sync_steps_and_dolt_busy_retries_are_logged(self):
+        calls = []
+
+        def run(cmd, cwd, check=True):
+            calls.append(cmd)
+            busy = len(calls) == 1
+            time.sleep(0.05)
+            return subprocess.CompletedProcess(
+                cmd, 1 if busy else 0, "", "database is read only" if busy else "")
+
+        with mock.patch.object(enact, "run", run), enact.ownership_lock(self.repo):
+            with enact.sync_step(self.repo, "pull"):
+                enact.dolt(["pull"], self.repo.main)
+        [line] = self.lock_log()
+        self.assertEqual(len(calls), 2)
+        self.assertGreaterEqual(line["pull_s"], 0.1)
+        self.assertGreaterEqual(line["busy_s"], 0.05)
+        self.assertLess(line["busy_s"], line["pull_s"])
+        self.assertEqual((line["push_s"], line["gc_s"]), (0, 0))
+        # Outside the lock nothing is recorded and nothing fails.
+        with enact.sync_step(self.repo, "pull"):
+            pass
+
     def test_a_give_up_is_logged(self):
         guard = self.hold()
         self.addCleanup(enact.release_lock, self.path, guard)
