@@ -2098,7 +2098,7 @@ STALL_NOTICE = (
 def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
              running: Collection[str] = ()) -> dict[str, Any]:
     fetch(repo)
-    recover_deliveries(repo)
+    recover_deliveries(repo, drop_dead=True)
     beads = Beads(repo)
     register_run(repo, epic, vizier, parallel)
     close_finished_epics(repo)
@@ -3156,17 +3156,32 @@ def finish_delivery(repo: Repo, receipt: Path, data: dict[str, Any],
     return result
 
 
-def recover_deliveries(repo: Repo) -> list[dict[str, Any]]:
-    """Only replay receipts whose push reached staging or green master."""
+# A receipt is written just before its push. Once the push has returned and
+# the remote has been fetched, a receipt whose head is on neither staging nor
+# master can never be recovered. One older than this is dropped, which leaves
+# minutes for a push still in flight. On Beryl's Mac 237 such receipts had
+# piled up over four days, and checking each with two `git merge-base` calls
+# took 7.5 s of every `enact next`, under the ownership lock.
+DEAD_RECEIPT_SECONDS = 3600
+
+
+def recover_deliveries(repo: Repo, drop_dead: bool = False) -> list[dict[str, Any]]:
+    """Only replay receipts whose push reached staging or green master. With
+    `drop_dead`, which callers pass only right after a fetch that succeeded,
+    also delete receipts older than DEAD_RECEIPT_SECONDS that did not."""
     recovered = []
     for receipt in sorted(delivery_receipts(repo).glob("*.json")):
         try:
             data = json.loads(receipt.read_text(encoding="utf-8"))
+            age = time.time() - receipt.stat().st_mtime
         except FileNotFoundError:
             continue  # another local session finished this receipt
         if any(repo.git_ok("merge-base", "--is-ancestor", data["head"], repo.remote_ref(branch))
                for branch in (repo.config.staging, repo.config.master)):
             recovered.append(finish_delivery(repo, receipt, data))
+        elif drop_dead and age > DEAD_RECEIPT_SECONDS:
+            log(f"dropping delivery receipt {receipt.name}: its push never landed")
+            receipt.unlink(missing_ok=True)
     return recovered
 
 
@@ -3616,7 +3631,7 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     if repo.git("status", "--porcelain", "--untracked-files=no"):
         raise Fail("working tree has uncommitted changes; commit them first", code=2)
     fetch(repo)
-    recovered = recover_deliveries(repo)
+    recovered = recover_deliveries(repo, drop_dead=True)
     staging = repo.remote_ref(cfg.staging)
     result: dict[str, Any] = {"pushed": False, "reason": "nothing to push"}
     pending_ci: Path | None = None
@@ -3700,6 +3715,9 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
         log(f"push to {cfg.staging} rejected (attempt {attempt + 1}); re-integrating")
         fetch(repo)
         recovered += recover_deliveries(repo)
+        # The push did not land (the recovery above would have finished it), and the
+        # next attempt pushes a rebased head under a receipt of its own.
+        receipt.unlink(missing_ok=True)
     else:
         raise Fail(f"could not push to {cfg.staging} after repeated attempts")
     graph = Beads(repo).all() if pending_ci else []

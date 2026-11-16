@@ -1254,6 +1254,34 @@ class CiWatchTest(unittest.TestCase):
         start.assert_not_called()
 
 
+class DeadReceiptTest(unittest.TestCase):
+    def test_only_an_old_receipt_that_never_landed_is_dropped(self):
+        # Rejected pushes once left a receipt each, and every `enact next` checked
+        # all of them with git under the ownership lock.
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            repo = mock.Mock(state=state)
+            repo.config.staging, repo.config.master = "staging", "master"
+            repo.git_ok.side_effect = lambda *args: args[2] == "landed"
+            folder = enact.delivery_receipts(repo)
+            def receipt(head, hours):
+                path = folder / f"{head}.json"
+                path.write_text(json.dumps({"head": head}))
+                then = time.time() - hours * 3600
+                os.utime(path, (then, then))
+                return path
+            old, fresh, landed = receipt("old", 2), receipt("fresh", 0.1), receipt("landed", 2)
+            with mock.patch.object(enact, "finish_delivery",
+                                   side_effect=lambda r, path, d: path.unlink()) as finish:
+                enact.recover_deliveries(repo)
+                self.assertTrue(old.exists())
+                enact.recover_deliveries(repo, drop_dead=True)
+            self.assertFalse(old.exists())
+            self.assertTrue(fresh.exists())
+            self.assertFalse(landed.exists())
+            self.assertEqual(finish.call_count, 1)
+
+
 class StewardRoutingTest(unittest.TestCase):
     def steward(self, hours_old, **ci):
         created = enact.dt.datetime.now(enact.dt.timezone.utc) - enact.dt.timedelta(hours=hours_old)

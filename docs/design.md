@@ -1601,6 +1601,22 @@ instead of adopting it needs the plan's context.
 - Writing costs one stat and one append and never fails a command: any
   `OSError` is ignored.
 
+## Dead delivery receipts (2026-11-16)
+
+- `enact next` held the ownership lock for about 10 s per poll on Beryl's
+  Mac, 56% of all lock hold time between 02:00 and 04:15 UTC (347 polls).
+  7.5 s of that was `recover_deliveries` checking 237 receipts with two
+  `git merge-base` calls each. None could ever be recovered.
+- 228 of them came from pushes that lost the race to staging. The direct
+  path writes a receipt for its head before pushing, and after a rejected
+  push it rebased and wrote a new receipt without removing the old one.
+  The merge queue path already removed its receipts after a failed push.
+- Now a rejected push removes its receipt once the fetch and recovery that
+  follow it show that it did not land. `schedule` and the start of
+  `cmd_push`, which run right after a fetch that must succeed, also drop
+  receipts over an hour old whose head is on neither staging nor master.
+  `cmd_status` fetches with `check=False`, so it never drops one.
+
 ## Where a sync's time goes (2026-11-16)
 
 - Between 00:36 and 01:43 UTC on 2026-11-16, ten syncs on Beryl's Mac held

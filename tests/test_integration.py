@@ -939,6 +939,9 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.assertEqual(len(runs), 2)
         # What passed first was the worktree's commit on the old staging tip.
         self.assertEqual(runs[1], first)
+        # The rejected attempt's receipt goes with it, so later commands do not
+        # check it again forever.
+        self.assertEqual(list((self.a.path / ".git/enact/deliveries").glob("*.json")), [])
 
     def test_merge_queue_lands_a_batch_with_one_check_and_returns_the_failure(self):
         # Six pushes queue while the test holds the integrator's lock, each after its own
