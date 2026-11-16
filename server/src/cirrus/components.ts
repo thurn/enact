@@ -45,7 +45,7 @@ function tone(name: Tone): Tone {
   return name;
 }
 
-interface PageOptions {
+export interface PageOptions {
   title: string;
   body: string;
   root: string;
@@ -55,30 +55,33 @@ interface PageOptions {
   brand?: string;
   description?: string;
   base?: string | null;
+  feed?: {seq: string; tickets?: readonly string[]};
 }
 
 /** The header and main ids identify the regions cirrus.js swaps on navigation.
  * Root points to the project home. Supply assetRoot when the assets live at
  * a different location, such as the Worker origin. Pass a base URL for a 404.
  */
-export function page({
-  title,
-  body,
-  root,
-  assetRoot = root,
-  assets = defaultAssets,
-  crumbs = [],
-  brand = "",
-  description = "",
-  base,
-}: PageOptions): string {
-  const trail = crumbs
-    .map(([label, href]) =>
-      href === null
-        ? `<span class="c-crumb" aria-current="page">${esc(label)}</span>`
-        : `<a class="c-crumb" href="${esc(href)}">${esc(label)}</a>`,
-    )
-    .join("");
+export function pageRegions({crumbs = [], brand = "", root, body, feed}: PageOptions): string {
+  const trail = crumbs.map(([label, href]) =>
+    href === null
+      ? `<span class="c-crumb" aria-current="page">${esc(label)}</span>`
+      : `<a class="c-crumb" href="${esc(href)}">${esc(label)}</a>`,
+  ).join("");
+  const subscription = feed ? attrs({
+    "data-feed-seq": feed.seq,
+    "data-feed-tickets": feed.tickets?.join(" "),
+  }) : "";
+  return `<header class="c-header" id="c-header">
+<nav class="c-crumbs" aria-label="Breadcrumbs"><a class="c-brand" href="${esc(root || "./")}">${esc(brand)}</a>${trail}</nav>
+</header>
+<main class="c-main" id="c-main"${subscription}>
+${body}
+</main>`;
+}
+
+export function page(options: PageOptions, regions = pageRegions(options)): string {
+  const {root, assetRoot = root, assets = defaultAssets, title, description = "", base} = options;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -93,12 +96,7 @@ ${base ? `<base href="${esc(base)}">` : ""}
 </head>
 <body>
 <div class="c-progress-bar" aria-hidden="true"></div>
-<header class="c-header" id="c-header">
-<nav class="c-crumbs" aria-label="Breadcrumbs"><a class="c-brand" href="${esc(root || "./")}">${esc(brand)}</a>${trail}</nav>
-</header>
-<main class="c-main" id="c-main">
-${body}
-</main>
+${regions}
 </body>
 </html>
 `;

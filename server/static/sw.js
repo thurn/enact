@@ -27,6 +27,7 @@ self.addEventListener("fetch", (event) => {
     const root = new URL(self.registration.scope).pathname;
     if (!url.pathname.startsWith(root)) return;
     const path = url.pathname.slice(root.length);
+    if (url.searchParams.has("fragment")) return;
     if (path === "" || /^tickets\/[^/]+$/.test(path)) {
         event.respondWith(staleWhileRevalidate(event, request));
     }

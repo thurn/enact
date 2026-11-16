@@ -15,11 +15,19 @@ export class ProjectDeadlines {
     )) {
       const expires = Date.parse(row.expires_at);
       if (expires > cursor) yield {kind: "leases", id: row.name, at: expires};
-      if (expires > now || row.waiters === "[]") continue;
+      if (row.waiters === "[]" || (row.name !== "staging" && expires > now)) continue;
+      const queue = (JSON.parse(row.waiters) as Waiter[]).map(waiterExpires);
+      if (row.name === "staging") {
+        // The dashboard shows every staging waiter. Announce membership
+        // changes while the lease is still held as well as after it expires.
+        for (const at of queue) {
+          if (at > cursor) yield {kind: "leases", id: row.name, at};
+        }
+        continue;
+      }
 
       // An expired lease may still belong to the queue head for a short
       // time. Wake the remaining waiters when that reservation lapses.
-      const queue = (JSON.parse(row.waiters) as Waiter[]).map(waiterExpires);
       const head = queue.find((at) => at > Math.max(cursor, expires));
       const current = queue.findIndex((at) => at > now);
       if (current < 0) continue;

@@ -297,6 +297,8 @@ test("lease, event and cutover operations stay within their SQLite row budgets",
     post("/leases/staging", {op, holder, ttl_s: 180});
   await check(() => get("/state"), 1);
   await check(() => lease("acquire", "owner"), 4);
+  // A new staging waiter adds a sequence and a journal row for the dashboard.
+  await check(() => lease("acquire", "waiter"), 4, 409);
   await check(() => lease("acquire", "waiter"), 2, 409);
   await check(() => lease("renew", "owner"), 4);
   await check(() => lease("release", "owner"), 4);

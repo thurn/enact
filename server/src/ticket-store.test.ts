@@ -615,6 +615,30 @@ test("the earliest lease expiry wakes a waiter and the alarm advances to the nex
   }
 });
 
+test("the feed names the staging lease when a waiter joins and expires", async () => {
+  const {stub, request, write, checked} = await fixture("staging-waiter-feed");
+  await checked(write("/leases/staging", {op: "acquire", holder: "owner", ttl_s: 180}));
+  const socket = await connectFeed(request);
+  try {
+    const catchup = nextMessage(socket);
+    socket.send('{"since":0}');
+    const {seq} = await catchup as {seq: number};
+    const joined = nextMessage(socket);
+    expect((await write("/leases/staging", {op: "acquire", holder: "waiter", ttl_s: 180}, "waiter")).status).toBe(409);
+    expect(await joined).toMatchObject({seq: seq + 1, leases: ["staging"]});
+    await runInDurableObject(stub, ({store}) => {
+      const since = new Date(Date.now() - 61_000).toISOString();
+      store.sql.exec("UPDATE leases SET waiters = json_set(waiters, '$[0].since', ?) WHERE name = 'staging'", since);
+    });
+    const expired = nextMessage(socket);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await expired).toMatchObject({seq: seq + 2, leases: ["staging"]});
+    expect(await checked(request("/leases"))).toMatchObject([{holder: "owner", waiters: []}]);
+  } finally {
+    socket.close();
+  }
+});
+
 test("an alarm wakes a ready waiter when an open ticket's defer time passes", async () => {
   const {stub, request, batch, list} = await fixture("defer-feed-expiry");
   const future = "2999-01-01T00:00:00.000Z";

@@ -102,7 +102,7 @@ export function ticketData(sql: SqlStorage, project: string, row: TicketRow, rea
     SELECT ${cardFields} FROM json_each(?) AS wanted JOIN tickets ON tickets.id = wanted.value ORDER BY tickets.id
   `, JSON.stringify([...ids])).toArray();
   return {
-    ticket, comments, history, children, chain, links: [...links], references,
+    ticket, comments, history, children, chain, links: [...links], references, watched: [...ids],
     groups: Object.entries(sections).map(([heading, entries]) => [heading, [...entries]] as const),
     counts: readProgress(references.map((reference) => reference.id)),
   };

@@ -1,9 +1,11 @@
 import * as c from "../cirrus/components";
+import {ProjectUsage} from "../project-usage";
 import {resolveId} from "../ticket-batch";
 import type {TicketRow} from "../ticket-types";
 import {brand, ticketUrl} from "./common";
 import {homeData, progress, ticketData, type Progress} from "./data";
 import {home} from "./home";
+import {ProjectStatus} from "./status";
 import {ticketPage} from "./ticket";
 
 export function dashboardRoute(pathname: string) {
@@ -13,7 +15,13 @@ export function dashboardRoute(pathname: string) {
   return {project, ticket, legacy: tail === "beads"};
 }
 
-type Page = {seq: string; fingerprint: string; body: string; etag: Promise<string>};
+type Page = {
+  seq: string;
+  fingerprint: string;
+  options: c.PageOptions;
+  regions: string;
+  full?: {body: string; etag: Promise<string>};
+};
 const encoder = new TextEncoder();
 
 async function etag(body: string): Promise<string> {
@@ -23,22 +31,31 @@ async function etag(body: string): Promise<string> {
 
 export class Dashboard {
   private home?: Page;
+  private readonly status: ProjectStatus;
   private readonly pages = new Map<string, Page>();
   private progressSeq?: string;
   private readonly counts = new Map<string, Progress | null>();
 
-  constructor(private readonly sql: SqlStorage) {}
+  constructor(private readonly sql: SqlStorage) {
+    this.status = new ProjectStatus(sql);
+  }
 
-  async fetch(request: Request, route: NonNullable<ReturnType<typeof dashboardRoute>>): Promise<Response> {
+  async fetch(request: Request, route: NonNullable<ReturnType<typeof dashboardRoute>>, now = Date.now(), usage = new ProjectUsage(this.sql, now)): Promise<Response> {
     const {project, ticket, legacy} = route;
     const url = new URL(request.url);
     const root = `/${project}/`;
+    const fragment = url.searchParams.get("fragment");
     const head = request.method === "HEAD";
     const seq = this.sql.exec<{value: string}>("SELECT value FROM meta WHERE key = 'seq'").toArray()[0]?.value ?? "0";
     const readProgress = (ids: Iterable<string>) => this.readProgress(seq, ids);
     if (!ticket) {
       if (url.pathname !== root) return this.redirect(url, root);
-      this.home = this.page(this.home, seq, () => homeData(this.sql, readProgress), (data) => home(root, data));
+      if (fragment === "status") return this.fragment(head, seq, this.status.render(root, now, usage.state()));
+      this.home = this.page(this.home, seq, () => homeData(this.sql, readProgress), (data) => home(root, data, seq));
+      if (fragment === "all") {
+        const status = this.status.render(root, now, usage.state());
+        return this.fragment(head, seq, this.regions(this.home) + `<template id="c-status-fragment">${status}</template>`);
+      }
       return this.response(request, this.home);
     }
 
@@ -60,13 +77,13 @@ export class Dashboard {
       }
       const canonical = ticketUrl(root, id);
       if (url.pathname !== canonical) return this.redirect(url, canonical);
-      page = this.page(page, seq, () => ticketData(this.sql, project, row, readProgress), (data) => ticketPage(root, project, data));
+      page = this.page(page, seq, () => ticketData(this.sql, project, row, readProgress), (data) => ticketPage(root, project, data, seq));
     }
     this.pages.delete(name);
     this.pages.set(name, page);
     // Bound the memory retained across requests on a long-lived project.
     if (this.pages.size > 32) this.pages.delete(this.pages.keys().next().value!);
-    return this.response(request, page);
+    return fragment === "all" ? this.fragment(head, seq, this.regions(page)) : this.response(request, page);
   }
 
   private readProgress(seq: string, ids: Iterable<string>): Progress[] {
@@ -85,23 +102,40 @@ export class Dashboard {
     return all.flatMap((id) => this.counts.get(id) ?? []);
   }
 
-  private page<Data>(cached: Page | undefined, seq: string, read: () => Data, render: (data: Data) => string): Page {
+  private page<Data>(cached: Page | undefined, seq: string, read: () => Data, render: (data: Data) => c.PageOptions): Page {
     if (cached?.seq === seq) return cached;
     const data = read();
     const fingerprint = JSON.stringify(data);
     if (cached?.fingerprint === fingerprint) return {...cached, seq};
-    const body = render(data);
-    return {seq, fingerprint, body, etag: etag(body)};
+    const options = render(data);
+    return {seq, fingerprint, options: {...options, body: ""}, regions: c.pageRegions(options)};
+  }
+
+  private regions(page: Page): string {
+    return `<title>${c.esc(page.options.title)}</title>${page.regions}`;
+  }
+
+  private fragment(head: boolean, seq: string, body: string): Response {
+    return new Response(head ? null : body, {headers: {
+      "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Cirrus-Sequence": seq,
+    }});
   }
 
   private async response(request: Request, page: Page): Promise<Response> {
-    const tag = await page.etag;
+    // Live updates only need the regions. Build and hash the full document
+    // once a browser asks for it through the navigation path.
+    if (!page.full) {
+      const body = c.page(page.options, page.regions);
+      page.full = {body, etag: etag(body)};
+    }
+    const {body, etag: tagPromise} = page.full;
+    const tag = await tagPromise;
     const headers = {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache", ETag: tag};
     const unchanged = request.headers.get("If-None-Match")?.split(",").some((value) => {
       const candidate = value.trim();
       return candidate === "*" || candidate.replace(/^W\//, "") === tag.slice(2);
     });
-    return new Response(unchanged || request.method === "HEAD" ? null : page.body, {
+    return new Response(unchanged || request.method === "HEAD" ? null : body, {
       status: unchanged ? 304 : 200, headers,
     });
   }

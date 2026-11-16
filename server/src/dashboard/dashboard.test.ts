@@ -137,3 +137,41 @@ test("renders project pages from 5,000 tickets and revalidates them", async () =
     expect(results.home.some((duration) => duration > 0)).toBe(true);
   }
 });
+
+test("home fragments show current project status independently of the ticket board", async () => {
+  const board = await request("/");
+  const tag = board.headers.get("etag")!;
+  await runInDurableObject(stub, ({store}) => {
+    const sql = store.sql;
+    const at = new Date().toISOString();
+    sql.exec(`
+      INSERT INTO events VALUES
+        (1, ?, 'session', 'mac', 'Casey', '{"session":"Casey","ticket":"live","action":"start"}'),
+        (2, ?, 'session', 'mac', 'Pat', '{"session":"Pat","ticket":"old","action":"start"}'),
+        (3, ?, 'session', 'mac', 'Pat', '{"session":"Pat","ticket":"old","action":"archive"}'),
+        (4, ?, 'ci', 'Mac runner', 'ci', '{"os":"macos","passed":false,"tip":"obsolete"}'),
+        (5, ?, 'ci', 'Windows runner', 'ci', '{"os":"windows","passed":false,"tip":"0123456789"}'),
+        (6, ?, 'ci', 'Mac runner', 'ci', '{"os":"macos","passed":true,"tip":"abcdef1234"}')
+    `, at, at, at, at, at, at);
+    sql.exec("INSERT INTO leases VALUES ('staging', 'Merge holder', 'mac', ?, '{}', ?)",
+      new Date(Date.now() + 180_000).toISOString(), JSON.stringify([{holder: "Queued merger", since: at}]));
+    sql.exec("INSERT OR REPLACE INTO meta VALUES ('seq', '6'), ('cutover', 'paused')");
+  });
+  expect((await request("/", {headers: {"If-None-Match": tag}})).status).toBe(304);
+
+  const status = await request("/?fragment=status");
+  expect(status.status).toBe(200);
+  expect(status.headers.get("x-cirrus-sequence")).toBe("6");
+  const html = await status.text();
+  for (const value of [
+    "Casey", 'href="/by/tickets/live"', "Windows", "Failed", "01234567", "macOS", "Passed", "abcdef12",
+    "Merge holder", "Queued merger", "Writes paused", "UTC day", "Requests", "Rows written", "/100000",
+  ]) expect(html).toContain(value);
+  expect(html).not.toMatch(/>Pat<|obsolete|<main|<script/);
+
+  const live = await (await request("/?fragment=all")).text();
+  expect(live).toContain('<main class="c-main"');
+  expect(live).toContain('<template id="c-status-fragment">');
+  expect(live).toContain("Queued merger");
+  expect(live).not.toContain("<script");
+});

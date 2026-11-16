@@ -4,7 +4,7 @@ import {brand, childrenProgress, person, priorityChip, priorityNames, statusDot,
 import {byAttention, mentions, type Card, type ticketData} from "./data";
 import {timeline} from "./history";
 
-export function ticketPage(root: string, project: string, data: ReturnType<typeof ticketData>): string {
+export function ticketPage(root: string, project: string, data: ReturnType<typeof ticketData>, seq: string): c.PageOptions {
   const {ticket, children, chain, comments, history, groups, counts} = data;
   const progress = new Map(counts.map((count) => [count.id, count]));
   const references = new Map(data.references.map((card) => [card.id, card]));
@@ -90,11 +90,12 @@ export function ticketPage(root: string, project: string, data: ReturnType<typeo
 
   const layout = c.layout(main.join(""), c.meta(properties));
   const crumbs = chain.filter((id) => references.has(id)).map((id) => [id, ticketUrl(root, id)] as const);
-  return c.page({
+  return {
+    feed: {seq, tickets: [ticket.id, ...data.watched]},
     title: `${ticket.title} · ${ticket.id}`,
     body: c.title(ticket.title, eyebrow) + (entries.length >= 3 ? c.withToc(c.toc(entries), layout) : layout)
       + [...templates.values()].join(""),
     root, assetRoot: "/", brand: brand(root), description: ticket.title,
     crumbs: [["Tickets", root], ...crumbs, [ticket.id, null]],
-  });
+  };
 }

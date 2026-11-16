@@ -13,7 +13,7 @@ const automatic = [
   ["Check verdicts", ["ci-check"]],
 ] as const;
 
-export function home(root: string, {cards, counts}: ReturnType<typeof homeData>): string {
+export function home(root: string, {cards, counts}: ReturnType<typeof homeData>, seq: string): c.PageOptions {
   const progress = new Map(counts.map((count) => [count.id, count]));
   const active: HomeCard[] = [];
   const epics: HomeCard[] = [];
@@ -56,14 +56,17 @@ export function home(root: string, {cards, counts}: ReturnType<typeof homeData>)
   const nav = c.toc([
     ["Active", "active", active.length, 0], ["All", "all", total, 0],
     ...shown.map(([heading, anchor, count]) => [heading, anchor, count, 1] as const),
+    ["Project status", "project-status", null, 0],
   ]);
   const activePart = c.part("Active", active.length ? grid(active, true, false) : c.empty("Nothing is in progress."), "active", active.length);
   const allPart = c.part("All", shown.map(([heading, anchor, count, body]) => c.section(heading, body, count, anchor, 3)).join("")
     || c.empty("No open tickets."), "all", total);
 
-  return c.page({
+  const status = c.part("Project status", c.include(root + "?fragment=status", "Project status is unavailable."), "project-status");
+  return {
     title: `Tickets · ${brand(root)}`, body: c.title("Tickets", "", "What is in progress, and everything open.")
-      + c.withToc(nav, activePart + allPart),
+      + c.withToc(nav, activePart + allPart + status),
+    feed: {seq},
     root, assetRoot: "/", crumbs: [["Tickets", null]], brand: brand(root),
-  });
+  };
 }

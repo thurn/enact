@@ -17,6 +17,8 @@
     const HOVER_INTENT_MS = 60;
     const TIP_DELAY_MS = 350;
     const PROGRESS_DELAY_MS = 120;
+    const RECONNECT_MIN_MS = 250;
+    const RECONNECT_MAX_MS = 30_000;
 
     const meta = (name) =>
         document.querySelector(`meta[name="${name}"]`)?.getAttribute("content");
@@ -35,7 +37,7 @@
         navigator.serviceWorker.addEventListener("message", (event) => {
             const data = event.data || {};
             if (data.type === "cirrus-updated" && sameDocument(data.url)) {
-                refresh();
+                freshFromCache(data.url);
             }
         });
     }
@@ -55,15 +57,14 @@
         return u.href;
     }
 
-    function fetchPage(url, fresh = false) {
+    function fetchPage(url) {
         const k = key(url);
         const hit = pages.get(k);
-        if (!fresh && hit && performance.now() - hit.at < PREFETCH_TTL_MS) {
+        if (hit && performance.now() - hit.at < PREFETCH_TTL_MS) {
             return hit.promise;
         }
         const promise = fetch(k, {
             credentials: "same-origin",
-            cache: fresh ? "no-cache" : "default",
         }).then((r) => {
             if (
                 !r.ok ||
@@ -73,7 +74,9 @@
             }
             return r.text();
         });
-        promise.catch(() => pages.delete(k));
+        promise.catch(() => {
+            if (pages.get(k)?.promise === promise) pages.delete(k);
+        });
         pages.set(k, { at: performance.now(), promise });
         if (pages.size > PREFETCH_LIMIT) {
             pages.delete(pages.keys().next().value);
@@ -119,7 +122,7 @@
     function pump() {
         while (running < 2 && queue.length) {
             const a = queue.shift();
-            if (!navigable(a)) continue;
+            if (!a.isConnected || !navigable(a)) continue;
             running++;
             fetchPage(a.href)
                 .catch(() => {})
@@ -146,9 +149,11 @@
 
     const bar = () => document.querySelector(".c-progress-bar");
     let navigation = 0;
+    let navigating = false;
 
     async function navigate(url, { push = true, scroll = null } = {}) {
         const ticket = ++navigation;
+        navigating = true;
         const progress = setTimeout(() => {
             bar()?.classList.remove("c-done");
             bar()?.classList.add("c-loading");
@@ -157,7 +162,7 @@
         try {
             html = await fetchPage(url);
         } catch {
-            location.href = url;
+            if (ticket === navigation) location.href = url;
             return;
         } finally {
             clearTimeout(progress);
@@ -172,6 +177,7 @@
             history.pushState({ scroll: 0 }, "", url);
         }
         const apply = () => {
+            if (ticket !== navigation) return;
             swap(doc);
             const target = new URL(url, location.href).hash;
             if (scroll !== null) scrollTo(0, scroll);
@@ -180,6 +186,9 @@
                     .querySelector(decodeURIComponent(target))
                     ?.scrollIntoView();
             else scrollTo(0, 0);
+            navigating = false;
+            if (Number(main()?.dataset.feedSeq) < since) freshFromCache(location.href);
+            flushChanges();
         };
         if (document.startViewTransition && !reducedMotion()) {
             document.startViewTransition(apply);
@@ -203,10 +212,14 @@
             const current = document.getElementById(id);
             if (!next || !current) continue;
             if (quiet && next.innerHTML === current.innerHTML) continue;
+            if (id === "c-main") {
+                watcher?.disconnect();
+                if (quiet) preserveControls(current, next);
+            }
             current.replaceWith(document.adoptNode(next));
         }
         hidePopover();
-        enhance(document);
+        enhance(document, !quiet);
     }
 
     document.addEventListener("click", (e) => {
@@ -224,31 +237,175 @@
 
     if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 
-    // ---- Freshness -----------------------------------------------------------
+    // ---- Live updates -------------------------------------------------------
 
-    // Refetch the current page and swap whatever changed, without a transition or
-    // a scroll jump: the page updates in place while the reader reads it.
-    async function refresh() {
-        pages.clear();
+    const main = () => document.getElementById("c-main");
+    const stamp = (page) => Number(page.getElementById("c-main")?.dataset.feedSeq ?? -1);
+    const home = () => location.pathname === rootUrl().pathname;
+    let since = Number(main()?.dataset.feedSeq ?? 0);
+    let cutover;
+    let socket;
+    let retryTimer;
+    let retryDelay = RECONNECT_MIN_MS;
+    let suspended = false;
+    let refreshing = false;
+    let pendingTickets = new Set();
+    let pendingStatus = false;
+    let resync = false;
+
+    function preserveControls(current, next) {
+        const status = current.querySelector("#project-status");
+        // A board update can carry a new status fragment. Keep the mounted
+        // panel until that fragment is ready, including its first load.
+        const placeholder = next.querySelector("#project-status");
+        if (status && placeholder) placeholder.replaceWith(status);
+        const disclosures = (scope) => [...scope.querySelectorAll("details")];
+        const disclosureKey = (el) => (el.closest("section[id]")?.id ?? "")
+            + "/" + el.querySelector("summary")?.textContent.replace(/^\d+ closed$/, "closed");
+        const opened = new Set(disclosures(current).filter((el) => el.open).map(disclosureKey));
+        for (const el of disclosures(next)) {
+            if (opened.has(disclosureKey(el))) el.open = true;
+        }
+    }
+
+    function swapInPlace(doc) {
+        const top = scrollY;
+        swap(doc, { quiet: true });
+        scrollTo({ top, behavior: "instant" });
+    }
+
+    async function freshFromCache(url) {
+        // Navigation's background revalidation has already fetched this page.
+        // Read its result without making a second request.
+        if (!sameDocument(url) || navigating) return;
         try {
-            const html = await fetchPage(location.href, true);
-            const doc = new DOMParser().parseFromString(html, "text/html");
-            // New code ships new hashed assets, which a swap of the header and
-            // <main> would not load: reload the page and keep the reader's place.
-            const assets = (d) =>
-                [...d.querySelectorAll("link[rel=stylesheet], script[src]")]
-                    .map((e) => e.getAttribute("href") ?? e.getAttribute("src"))
-                    .join(" ");
+            const response = await caches.match(key(url));
+            if (!response) return;
+            const doc = new DOMParser().parseFromString(await response.text(), "text/html");
+            if (!sameDocument(url) || navigating) return;
+            if (stamp(doc) < stamp(document)) return;
+            const assets = (page) => [...page.querySelectorAll("link[rel=stylesheet], script[src]")]
+                .map((el) => el.getAttribute("href") ?? el.getAttribute("src")).join(" ");
             if (assets(doc) !== assets(document)) {
                 history.replaceState({ ...history.state, scroll: scrollY }, "");
                 location.reload();
                 return;
             }
-            const y = scrollY;
-            swap(doc, { quiet: true });
-            scrollTo(0, y);
+            if (stamp(doc) > stamp(document)) {
+                pages.delete(key(url));
+                swapInPlace(doc);
+            }
         } catch {}
     }
+
+    function watching(id) {
+        const dependencies = main()?.dataset.feedTickets?.split(" ") ?? [];
+        return dependencies.some((ticket) => id === ticket || id.startsWith(ticket + "."));
+    }
+
+    async function flushChanges() {
+        if (refreshing || navigating || suspended) return;
+        const tickets = resync || (home() ? pendingTickets.size > 0 : [...pendingTickets].some(watching));
+        const status = home() && pendingStatus;
+        if (!tickets && !status) {
+            pendingTickets.clear();
+            pendingStatus = false;
+            return;
+        }
+        pendingTickets.clear();
+        pendingStatus = false;
+        const catchingUp = resync;
+        const cursor = since;
+        resync = false;
+        refreshing = true;
+        const at = navigation;
+        const url = new URL(location.href);
+        url.searchParams.set("fragment", tickets ? "all" : "status");
+        try {
+            const response = await fetch(url, { cache: "no-store" });
+            if (!response.ok) throw new Error(String(response.status));
+            const doc = new DOMParser().parseFromString(await response.text(), "text/html");
+            if (at !== navigation || suspended) {
+                resync = true;
+                return;
+            }
+            if (catchingUp) {
+                const seq = Number(response.headers.get("X-Cirrus-Sequence"));
+                since = since === cursor ? seq : Math.max(since, seq);
+                pages.clear();
+            }
+            if (tickets && (catchingUp || stamp(doc) >= stamp(document))) swapInPlace(doc);
+            const panel = document.querySelector("#project-status .c-include");
+            const content = tickets ? doc.getElementById("c-status-fragment")?.content : doc.body;
+            if (panel && content) {
+                panel.removeAttribute("data-include");
+                panel.removeAttribute("data-include-loading");
+                panel.replaceChildren(...content.childNodes);
+                enhance(panel, false);
+            }
+        } catch {
+            // A failed read leaves the displayed page in place. Catch up with
+            // one fragment request once the feed is reachable again.
+            resync = true;
+            socket?.close();
+            return;
+        } finally {
+            refreshing = false;
+            if (at !== navigation && !navigating) flushChanges();
+        }
+        flushChanges();
+    }
+
+    function connectFeed() {
+        if (!main()?.hasAttribute("data-feed-seq") || socket || suspended || retryTimer) return;
+        const url = new URL("api/feed", rootUrl());
+        url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+        const connection = socket = new WebSocket(url);
+        const started = performance.now();
+        connection.addEventListener("open", () => {
+            connection.send(JSON.stringify({ since }));
+            if (resync) flushChanges();
+        });
+        connection.addEventListener("message", ({data}) => {
+            const message = JSON.parse(data);
+            if (message.resync) {
+                pages.clear();
+                resync = true;
+            } else if (message.seq > since) {
+                since = message.seq;
+                if (message.tickets.length) pages.clear();
+                for (const id of message.tickets) pendingTickets.add(id);
+                pendingStatus ||= message.cutover !== cutover || message.leases.includes("staging")
+                    || message.events.some((kind) => ["session", "ci", "usage", "cutover"].includes(kind));
+                cutover = message.cutover;
+            }
+            flushChanges();
+        });
+        connection.addEventListener("close", () => {
+            if (socket !== connection) return;
+            socket = undefined;
+            if (suspended) return;
+            if (performance.now() - started >= RECONNECT_MAX_MS) retryDelay = RECONNECT_MIN_MS;
+            retryTimer = setTimeout(() => {
+                retryTimer = undefined;
+                connectFeed();
+            }, retryDelay);
+            retryDelay = Math.min(RECONNECT_MAX_MS, retryDelay * 2);
+        });
+    }
+
+    addEventListener("pagehide", () => {
+        suspended = true;
+        clearTimeout(retryTimer);
+        retryTimer = undefined;
+        const connection = socket;
+        socket = undefined;
+        connection?.close();
+    });
+    addEventListener("pageshow", () => {
+        suspended = false;
+        connectFeed();
+    });
 
     // ---- Tooltips and hovercards --------------------------------------------
 
@@ -397,18 +554,23 @@
         for (const el of scope.querySelectorAll("[data-include]")) {
             const url = new URL(el.getAttribute("data-include"), location.href);
             el.removeAttribute("data-include");
+            el.setAttribute("data-include-loading", "");
             fetch(url, { credentials: "same-origin" })
                 .then((r) => (r.ok ? r.text() : Promise.reject(r.status)))
                 .then((html) => {
+                    if (!el.hasAttribute("data-include-loading")) return;
                     el.innerHTML = html;
                 })
                 .catch(() => {
+                    if (!el.hasAttribute("data-include-loading")) return;
                     const p = document.createElement("p");
                     p.className = "c-empty";
                     p.textContent = el.getAttribute("data-missing") || "";
                     el.replaceChildren(p);
                 })
                 .finally(() => {
+                    if (!el.hasAttribute("data-include-loading")) return;
+                    el.removeAttribute("data-include-loading");
                     el.classList.add("c-reveal");
                     enhance(el);
                 });
@@ -515,17 +677,18 @@
 
     // ---- Wiring --------------------------------------------------------------
 
-    function enhance(scope) {
+    function enhance(scope, prefetchCards = true) {
         times(scope);
         includes(scope);
         requestAnimationFrame(spyToc);
-        if (watcher) {
+        if (watcher && prefetchCards) {
             for (const a of scope.querySelectorAll("a[data-prefetch]"))
                 watcher.observe(a);
         }
     }
 
     enhance(document);
+    connectFeed();
     if (history.state?.scroll) {
         scrollTo(0, history.state.scroll); // a reload for new assets, or a return
     } else if (location.hash) {

@@ -149,7 +149,7 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
       const usage = new ProjectUsage(this.store.sql, now);
       usage.record();
       accounted = true;
-      if (dashboard) return await this.dashboard.fetch(request, dashboard);
+      if (dashboard) return await this.dashboard.fetch(request, dashboard, now, usage);
       if (request.method === "GET") return this.get(project, path, request, url.searchParams, usage, now);
       return Response.json({error: "Unknown route"}, {status: 404});
     } catch (error) {

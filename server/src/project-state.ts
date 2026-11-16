@@ -148,10 +148,15 @@ export class ProjectWrite {
     }
     if (op === "acquire" && current && !held && (active || (waiters.length > 0 && !caller(waiters[0])))) {
       const index = waiters.findIndex(caller);
+      const membershipChanged = index === -1 || waiters.length !== current.waiters.length;
       const position = index === -1 ? waiters.length + 1 : index + 1;
       waiters[position - 1] = {holder, since: at, machine};
       const serialized = JSON.stringify(waiters);
       if (serialized !== row.waiters) this.write("UPDATE leases SET waiters = ? WHERE name = ?", serialized, leaseName);
+      if (leaseName === "staging" && membershipChanged) {
+        this.advance();
+        this.leases.push(leaseName);
+      }
       return {status: 409, body: {holder: current.holder, expires_at: current.expires_at, position, seq: this.seq}};
     }
 
