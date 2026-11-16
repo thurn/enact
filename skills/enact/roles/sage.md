@@ -35,9 +35,10 @@ faster?** Read `common.md` first.
 
 ## Filing
 
-File project improvements as beads like a Mason does: important ones as
-children of your gate epic (your bead's parent), so the next milestone waits
-for them; minor ones under the top epic at low priority. Usually label them
+On the server, file improvements as ordinary children of your bead's
+parent. File them before closing your audit so the next milestone waits
+for them. On the beads backend, file important findings under the review
+gate and minor ones under the top epic at low priority. Usually label them
 `role:executor`. Each bead states the measured problem, the proposed change
 and the expected gain.
 

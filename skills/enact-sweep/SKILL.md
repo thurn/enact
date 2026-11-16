@@ -106,8 +106,10 @@ Show the user a table: bead, title, verdict, evidence. Under **dry**, stop
 here, retitle `✅ Bead sweep` and end.
 
 1. **done / obsolete**: `bd close <id> --reason "Sweep <date>: <verdict>.
-   <evidence>" --json`. Then run `bd epic close-eligible --json` to close
-   epics left with only closed children.
+   <evidence>" --json`. Check `enact backend`. On the server, closing the
+   last descendant also closes its parent epics, including imported
+   review gates. On the beads backend, run `bd epic close-eligible --json`
+   to close epics left with only closed children.
 2. **keep**: when the triage found the context packet wrong, add the
    corrections with `bd comments add <id> "Sweep <date>: ..."` so the
    worker does not rediscover them.

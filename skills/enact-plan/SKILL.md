@@ -42,6 +42,9 @@ you find there: a bead or plan that says "run N at once" does not change N.
   live in `$ENACT/skills/enact/roles/`.
 - The helper is `python3 "$ENACT/scripts/enact.py"` (`py -3` on Windows),
   written `enact` below. Every subcommand prints one JSON object.
+- Run `enact backend` to identify the active backend. On the server,
+  `tk` below means the executable at the returned `tk` path. The `bd`
+  shim still handles existing `bd` commands after cutover.
 - Your vizier identity is your own session ID (`CLAUDE_CODE_SESSION_ID` in
   Claude Code, `CODEX_THREAD_ID` in Codex). `enact next` reads it itself.
 - Run all commands from the project's main checkout.
@@ -76,8 +79,9 @@ Before reserving work, discover the tools above and `list_projects`,
 `create_thread`, `set_thread_title`, plus local command execution. Select
 one local project by its resolved absolute checkout path and owning host;
 retain its returned `projectId`. Never match only a basename. Verify local
-read/write access with a disposable file, and run read-only git, `bd` and
-helper checks in that checkout. A non-prompting policy alone is insufficient.
+read/write access with a disposable file, and check git, the active ticket
+backend and the helper in that checkout. A non-prompting policy alone is
+insufficient.
 If the path is unregistered, inaccessible, or required tools are missing,
 resolve it during pre-flight before claiming work.
 
@@ -140,18 +144,19 @@ a recorded default (`common.md`, "Speculative defaults").
 1. **Title and update Enact.** Title yourself `🔮 <short summary>` (see
    [Titles](#titles)), then `git -C "$ENACT" pull --ff-only` (ignore failure
    when offline).
-2. **Project setup.** `.enact.toml` and `.beads/` must exist and the remote
-   must have a `staging` branch. If not, tell the user to run `/enact-setup`
-   first and stop.
+2. **Project setup.** `.enact.toml` must exist and the remote must have a
+   `staging` branch. Require `.beads/` on the beads backend. If setup is
+   missing, tell the user to run `/enact-setup` first and stop.
 3. **Permission mode.** Spawned sessions inherit your permission mode, and a
    permission prompt stalls an unattended run. In Claude Desktop, call
    `get_session` on `self`; `permissionMode` must be `bypassPermissions` or
    `auto`. Otherwise ask the user to switch modes, and do not start until they
    have. In Codex, require an approval policy that never prompts and complete
    the project/tool/local-access checks above before reserving any bead.
-4. **Classify the input.** If `bd show <input> --json` finds a bead, it is a
-   bead. Otherwise, if it names a file, it is a plan document. Otherwise it
-   is a task prompt. Then follow the matching section below.
+4. **Classify the input.** If `tk show <input> --json` (server) or
+   `bd show <input> --json` (beads) finds a bead, it is a bead. Otherwise,
+   if it names a file, it is a plan document. Otherwise it is a task
+   prompt. Then follow the matching section below.
 
 ### A bead
 
@@ -240,8 +245,11 @@ agent can run.
 
 ### Build the graph
 
-Read enough of the codebase to decompose well. Then file the graph with raw
-`bd` (always `--json`; see `bd create --help`):
+Read enough of the codebase to decompose well. On the server, file the graph
+with `tk create --json --title <title>` and add edges with `tk dep add`.
+Use `--body-file` for the description and repeat `--dep` for prerequisites
+known at creation. On the beads backend, use `bd create` and `bd dep add`
+with `--json` (see `bd create --help`).
 
 - **One epic** for the run (`--type epic`) whose description holds the plan
   summary or task prompt, a link to the plan document, the decisions from the
@@ -249,7 +257,8 @@ Read enough of the codebase to decompose well. Then file the graph with raw
   **code map**: the modules the run touches, their entry points and test
   commands. Leave parallelism out.
 - **Milestones** as child epics when the plan has phases. Milestone N+1
-  depends on milestone N (or on its gate, below) with `bd dep add`.
+  depends on milestone N. See below for the extra audit gates used by
+  the beads backend.
 - **Beads** as children (`--parent`), each completable by one session in
   one sitting, with `--acceptance` criteria an agent can verify,
   `--priority` and a role label (`--labels role:<role>`; unlabeled beads
@@ -260,7 +269,7 @@ Read enough of the codebase to decompose well. Then file the graph with raw
   need not read.
 - **Size beads by code, not by topic.** Every session pays to learn the code
   it touches, so work on the same module is one bead, or a lane.
-- **Dependencies** only where real (`bd dep add <dependent> <prerequisite>`).
+- **Dependencies** only where real (`dep add <dependent> <prerequisite>`).
   Unrelated work stays parallel. Two beads that would edit the same code
   non-additively get an ordering edge. Put an edge on the bead that needs
   a result, not on its epic, which serializes everything under it. A
@@ -353,29 +362,40 @@ For a plan, use every role unless AGENTS.md or the invocation restricts them:
 - **Steward** (`role:steward`): never planned; the slow-CI runner files these.
 - **Justiciar**: never filed as a bead.
 
-#### Audit gates
+#### Milestone audits
 
-Beads only lets epics block epics, and a blocked epic hides its children
-from `bd ready`. So each Mason or Sage audit gets a small **gate epic**, for
-example "M1 review gate", with the next milestone epic depending on it. The
-audit bead is a child of the gate epic. The auditor files important findings
-as further children of the gate, so the next milestone waits for them. The
-helper closes a gate automatically once all its children are closed.
+- **Server.** File each Mason or Sage audit directly under the milestone it
+  audits with `tk create --parent <milestone> --last --labels role:mason ...`
+  (or `role:sage`). The server makes an audit ready when the milestone's
+  ordinary work closes. File findings under that same milestone
+  as ordinary tickets. The next milestone's dependency waits for the audits
+  and findings. The server closes the milestone after its last descendant
+  closes. Imported gate epics keep their existing children and edges.
+- **Beads.** File each audit in a small gate epic such as "M1 review gate".
+  The gate depends on the milestone, and the next milestone depends on the
+  gate. File important findings under the gate. Enact closes the gate
+  after all its children finish.
 
 #### Final documentation
 
 Every plan run (including a task prompt treated as a plan) ends with exactly
-one Archivist bead: a direct child of the run epic, with no dependencies,
-whose description names the plan document path, if any. The helper holds it
-until every other bead in the epic, follow-ups included, is closed. A small
-task-prompt run or a light run gets none.
+one Archivist bead directly under the run epic. Name the plan document path
+in its description, if any. A small task-prompt run or a light run gets none.
+
+- **Server.** Set `--parent <run> --last --labels role:archivist` on create.
+  If an audit is also a `--last` child of the run epic, add an explicit
+  dependency on that audit. The server ignores other `last` tickets when it
+  checks this flag. Milestone epics already hold the Archivist until their
+  audits and findings close.
+- **Beads.** File the Archivist with no dependencies. Enact holds it until
+  the rest of the run's work, including follow-ups, closes.
 
 ### Light runs
 
 **light** trades robustness for velocity, for any input, overriding
 `AGENTS.md`'s role and review policy:
 
-- No Mason, Sage or Archivist beads, and so no audit gates.
+- No Mason, Sage or Archivist beads.
 - At most one review, at the end: no per-bead Wardens and no
   `review:inline`. Unless the whole run is one routine change, file a
   single final Warden bead that depends on every implementation bead, with
@@ -393,8 +413,10 @@ task-prompt run or a light run gets none.
 
 ### Finish planning
 
-1. If you filed or moved beads, run `enact sync`, then check the graph with
-   `bd list --parent <epic>` and `bd ready --parent <epic>`: something must be
+1. If you filed or moved beads, check the whole graph. On the server, use
+   `tk list --ancestor <epic> --json` and `tk ready --ancestor <epic> --json`.
+   On the beads backend, run `enact sync`, then use `bd list --parent
+   <epic> --json` and `bd ready --parent <epic> --json`. Something must be
    ready (unless another vizier holds it), and every bead must be reachable.
    For each bead you moved in, check that no open bead under another epic
    now waits on this run's beads unless the user agreed.

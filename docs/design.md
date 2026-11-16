@@ -1981,6 +1981,12 @@ A ticket is **ready** when all of these hold:
 5. It has no live child. A ticket with children is a container and closes
    by itself.
 
+On the server, a plan puts its audits and their findings under the milestone
+they cover. Audits are marked `last` and the next milestone depends on that
+milestone. The Archivist is a `last` child of the run and depends on any
+audits that are also `last` children of the run. Enact retains the Archivist
+hold for legacy plans whose Archivist has no `last` flag.
+
 `GET /tickets/<id>` reports `blocked_by` as the list of ticket IDs that make
 it not ready, with which rule each came from, so a listing can always say
 why. Nothing is hidden from listings for being blocked.

@@ -1707,11 +1707,14 @@ class TicketBackendTest(unittest.TestCase):
         self.assertEqual(requests, ["graph"])
 
     def test_completed_cutover_overrides_default_backend(self):
+        self.assertEqual(self.enact("backend"),
+                         ({"backend": "server", "tk": self.env["ENACT_TK"]}, []))
         self.config.write_text('[tickets]\nproject = "by"\n')
+        self.assertEqual(self.enact("backend"), ({"backend": "beads"}, ["state"]))
         for state in ("paused", "after"):
             self.tk("state", "--set-cutover", state)
-        synced, requests = self.enact("sync")
-        self.assertEqual(synced["backend"], "server")
+        backend, requests = self.enact("backend")
+        self.assertEqual(backend, {"backend": "server", "tk": self.env["ENACT_TK"]})
         self.assertEqual(requests, ["state"])
         synced, requests = self.enact("sync", "--deferred")
         self.assertEqual(synced["backend"], "server")
@@ -1734,6 +1737,18 @@ class TicketBackendTest(unittest.TestCase):
         result, requests = self.enact("wait", child, "--timeout", "60")
         self.assertEqual(result["state"], "waiting")
         self.assertEqual(requests, ["graph", "wait", "graph"])
+
+    def test_server_scheduler_holds_a_legacy_archivist_during_an_imported_gate(self):
+        run, _, audit, archivist = [r["id"] for r in self.tk("batch", data={"ops": [
+            {"op": "create", "fields": {"title": "Run", "type": "epic"}},
+            {"op": "create", "parent": "$0", "fields": {"title": "Review gate", "type": "epic"}},
+            {"op": "create", "parent": "$1", "fields": {"title": "Mason", "labels": ["role:mason"]}},
+            {"op": "create", "parent": "$0",
+             "fields": {"title": "Archivist", "labels": ["role:archivist"], "priority": 0}},
+        ]})["results"]]
+        self.assertTrue(self.tk("show", archivist)["ready"])
+        step, _ = self.enact("next", "--epic", run)
+        self.assertEqual((step["action"], step["bead"]), ("spawn", audit))
 
 
 class ParallelScenarios(unittest.TestSuite):

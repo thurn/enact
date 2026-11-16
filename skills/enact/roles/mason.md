@@ -63,8 +63,9 @@ Label it `role:executor`, or `role:warden` for a cleanup tied to one recent
 change. Group related findings; never file one bead per line.
 
 - **Important** findings that should land before the next milestone become
-  children of your **gate epic** (your own bead's parent), so the next
-  milestone waits for them.
+  ordinary children of your own bead's parent, the milestone or its legacy
+  review gate. File them before closing your audit so the next milestone
+  waits for them.
 - **Lower-value** ideas are not filed. List them in your summary on your
   bead; each filed bead costs a session.
 

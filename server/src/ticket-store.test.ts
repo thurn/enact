@@ -175,6 +175,40 @@ test("reports each readiness rule across ancestors, late findings and parallel a
   expect((await show(release)).ready).toBe(true);
 });
 
+test("runs milestone audits and the Archivist as last tickets", async () => {
+  const {batch, list, show} = await fixture("milestone-plan");
+  const {results} = await batch([
+    create("Run", undefined, {type: "epic"}),
+    create("Milestone 1", "$0", {type: "epic"}),
+    create("Milestone 2", "$0", {type: "epic"}, {deps: ["$1"]}),
+    create("Build", "$1"),
+    create("Mason", "$1", {last: true, labels: ["role:mason"]}),
+    create("Ship", "$2"),
+    create("Archivist", "$0", {last: true, labels: ["role:archivist"]}),
+  ]);
+  const [run, first, second, build, mason, ship, archivist] = results.map(({id}) => id);
+  const ready = async () => (await list(`?ready=1&ancestor=${run}`)).map(({id}) => id);
+
+  expect(await ready()).toEqual([build]);
+  await batch([{op: "close", id: build, reason: "Built"}]);
+  expect(await ready()).toEqual([mason]);
+  await batch([{op: "claim", id: mason}]);
+  const {results: [{id: finding}]} = await batch([create("Fix audit finding", first)]);
+  await batch([{op: "close", id: mason, reason: "Finding filed"}]);
+  expect(await ready()).toEqual([finding]);
+  expect((await show(first)).status).toBe("open");
+
+  const {results: [fixed]} = await batch([{op: "close", id: finding, reason: "Fixed"}]);
+  expect(fixed.closed).toEqual([first]);
+  expect(await ready()).toEqual([ship]);
+  const {results: [shipped]} = await batch([{op: "close", id: ship, reason: "Shipped"}]);
+  expect(shipped.closed).toEqual([second]);
+  expect(await ready()).toEqual([archivist]);
+  const {results: [documented]} = await batch([{op: "close", id: archivist, reason: "Documented"}]);
+  expect(documented.closed).toEqual([run]);
+  expect(await ready()).toEqual([]);
+});
+
 test("updates fields and history and closes every now-empty ancestor", async () => {
   const {batch, show} = await fixture("operations");
   const {results} = await batch([create("Epic"), create("Milestone", "$0"), create("Task", "$1"), create("Peer")]);

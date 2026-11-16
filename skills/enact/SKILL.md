@@ -181,12 +181,14 @@ Then go to [Slow CI](#slow-ci).
 Every bead in the epic runs in a subagent. You only pick, claim, title,
 launch and check. Loop:
 
-1. `bd ready --parent <epic> --json`. Drop epics (gate epics close
-   themselves), beads assigned to someone else, and beads whose
-   `enact_host` or `enact_provider` metadata names another machine or
-   provider, and beads whose `lane:` label is shared by another open,
-   assigned bead (that lane's subagent will reach them). Hold an Archivist
-   bead until every other bead in the epic is closed.
+1. Check `enact backend`. On the server use the returned `tk` path to run
+   `tk ready --ancestor <epic> --json`. On the beads backend use
+   `bd ready --parent <epic> --json`. Drop epics, assigned beads, beads
+   whose `enact_host` or `enact_provider` names another machine or provider,
+   and beads whose `lane:` label is shared by another open, assigned bead
+   (that lane's subagent will reach them). Hold legacy
+   Archivists until every other bead in the epic is closed. The ticket
+   server handles readiness for Archivists with the `last` flag.
 2. Nothing ready: if every descendant is closed, the epic is done. If open
    beads remain and no subagent of yours is running, the run is
    deadlocked or held elsewhere: report the open beads and stop (⛔).

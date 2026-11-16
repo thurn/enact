@@ -1731,6 +1731,12 @@ def cmd_meta(args: argparse.Namespace) -> dict[str, Any]:
     return {"bead": args.bead, "metadata": pairs, "sync": result}
 
 
+def cmd_backend(_args: argparse.Namespace) -> dict[str, Any]:
+    if uses_ticket_server(find_repo()):
+        return {"backend": "server", "tk": str(ticket_binary())}
+    return {"backend": "beads"}
+
+
 def cmd_sync(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     if uses_ticket_server(repo):
@@ -1819,8 +1825,7 @@ def descendants(graph: list[dict[str, Any]], root: str) -> list[dict[str, Any]]:
 
 
 def archivist_waits(run: list[dict[str, Any]]) -> bool:
-    """The Archivist documents the shipped state, so it starts only once it is
-    the last open work in the run, including follow-ups filed mid-run."""
+    """Hold legacy Archivist beads until the rest of the run's work closes."""
     return any(
         b.get("status") != "closed" and b.get("issue_type") != "epic" and role_of(b) != "archivist"
         for b in run
@@ -2678,7 +2683,9 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
         and targeted_here(b)
         and not (run_holds(b, graph, epic) if b["id"] in scope
                  else stopped_runs(b, graph, epic))
-        and not (hold_archivist and role_of(b) == "archivist")
+        # The server already applies readiness to new Archivist tickets.
+        # Imported Archivists have no last flag and still need the old hold.
+        and not (hold_archivist and role_of(b) == "archivist" and not (server and b.get("last")))
         and not lane_held(by_id.get(b["id"], b), graph)
     ]
     candidates.sort(key=spawn_key(graph))
@@ -5430,6 +5437,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--deferred", action="store_true",
                    help="Push writes that enact meta and close left pending (run in the "
                         "background by those commands).")
+
+    add("backend", cmd_backend, "Show the active ticket backend and its client path.")
 
     p = add("claim", cmd_claim, "Claim a bead fleet-wide (pull, claim, push).")
     p.add_argument("bead")
