@@ -477,6 +477,33 @@ class GraphTest(unittest.TestCase):
         self.assertEqual([b["id"] for b in ready],
                          ["ps-zz", "ps-e8r.2", "ps-e8r.1", "ps-e8r.9", "ps-e8r.10"])
 
+    def test_spawn_order_starts_the_longest_chain_before_lower_numbers(self):
+        def dep(on, kind="blocks"):  # `bd list` spelling
+            return {"depends_on_id": on, "type": kind}
+        graph = [
+            {"id": "ps-e.1", "status": "open"},
+            {"id": "ps-e.2", "status": "open"},
+            {"id": "ps-e.3", "status": "open", "dependencies": [dep("ps-e.2")]},
+            # `bd show` spelling; a closed link no longer lengthens the chain.
+            {"id": "ps-e.4", "status": "open",
+             "dependencies": [{"id": "ps-e.3", "dependency_type": "blocks"}]},
+            {"id": "ps-e.5", "status": "open", "dependencies": [dep("ps-e.1")]},
+            {"id": "ps-e.6", "status": "closed", "dependencies": [dep("ps-e.1")]},
+            {"id": "ps-e.7", "status": "open", "dependencies": [dep("ps-e.6")]},
+            {"id": "ps-e.8", "status": "open", "dependencies": [dep("ps-e.1", "related")]},
+            {"id": "ps-e.9", "status": "open", "priority": 1},
+        ]
+        chains = enact.chain_lengths(graph)
+        self.assertEqual((chains["ps-e.2"], chains["ps-e.1"], chains["ps-e.8"]), (3, 2, 1))
+        ready = [graph[i] for i in (0, 1, 7, 8)]
+        ready.sort(key=enact.spawn_key(graph))
+        self.assertEqual([b["id"] for b in ready], ["ps-e.9", "ps-e.2", "ps-e.1", "ps-e.8"])
+
+    def test_chain_lengths_survive_a_cycle(self):
+        graph = [{"id": "a", "dependencies": [{"depends_on_id": "b", "type": "blocks"}]},
+                 {"id": "b", "dependencies": [{"depends_on_id": "a", "type": "blocks"}]}]
+        self.assertEqual(set(enact.chain_lengths(graph)), {"a", "b"})
+
     def test_run_identity_supports_legacy_hierarchy_and_shared_repairs(self):
         graph = [{"id": "run", "issue_type": "epic"},
                  {"id": "milestone", "parent": "run", "issue_type": "epic"},

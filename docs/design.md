@@ -1691,3 +1691,19 @@ instead of adopting it needs the plan's context.
   harness sets it so that no background pusher outlives a test, and one
   integration test turns it off to check that deferred writes reach the
   other clone.
+
+## Longest chains first (2026-11-15)
+
+- Among ready beads of equal role class and priority, `enact next` (and lane
+  continuation) now starts the bead with the longest chain of open beads
+  waiting on it through blocking edges (`blocks`, `conditional-blocks`,
+  `waits-for`), counting itself. Bead number remains the last tiebreak.
+- Why: picking the lowest number could leave a long dependency chain for
+  last, so a parallel run would finish with one session working through it
+  bead by bead while the rest of the pool sat idle. Starting the critical
+  path early keeps the tail of a run wide.
+- Stewards and explicit priority still come first: priority is the
+  planner's stated intent, chain length only a default.
+- Closed and deferred beads do not lengthen a chain. Lanes are not counted
+  as chains: lane beads already run one after another in one session, and
+  only edges express a real ordering.

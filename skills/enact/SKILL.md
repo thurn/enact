@@ -189,8 +189,9 @@ launch and check. Loop:
 2. Nothing ready: if every descendant is closed, the epic is done. If open
    beads remain and no subagent of yours is running, the run is
    deadlocked or held elsewhere: report the open beads and stop (⛔).
-3. Take the highest-priority bead (lowest number), or up to the
-   parallelism level of beads that will not edit the same code.
+3. Take the highest-priority bead; among equals, the one with the longest
+   chain of open beads waiting on it, then the lowest number. Or take up
+   to the parallelism level of beads that will not edit the same code.
    `enact claim <bead>` each; on exit 3 skip it.
 4. Title yourself with the running roles and launch one subagent per bead.
    The role is the bead's `role:` label (`executor` when unlabeled).

@@ -308,8 +308,9 @@ the code again:
   code non-additively, give it an ordering edge instead.
 - **A bead that fills a session stays out of lanes**: a design, a rewrite,
   anything likely to end with a heavy context. Order it with an edge.
-- **Order inside a lane** is priority, then bead number. Where one lane
-  bead builds on another, set priorities or add an edge so it comes later.
+- **Order inside a lane** is priority, then the longest chain of beads
+  waiting on it, then bead number. Where one lane bead builds on another,
+  set priorities or add an edge so it comes later.
 - **Every bead has a tier** when the project assigns models by name.
 - In beads you were given, keep lane labels that already follow these
   rules, fix the ones that do not (`bd label add`, `bd label remove`), and

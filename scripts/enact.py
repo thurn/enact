@@ -33,7 +33,7 @@ import tomllib
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from typing import Any, BinaryIO
 
 
@@ -476,10 +476,57 @@ def role_of(bead: dict[str, Any]) -> str:
     return label_value(bead, "role") or "executor"
 
 
-def spawn_order(bead: dict[str, Any]) -> tuple[Any, ...]:
-    """Stewards first, then priority, then lowest bead number (ps-e8r.9 < .10)."""
+# Dependency types that keep a bead out of `bd ready` until the other closes.
+BLOCKING_DEPS = frozenset({"blocks", "conditional-blocks", "waits-for"})
+
+
+def blockers(bead: dict[str, Any]) -> list[str]:
+    """IDs of the beads this one waits on. `bd list` and `bd show` spell
+    dependency entries differently."""
+    return [dep.get("depends_on_id") or dep.get("id")
+            for dep in bead.get("dependencies") or []
+            if (dep.get("type") or dep.get("dependency_type")) in BLOCKING_DEPS]
+
+
+def chain_lengths(graph: list[dict[str, Any]]) -> dict[str, int]:
+    """For each open bead, how many open beads the longest chain of blocking
+    edges starting at it holds, itself included. Starting the longest chain
+    first keeps the run from ending on one bead at a time."""
+    open_ids = {b["id"] for b in graph if b.get("status") not in ("closed", "deferred")}
+    dependents: dict[str, set[str]] = {}
+    for bead in graph:
+        if bead["id"] in open_ids:
+            for blocker in blockers(bead):
+                dependents.setdefault(blocker, set()).add(bead["id"])
+    lengths: dict[str, int] = {}
+
+    def length(bead_id: str, path: frozenset[str]) -> int:
+        if bead_id in lengths:
+            return lengths[bead_id]
+        if bead_id in path:  # a cycle: bd refuses these, but never loop on one
+            return 0
+        path |= {bead_id}
+        lengths[bead_id] = 1 + max((length(d, path) for d in dependents.get(bead_id, ())),
+                                   default=0)
+        return lengths[bead_id]
+
+    for bead_id in open_ids:
+        length(bead_id, frozenset())
+    return lengths
+
+
+def spawn_order(bead: dict[str, Any], chains: dict[str, int] | None = None) -> tuple[Any, ...]:
+    """Stewards first, then priority, then the longest chain of open beads
+    waiting on it (see `chain_lengths`), then lowest bead number
+    (ps-e8r.9 < .10)."""
     number = [int(p) if p.isdigit() else p for p in re.split(r"(\d+)", bead["id"])]
-    return role_of(bead) != "steward", bead.get("priority", 2), number
+    chain = (chains or {}).get(bead["id"], 1)
+    return role_of(bead) != "steward", bead.get("priority", 2), -chain, number
+
+
+def spawn_key(graph: list[dict[str, Any]]) -> Callable[[dict[str, Any]], tuple[Any, ...]]:
+    chains = chain_lengths(graph)
+    return lambda bead: spawn_order(bead, chains)
 
 
 def steward_targeted_here(bead: dict[str, Any]) -> bool:
@@ -1375,7 +1422,7 @@ def cmd_brief(args: argparse.Namespace) -> dict[str, Any]:
         "dependencies": dependencies,
         "lane": [{"id": b["id"], "title": b.get("title"), "status": b.get("status"),
                   "assignee": b.get("assignee")}
-                 for b in sorted(graph, key=spawn_order) if same_lane(bead, b, graph)],
+                 for b in sorted(graph, key=spawn_key(graph)) if same_lane(bead, b, graph)],
     }
 
 
@@ -1539,7 +1586,7 @@ def continue_lane(repo: Repo, beads: Beads, closed: dict[str, Any],
     options = [by_id.get(b["id"], b) for b in ready]
     options = sorted((b for b in options
                       if same_lane(closed, b, graph) and role_of(b) == role_of(closed)
-                      and targeted_here(b) and not stopped_runs(b, graph)), key=spawn_order)
+                      and targeted_here(b) and not stopped_runs(b, graph)), key=spawn_key(graph))
     carry = {key: meta(closed, key) or "" for key in LANE_CARRY if meta(closed, key)}
     if meta(closed, "enact_reservation"):
         carry["enact_reservation"] = uuid.uuid4().hex
@@ -2196,7 +2243,7 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
         and not (hold_archivist and role_of(b) == "archivist")
         and not lane_held(by_id.get(b["id"], b), graph)
     ]
-    candidates.sort(key=spawn_order)
+    candidates.sort(key=spawn_key(graph))
     if candidates and pooled and not members:
         # Only a turn the user starts may start replacements.
         return {**result, "action": "pool-empty", "started": pool["started"],
