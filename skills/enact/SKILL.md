@@ -9,7 +9,7 @@ disable-model-invocation: true
 
 # Enact inline
 
-You run Enact work in this session. Beads, worktrees, `enact push` and slow
+You run Enact work in this session. Tasks, worktrees, `enact push` and slow
 CI work exactly as in `/enact-plan`, but nothing runs outside this session:
 you do bead work yourself, or hand it to subagents and wait for them. Your
 session title always shows which role is working.
@@ -70,13 +70,16 @@ large task, a lost claim): the user reads run state from the emoji alone.
 ## Pre-flight
 
 1. `git -C "$ENACT" pull --ff-only` (ignore failure when offline).
-2. `.enact.toml` and `.beads/` must exist and the remote must have a
-   `staging` branch. If not, tell the user to run `/enact-setup` and stop.
+2. Require `.enact.toml` and a `staging` branch on the remote. Follow
+   [Task backend](roles/common.md#task-backend) to select the active CLI.
+   Require `.beads/` on the Beads backend. If setup is missing, tell the
+   user to run `/enact-setup` and stop.
 3. Read `AGENTS.md` (its Enact section may restrict roles or set review
    policy; the invocation overrides it) and `.enact.toml`.
-4. Classify the input: `bd show <input> --json` finds a bead (an epic if its
-   `issue_type` is `epic`); otherwise a path to a file is a plan document;
-   otherwise it is a task prompt.
+4. Classify the input with `show <input> --json` on the active CLI.
+   If it finds a task, check whether it is an epic. A file path that does
+   not identify a task is a plan document. Treat other text as a task
+   prompt. Resolve store access errors before classifying the input.
 5. If the invocation says to start only after other beads close ("once
    ps-myz closes, ..."), title yourself 🔮 and run `enact wait <bead>...`
    (600000 ms tool timeout) from the project that owns them. Repeat on
@@ -100,14 +103,10 @@ subagent pushes (subagents do not start subagents).
 The Warden always runs in a fresh subagent on its own bead, after the
 Executor has pushed. One Warden covers related beads (several beads, a lane)
 together: most of its cost is learning the code. When no Warden bead exists
-yet, file one:
-
-```sh
-bd create --title "Review <bead>: <summary>" --description "..." \
-  --acceptance "..." --labels role:warden [--parent <epic>] --json
-bd dep add <warden bead> <executor bead>
-enact sync
-```
+yet, create one with the scope in its description, verifiable
+`--acceptance`, `--labels role:warden` and, within an epic, `--parent <epic>`.
+Add an edge from the Warden to each Executor it reviews. Publish as
+described in [Task backend](roles/common.md#task-backend).
 
 ## Light runs
 
@@ -118,9 +117,8 @@ and review policy:
 - At most one review, at the end. Ignore `review:inline` labels and run no
   per-bead Wardens. Unless the whole run is one routine change, file a
   single final Warden bead depending on every executor bead in the run.
-- Label the run `run:light`: `bd label add <input> run:light` on an input
-  bead or epic, and `--labels` on beads you file (beads filed under a
-  labeled epic inherit it). Subagents read it to keep follow-ups and the
+- Label the input bead or epic `run:light` and include it in `--labels`
+  when filing work for the run. Subagents read it to keep follow-ups and the
   final review light.
 - An epic: first close each unclaimed Mason, Sage, Archivist and Warden
   bead in it (`enact claim <id>`, then `enact close <id> --reason "skipped:
@@ -138,9 +136,9 @@ describes a large work item (several independent pieces, phases, days of
 work), tell the user to use `/enact-plan` and stop.
 
 File one executor bead carrying the whole prompt and the answers, with
-acceptance criteria an agent can verify (`bd create ... --labels
-role:executor --json`, then `enact sync`), and continue as for a plain
-bead.
+acceptance criteria an agent can verify and `--labels role:executor`.
+Publish as described in [Task backend](roles/common.md#task-backend) and
+continue as for a plain bead.
 
 ## A plain bead
 
@@ -166,8 +164,8 @@ Then go to [Slow CI](#slow-ci).
 You implement them yourself, in the order given, keeping what you learn
 from one for the next. That is the point: do not hand them to subagents.
 
-1. Label them one lane unless they share one already:
-   `bd label add <bead> lane:<name>` for each, then `enact sync`.
+1. Give them the same `lane:<name>` label unless they share one already.
+   Publish as described in [Task backend](roles/common.md#task-backend).
 2. For each bead in turn, as in [A plain bead](#a-plain-bead): claim it,
    retitle `⚒️ [<bead>] ...`, work it as the Executor (read the role files
    once) and close it. Skip a bead someone else holds (claim exit 3).
@@ -183,8 +181,8 @@ launch and check. Loop:
 
 1. Check `enact backend`. On the server use the returned `tk` path to run
    `tk ready --ancestor <epic> --json`. On the beads backend use
-   `bd ready --parent <epic> --json`. Drop epics, assigned beads, beads
-   whose `enact_host` or `enact_provider` names another machine or provider,
+   `bd ready --parent <epic> --limit 0 --json`. Drop epics, assigned beads,
+   beads whose `enact_host` or `enact_provider` names another machine or provider,
    and beads whose `lane:` label is shared by another open, assigned bead
    (that lane's subagent will reach them). Hold legacy
    Archivists until every other bead in the epic is closed. The ticket
@@ -198,9 +196,9 @@ launch and check. Loop:
    `enact claim <bead>` each; on exit 3 skip it.
 4. Title yourself with the running roles and launch one subagent per bead.
    The role is the bead's `role:` label (`executor` when unlabeled).
-5. When a subagent returns, check `bd show <bead> --json` for its bead and
-   any lane beads it went on to claim. If one is still open, read the
-   subagent's summary and the bead's comments: if the work can continue,
+5. When a subagent returns, check its bead and any lane beads it went on
+   to claim with `show --json` on the active CLI. If one is still open, read
+   the subagent's summary and the bead's comments. If the work can continue,
    launch one fresh subagent for the same bead; if not
    (or the second one also stops), comment the state on the bead, run
    `enact release <bead> --reason "..."`, and stop with a report (⛔).
@@ -244,11 +242,9 @@ one, so the newest SHA covers them all.
 
 ## Rules
 
-- Use raw `bd ... --json` for reads and filing and `enact sync` afterward;
-  `enact claim`, `close` and `release` sync themselves.
 - The user is here, but do not stop to ask about things an agent can
   decide. Ask only for a genuine human decision or missing access.
-- An emergency (corrupt Beads database, every push rejected, disk full, a
+- An emergency (corrupt task store, every push rejected, disk full, a
   core tool broken) stops the run: report the evidence to the user. Never
   request or start a Justiciar.
 - A user stop: let a running subagent finish or interrupt it, leave its

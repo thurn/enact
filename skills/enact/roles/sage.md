@@ -61,5 +61,5 @@ Keep changes small and backward compatible: other projects and live
 sessions on other machines use the same files. Record the change and its
 staging commit on your bead.
 
-Then `enact sync`, write a short summary with measurements on your bead, and
-close it.
+Publish as described in [Task backend](common.md#task-backend), write a
+short summary with measurements on your bead, and close it.

@@ -28,7 +28,12 @@
   fast-forwards local `staging` and `master` to match the remote, so keep
   the main checkout clean.
 - Fast and slow check commands are in `.enact.toml`.
-- Beads live in this repo (`bd`); publish bead changes with `enact sync`.
+- Run `enact backend` from this repo. With `backend: server`, use the
+  returned `tk` executable for task reads, filing, and comments. Writes
+  publish immediately, and native IDs are unprefixed. With
+  `backend: beads`, use `bd` and publish direct edits with `enact sync`.
+  Use `enact` for claims, assignment metadata, releases and closes on both.
+  See Enact's `skills/enact/roles/common.md` for the commands.
 - `/enact <beads|epic|task>` runs Enact work inline in one session;
   `/enact-plan <bead|plan|task>` runs it unattended across sessions. Most
   work goes through neither.

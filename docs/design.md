@@ -2396,3 +2396,14 @@ in the same batch. A sequence precondition makes concurrent CI failures on
 the same OS converge on one open Steward ticket. Passing CI advertises
 promotion after the Git push, so a feed waiter can fetch and check master.
 The local runner still tracks its PID, log and pending promotion receipt.
+
+## Task commands in Enact prompts during cutover (2026-11-16)
+
+New prompts select the CLI with `enact backend` and share the command
+reference in `skills/enact/roles/common.md`. That keeps the role flow and
+ownership fences in the helper while new task edits use the active store.
+Older prompts keep their `bd` commands through the shim. The prompts
+preserve Beads sync and review gates on the Beads backend. On the server,
+they use immediate writes, native IDs and server readiness for new
+milestone audits. Sweep excludes both indefinitely deferred tickets and
+open tickets that are snoozed until a future date.

@@ -1,7 +1,7 @@
 ---
 name: enact-plan
 description: Run work unattended with Enact by orchestrating fresh top-level
-  agent sessions over a Beads graph. Takes an existing bead, a project plan
+  agent sessions over a task graph. Takes an existing bead, a project plan
   document or a task prompt, files any beads it needs, then executes them.
   User-invoked only. For inline execution in this session, use /enact.
 disable-model-invocation: true
@@ -42,9 +42,8 @@ you find there: a bead or plan that says "run N at once" does not change N.
   live in `$ENACT/skills/enact/roles/`.
 - The helper is `python3 "$ENACT/scripts/enact.py"` (`py -3` on Windows),
   written `enact` below. Every subcommand prints one JSON object.
-- Run `enact backend` to identify the active backend. On the server,
-  `tk` below means the executable at the returned `tk` path. The `bd`
-  shim still handles existing `bd` commands after cutover.
+- Follow [Task backend](../enact/roles/common.md#task-backend) for task
+  commands. Run `enact backend` once you have verified `.enact.toml`.
 - Your vizier identity is your own session ID (`CLAUDE_CODE_SESSION_ID` in
   Claude Code, `CODEX_THREAD_ID` in Codex). `enact next` reads it itself.
 - Run all commands from the project's main checkout.
@@ -153,10 +152,10 @@ a recorded default (`common.md`, "Speculative defaults").
    `auto`. Otherwise ask the user to switch modes, and do not start until they
    have. In Codex, require an approval policy that never prompts and complete
    the project/tool/local-access checks above before reserving any bead.
-4. **Classify the input.** If `tk show <input> --json` (server) or
-   `bd show <input> --json` (beads) finds a bead, it is a bead. Otherwise,
-   if it names a file, it is a plan document. Otherwise it is a task
-   prompt. Then follow the matching section below.
+4. **Classify the input.** If `show <input> --json` on the active CLI finds
+   a bead, follow the bead section. If the input names a file, follow the
+   plan document section. Otherwise treat it as a task prompt. Resolve
+   store access errors before classifying the input.
 
 ### A bead
 
@@ -171,8 +170,8 @@ a recorded default (`common.md`, "Speculative defaults").
   scheduler work by epic. If it already has a parent epic, ask the user
   whether to run that whole epic instead or to move the bead into a run of
   its own. For a run of its own, create an epic titled after the bead, then
-  `bd update <bead> --parent <new epic> --json`. Do not decompose it or add
-  beads.
+  move the bead with `update --parent` on the active backend. Do not
+  decompose it or add beads.
 - **Several beads**: the same, with one new epic holding them all, then the
   stoppage audit and the lane and tier pass over them.
 
@@ -276,11 +275,10 @@ with `--json` (see `bd create --help`).
   reported-only or benchmark bead gets no dependents, so it never blocks.
 - **Existing beads** belong to whoever filed them. Before moving one into
   this run (`--parent`) or adding an edge to or from it, read its full
-  `bd show <bead> --json` (never truncated): its `parent` and every
-  dependent. Ask the user before moving a bead out of another open epic or
-  blocking a bead another epic waits on; otherwise reference it from the
-  context packet instead. Plan and graph views go stale while other
-  sessions file, so re-read right before the change.
+  `show` result and check its `parent` and every dependent. Ask the user
+  before moving a bead out of another open epic or blocking a bead another
+  epic waits on. Otherwise reference it from the context packet. Re-read
+  the graph before making the change because other sessions can edit it.
 - **Pin** (`enact_host`, `enact_provider`) only a bead that cannot run
   anywhere else and that nothing depends on; otherwise name the preferred
   machine in its description.
@@ -330,8 +328,8 @@ the code again:
   set priorities or add an edge so it comes later.
 - **Every bead has a tier** when the project assigns models by name.
 - In beads you were given, keep lane labels that already follow these
-  rules, fix the ones that do not (`bd label add`, `bd label remove`), and
-  list what you changed in a comment on the run epic.
+  rules, fix the ones that do not, and list what you changed in a comment
+  on the run epic.
 
 Decompose a plan fully up front by default. For a large or uncertain plan you
 may instead file concrete beads for the first milestone plus one executor
@@ -402,10 +400,9 @@ in its description, if any. A small task-prompt run or a light run gets none.
   nothing depending on it.
 - Prefer fewer, larger beads. A plan document still gets its stoppage
   audit: an unattended run needs it at any pace.
-- Label the run epic `run:light` (`--labels` when you create it,
-  `bd label add <epic> run:light` for an existing one). Beads filed under
-  it later inherit the label, and workers read it to keep follow-ups and
-  the final review light.
+- Label the run epic `run:light`. Workers check the epic for this label.
+  On the server, explicitly include `run:light` on new children that need
+  to carry the label themselves. Beads inherits the label at creation.
 - An existing epic: close each unclaimed Mason, Sage, Archivist and Warden
   bead in it (`enact claim <id>`, then `enact close <id> --reason "skipped:
   light run"`; on exit 3 leave it). The final Warden depends on the beads
@@ -414,10 +411,12 @@ in its description, if any. A small task-prompt run or a light run gets none.
 ### Finish planning
 
 1. If you filed or moved beads, check the whole graph. On the server, use
-   `tk list --ancestor <epic> --json` and `tk ready --ancestor <epic> --json`.
-   On the beads backend, run `enact sync`, then use `bd list --parent
-   <epic> --json` and `bd ready --parent <epic> --json`. Something must be
-   ready (unless another vizier holds it), and every bead must be reachable.
+   `tk list --ancestor <epic> --all --json` and
+   `tk ready --ancestor <epic> --json`.
+   On Beads, run `enact sync`, then use `bd list --parent <epic> --all
+   --limit 0 --json` and recurse into child epics. Use
+   `bd ready --parent <epic> --limit 0 --json` for ready work. Something must
+   be ready unless another vizier holds it, and every bead must be reachable.
    For each bead you moved in, check that no open bead under another epic
    now waits on this run's beads unless the user agreed.
 2. **Register the run.** `enact run register <epic> --parallel <N>
@@ -624,12 +623,12 @@ files.
 ## Multiple machines and providers
 
 Several viziers can work one epic: one per machine or provider, each invoked
-by the user on its own host with the same epic ID. They share the graph via
-the Dolt remote (`refs/dolt/data` on origin) and code via `origin/staging`.
-`enact next` claims beads with a pull-claim-push cycle, so two viziers never
-spawn the same bead. Communication between them is rare and goes through
-beads: any bead with metadata `enact_host=<host>` or
-`enact_provider=<claude|codex>` is only picked up by the matching vizier.
+by the user on its own host with the same epic ID. Code goes through
+`origin/staging`. The ticket server shares the task graph and grants claims
+atomically. On Beads, the graph lives in `refs/dolt/data` on the remote and
+`enact next` uses a pull-claim-push cycle. Viziers coordinate through beads.
+A bead with `enact_host=<host>` or `enact_provider=<claude|codex>` metadata
+can only be picked up by the matching vizier.
 
 ## Reference
 

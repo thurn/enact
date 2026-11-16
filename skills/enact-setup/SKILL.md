@@ -1,7 +1,8 @@
 ---
 name: enact-setup
 description: Set up the Enact orchestration framework on this machine and in
-  the current project (skills, Beads, staging branch, .enact.toml, AGENTS.md).
+  the current project (skills, task backend, staging branch, .enact.toml,
+  AGENTS.md).
 disable-model-invocation: true
 ---
 
@@ -15,12 +16,14 @@ written `enact` below.
 
 ## 1. Machine
 
-1. Check the tools: `git`, Python 3.11+, `bd` (Beads 1.2+), and `dolt`, which
-   Enact uses to resolve Beads merge conflicts. Report anything missing with
-   install instructions and stop.
+1. Check for `git`, Python 3.11+ and Cargo. The installer builds the
+   managed `tk` client. Check for `bd` (Beads 1.2+) and `dolt` if the
+   project uses Beads, including an enrolled project before cutover.
+   If the project is already configured for tickets, see the
+   [enrollment instructions](../../README.md#ticket-enrollment-and-cutover).
 2. `git -C "$ENACT" pull --ff-only`.
-3. `enact install` links the `enact`, `enact-plan` and `enact-setup` skills
-   into the canonical Codex directory `~/.agents/skills` (created even on a
+3. `enact install` links `enact`, `enact-plan`, `enact-setup` and
+   `enact-sweep` into `~/.agents/skills` (created even on a
    fresh machine) and Claude's skills directory when its config directory exists.
    It uses symlinks or Windows directory junctions, removes this checkout's
    standalone legacy Codex links, and preserves shared Claude directories
@@ -33,9 +36,10 @@ written `enact` below.
 
 Run from the project's main checkout.
 
-1. **Remote.** The project needs an `origin` remote on GitHub (or any git
-   host). Enact keeps code on `origin/staging` and Beads data on
-   `refs/dolt/data` in the same remote.
+1. **Remote.** The project needs a Git remote for code. With the default
+   configuration that is `origin`, where Enact uses `origin/staging`.
+   Beads also uses `refs/dolt/data` there. Ticket enrollment uses the
+   GitHub remote configured for the ticket project.
 2. **Branches.** Find the integration branch (`master` or `main`). Enact
    promotes to it only after the slow checks pass.
 3. **Checks.** Find the project's fast checks (about 60 seconds: lint, type
@@ -43,16 +47,17 @@ Run from the project's main checkout.
    `README`, `Makefile`, `package.json`, `scripts/` and CI configuration. If
    unclear, ask the user; do not guess. If there is no fast/slow split,
    propose one.
-4. **Run** `enact setup --prefix <short beads prefix> --master <branch>
-   --fast "<cmd>" --slow "<cmd>"`. It writes `.enact.toml` (if missing),
-   adds the worktree root (`/.worktrees/` by default) and bd's audit log
-   (`/.beads/interactions.jsonl`, also removed from the index) to
-   `.gitignore`,
-   initializes Beads (if missing; `bd init` commits `.beads/` on the current
-   branch) or bootstraps the local Beads database from the remote on a fresh
-   clone, creates `origin/staging` from the integration branch (if missing)
-   and pushes the Beads database. On every further machine, cloning and
-   running `enact setup` is all the project setup needed.
+4. **Run** `enact setup --master <branch> --fast "<cmd>" --slow "<cmd>"`.
+   If initializing Beads, add `--prefix <short beads prefix>`. Setup
+   writes `.enact.toml` if missing, ignores the worktree root and the
+   Beads audit log, and creates `origin/staging` if missing.
+   - **Beads:** Setup initializes or bootstraps the local database and
+     syncs it when it has a remote. `bd init` can commit the tracked
+     `.beads/` files on the current branch.
+   - **Enrolled project:** Setup registers the machine token against the
+     configured remote and posts a machine event. If `enact backend`
+     reports `server`, setup needs no local Beads database. Before cutover,
+     setup still initializes or bootstraps Beads.
 5. **Worktree hooks.** Ask whether new worktrees need anything special
    (reusing build caches, APFS clones, warm worktree pools). If so, write
    `create`/`remove` hook scripts and add them to `[worktree]` in
@@ -69,16 +74,18 @@ Run from the project's main checkout.
    replace any existing instruction to commit or push to the main branch
    directly. Ask the user about anything you are unsure of, such as role
    restrictions or the review policy.
-7. **Commit** `.enact.toml`, `.gitignore`, the tracked `.beads/` files and
-   `AGENTS.md`, then
-   deliver with `enact push`, which puts the commit on staging. Slow CI
+7. **Commit** the setup changes to `.enact.toml`, `.gitignore` and
+   `AGENTS.md`, plus any tracked `.beads/` changes from Beads setup.
+   Deliver with `enact push`, which puts the commit on staging. Slow CI
    promotes it to the integration branch when it passes.
 
 ## 3. Verify
 
 - `enact status` succeeds.
-- `bd list --json` works.
-- `git ls-remote origin staging refs/dolt/data` shows both refs.
+- The configured remote has the staging branch.
+- Run `enact backend`. On `server`, use the returned executable to run
+  `tk list --json`. On `beads`, verify `bd list --json` and
+  `git ls-remote origin refs/dolt/data` (use the configured remote).
 
 Report what you set up, and remind the user that `/enact` runs a bead, an
 epic or a task prompt inline in one session, and `/enact-plan` with a bead,

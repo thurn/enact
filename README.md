@@ -3,9 +3,9 @@
 Enact is a minimal agent orchestration framework for **large, unattended
 project execution** from a desktop agent app (Claude Desktop, Codex
 Desktop). You hand `/enact-plan` a bead, a plan document or a task prompt;
-it files what it needs as a [Beads](https://github.com/gastownhall/beads)
-graph and runs every bead in a fresh top-level session for days, across
-machines and model providers, synchronized through one GitHub remote.
+it files the work in [Beads](https://github.com/gastownhall/beads) or the
+Enact ticket server and runs each task in a fresh top-level session across
+machines and model providers. Code goes through a shared Git remote.
 
 To clear a backlog, `/enact-sweep` finds stale beads (open work no live
 run owns), closes the ones that shipped or no longer matter, and runs the
@@ -15,9 +15,9 @@ For smaller work, `/enact` runs a bead, an epic or a task prompt inside the
 current session with the same roles, using subagents for an epic's beads,
 and waits for slow CI before it finishes.
 
-Enact has no state of its own beyond the bead graph, no server and no CI
-dependency: four skills, nine short role prompts and a stdlib Python
-helper.
+Enact has four skills, role prompts and a stdlib Python helper. The helper
+runs checks and promotes green staging commits. The optional ticket server
+stores the task graph and coordinates claims and leases.
 
 ## Layout
 
@@ -29,6 +29,7 @@ helper.
 | `skills/enact-setup/SKILL.md` | Machine and project setup: `/enact-setup` |
 | `skills/enact-sweep/SKILL.md` | Close stale beads, run the rest: `/enact-sweep` |
 | `scripts/enact.py` | Helper: claims, sync, push, slow CI, locks |
+| `cli/`, `server/` | Native `tk` client, compatibility shim and ticket Worker |
 | `templates/AGENTS.md` | Sample AGENTS.md section |
 | `docs/design.md` | Design decisions and rationale |
 
@@ -128,8 +129,22 @@ model = "sonnet"
 # tier:fable, tier:opus and tier:sonnet are built in for Claude: no entry
 ```
 
-Requirements: git, Python 3.11+, Beads (`bd`) 1.2+ in its default embedded
-Dolt mode, and the `dolt` CLI (used to resolve Beads merge conflicts).
+Requirements: Git and Python 3.11+. Install Cargo to build the managed
+`tk` client. The Beads backend also uses `bd` 1.2+ in its default embedded
+Dolt mode and the `dolt` CLI to resolve Beads merge conflicts.
+
+### Working with tasks
+
+Run `enact backend` in the project. On `beads`, use `bd` and publish
+direct edits with `enact sync`. On `server`, use the returned `tk` path.
+Ticket writes are immediate, and migrated prefixed IDs still resolve to
+unprefixed ticket IDs. Use `enact claim`, `start`, `meta`, `release` and
+`close` for ownership and assignment on both backends.
+
+New server-backed plans file milestone audits directly under the milestone
+with `tk create --last`. The server manages readiness and parent closure.
+Beads plans use review gate epics, and imported gates retain their edges.
+See the [task command reference](skills/enact/roles/common.md#task-backend).
 
 ### Ticket enrollment and cutover
 
@@ -161,8 +176,9 @@ With the default backend, the shim and Enact both use the project's
 cutover state. They use Beads in `before`, wait during `paused`, and use
 tickets in `after`. `[tickets] backend = "server"` directs the Enact
 helper to use the ticket API immediately. Leave that override unset when
-preparing a fleet cutover. Tool and prompt callers can keep invoking
-`bd` through `PATH` throughout the transition.
+preparing a fleet cutover. Older prompts can keep invoking `bd` through
+`PATH` throughout the transition. New prompts use `enact backend` to
+choose the active CLI.
 
 ## Helper commands
 
@@ -175,12 +191,13 @@ preparing a fleet cutover. Tool and prompt callers can keep invoking
 | `worktree create\|remove NAME` | Worktree from `origin/staging` (hookable) |
 | `worktree prune` | Delete dead worktrees (slow CI does this on each run) |
 | `push [--bead B]` | Rebase, merge diverged master, fast checks, push to staging, start CI |
-| `close BEAD --reason R [--continue]` | Close, auto-close finished epics, sync; `--continue` claims the bead's next lane bead |
+| `close BEAD --reason R [--continue]` | Close the task and any finished epics. With `--continue`, claim the next task in the lane |
 | `brief BEAD` | One-read working context: bead, epics, dependency handoffs, lane |
-| `claim BEAD`, `meta BEAD k=v`, `release BEAD` | Bead bookkeeping (always synced) |
-| `sync` | Commit, merge (remote wins on conflict) and push Beads |
+| `claim BEAD`, `meta BEAD k=v`, `release BEAD` | Ownership and assignment bookkeeping on either backend |
+| `backend` | Report `beads` or `server`, with the managed `tk` path on `server` |
+| `sync` | Commit, merge and push Beads, with remote values winning conflicts. Ticket writes need no sync |
 | `ci [--detach\|--status\|--wait SHA]` | Coalescing slow-CI runner; watch one delivery |
-| `justiciar status\|request\|acquire\|release\|break` | Fleet-wide emergency lock |
+| `justiciar status\|request\|acquire\|release\|break` | Per-machine emergency lock or lease |
 | `status` | This machine's runs, workers, CI and deliveries |
 | `install`, `setup` | Machine and project setup |
 

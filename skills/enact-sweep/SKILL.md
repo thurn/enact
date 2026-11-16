@@ -1,6 +1,6 @@
 ---
 name: enact-sweep
-description: Sweep a project's Beads graph for stale beads (open work no run
+description: Sweep a project's task graph for stale beads (open work no run
   or session owns), close the ones that are done or no longer relevant, then
   run the rest unattended as an Enact vizier. User-invoked only.
 disable-model-invocation: true
@@ -32,7 +32,8 @@ vizier starts fresh chats as work becomes ready and waits in the foreground.
 
 `ENACT` and the helper (`enact` below) are as in
 `$ENACT/skills/enact-plan/SKILL.md` (this skill's base directory, up two
-levels). Run every command from the project's main checkout.
+levels). Run every command from the project's main checkout. Follow
+[Task backend](../enact/roles/common.md#task-backend) for task commands.
 
 ## 1. Pre-flight
 
@@ -41,7 +42,7 @@ levels). Run every command from the project's main checkout.
 2. Unless **dry**, do the vizier's pre-flight checks now, while the user is
    here: project setup and permission mode (enact-plan Phase 1, steps 2
    and 3). Stop on a failure before you close anything.
-3. `enact sync`.
+3. Run `enact backend`. On Beads, run `enact sync` before listing work.
 
 ## 2. Find stale beads
 
@@ -50,15 +51,16 @@ assignee, and no live run owns it. Age alone does not make a bead stale. A
 bead filed an hour ago under a dead run is stale; a week-old bead queued in
 a live run is not.
 
-1. List candidates: `bd list --status open --limit 0 --json`. Apply
-   **older than N days** to `updated_at` if given.
+1. List candidates with `tk list --status open --json` on the server or
+   `bd list --status open --limit 0 --json` on Beads. Keep unassigned work
+   and apply **older than N days** to `updated_at` if given.
 2. Find the live runs: `enact status` lists this host's runs in
    `active_runs`. A run counts as live when its `control.state` is
    `active` and the host's inspect tool shows its vizier session still
    exists. A run whose vizier is gone is dead: nothing will resume it, so
    its beads are candidates (this sweep becomes their new vizier).
-3. Read each candidate's epic chain (`bd show <epic> --json`, following
-   `parent`). Skip a bead when its chain includes:
+3. Read each candidate's epic chain with `show --json` on the active CLI,
+   following `parent`. Skip a bead when its chain includes:
    - an epic that is live by step 2;
    - an open epic with an `enact_vizier_route_*` key for another host or
      provider. You cannot see that run's liveness, so list it in the report
@@ -66,8 +68,9 @@ a live run is not.
 4. Skip, and report only, beads labeled `role:steward` (slow-CI repair
    belongs to whoever is watching CI) and beads that have open children
    (the children are triaged; the epic follows them).
-5. Report the number of `deferred` beads, which the user parked on purpose.
-   Do not triage them.
+5. Skip and count parked work. This includes tasks with status `deferred`
+   and, on the server, open tickets whose `defer_until` is still in the
+   future.
 
 What remains is the stale set. If it is empty, report that, retitle
 `✅ Bead sweep` and end.
@@ -97,7 +100,7 @@ subagents, about five beads each, on a cheaper model (the project's
 bead IDs, the verdict definitions above and the project's test commands.
 Ask for a verdict, one line of evidence (a hash or `file:line`) and, for
 **keep**, what in the bead's context packet is now wrong: renamed files,
-helpers that moved, steps already done. Subagents never write to Beads.
+helpers that moved, steps already done. Subagents only read the task store.
 You decide on every close.
 
 ## 4. Act
@@ -105,20 +108,20 @@ You decide on every close.
 Show the user a table: bead, title, verdict, evidence. Under **dry**, stop
 here, retitle `✅ Bead sweep` and end.
 
-1. **done / obsolete**: `bd close <id> --reason "Sweep <date>: <verdict>.
-   <evidence>" --json`. Check `enact backend`. On the server, closing the
-   last descendant also closes its parent epics, including imported
-   review gates. On the beads backend, run `bd epic close-eligible --json`
-   to close epics left with only closed children.
+1. **done / obsolete**: Claim with `enact claim <id>`, then run
+   `enact close <id> --reason "Sweep <date>: <verdict>. <evidence>"`.
+   On exit 3, leave the task to its current owner. Finished parent epics
+   close through the server or Enact's Beads close flow.
 2. **keep**: when the triage found the context packet wrong, add the
-   corrections with `bd comments add <id> "Sweep <date>: ..."` so the
-   worker does not rediscover them.
+   corrections in a comment beginning with `Sweep <date>:` so the worker
+   does not rediscover them.
 3. **human**: ask the user now (retitle `🔍 Bead sweep` while you wait),
    one question at a time with your recommendation, the way enact-plan's
    stoppage audit does. A resolved bead becomes **keep**, with the answer
-   added as a comment. Defer an unresolved one (`bd defer <id>`) and list
-   it in the final report.
-4. `enact sync`.
+   added as a comment. Park unresolved work with
+   `tk update ID --status deferred --if-assignee "" --json` on the server
+   or `bd defer ID` on Beads. List it in the final report.
+4. On Beads, run `enact sync` to publish direct edits.
 
 ## 5. Run the rest
 
@@ -132,8 +135,9 @@ questions from here instead of asking again:
 - Title the new run epic `Bead sweep <date>`. Its description lists the
   kept beads and each one's triage note.
 - When a kept bead already has a parent epic, move it into the sweep epic.
-  Do not run the old epic. Close an old epic left with no open children
-  (`--reason "Sweep <date>: remaining beads moved to <sweep epic>"`).
+  Do not run the old epic. If moving its last open child leaves it open,
+  claim it and close it with
+  `--reason "Sweep <date>: remaining beads moved to <sweep epic>"`.
 - Group beads that touch the same code into one `lane:<name>`. Label
   mechanical ones `tier:light`, or assign every bead `tier:sonnet`,
   `tier:opus` or `tier:fable` when the user asks for models by name

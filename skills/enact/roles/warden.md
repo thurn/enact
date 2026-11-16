@@ -15,9 +15,9 @@ not so that you rediscover the codebase: read the touched files and what
 they call, and widen only where a finding leads.
 
 Implementers leave issues they found for you as comments on your own bead.
-Treat each as a lead to confirm. Also check open beads in the run
-(`bd list --parent <epic> --json`): if your fixes fully cover an unassigned
-one, `enact claim <id>` first, then close it with
+Treat each as a lead to confirm. List open work in the run as described in
+[Task backend](common.md#task-backend). If your fixes fully cover an
+unassigned bead, `enact claim <id>` first, then close it with
 `enact close <id> --reason "obsolete: fixed by <your bead>"`. Never take over
 another worker's assignment; leave the evidence on that bead instead.
 

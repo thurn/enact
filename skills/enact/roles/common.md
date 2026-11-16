@@ -38,7 +38,7 @@ no `review:inline` reviews even where a bead has the label, and at most one
 final Warden for the whole run. File follow-ups only for real bugs, as
 `role:executor` beads with no review of their own. If the final Warden has
 not started, make it depend on each follow-up you file
-(`bd dep add <warden> <follow-up>`) so it still runs last.
+(`dep add <warden> <follow-up>`) so it still runs last.
 
 ## Start
 
@@ -120,16 +120,39 @@ later step, so explore deliberately:
 - Staging may be red because of someone else's change. That alone is not
   your problem. Do not stop for it; fast checks still gate your push.
 
-## Beads
+## Task backend
 
-- Use `enact` for ownership, start, close, release and assignment metadata;
-  it fences stale sessions. Do not bypass a rejected operation with raw `bd`
-  or git push. Use raw `bd ... --json` for other reads and writes, then
-  run `enact sync` to publish them; `enact claim` and `enact close` sync
-  themselves. If `sync` reports dropped local values, another machine changed
-  the same bead first; reapply your change only if it still makes sense.
-- Record decisions, surprises and deviations as comments on your bead
-  (`bd comments add <bead> "..."`).
+Run `enact backend` from the project's checkout. For `backend: server`,
+use the returned executable path wherever these instructions say `tk`.
+For `backend: beads`, use `bd` on PATH. Use the same `enact` commands on
+both backends for ownership, start, close, release and assignment metadata
+so a stale session cannot bypass a fence.
+
+| Task | Ticket server | Beads |
+| --- | --- | --- |
+| Read | `tk show ID --json` | `bd show ID --json` |
+| List open work | `tk list --ancestor EPIC --json` | `bd list --parent EPIC --limit 0 --json` (recurse through child epics) |
+| Create | `tk create --title "..." --body-file FILE --json` | `bd create --title "..." --description "..." --json` |
+| Comment | `tk comment ID "..." --json` | `bd comments add ID "..." --json` |
+| Move or detach | `tk update ID --parent EPIC --json` (empty string to detach) | `bd update ID --parent EPIC --json` (empty string to detach) |
+| Add or remove a label | `tk update ID --add-label LABEL --json` or `--remove-label LABEL` | `bd label add ID LABEL --json` or `bd label remove ID LABEL --json` |
+| Add or remove an edge | `tk dep add ID ON --json` or `tk dep remove ID ON --json` | `bd dep add ID ON --json` or `bd dep remove ID ON --json` |
+
+Both create commands accept `--acceptance`, `--type`, `--priority`,
+`--parent` and `--labels`. Native create returns the new ID in
+`results[0].id`. Native IDs are unprefixed. Migrated prefixed IDs still
+work as aliases. Use the returned ID and `parent` field for graph work.
+Reparenting can make the ID's dotted path differ from its parent.
+Native `show` returns an object with `type` and `edges` in both
+directions (`src` depends on `dst`). Beads' JSON uses `issue_type`, and
+`bd dep list ID --direction=up --json` lists dependents.
+
+Ticket writes publish immediately. On Beads, run `enact sync` after direct
+`bd` writes. If it reports dropped local values, reapply the change only
+if it still makes sense on the current graph. Older prompts can use the
+compatibility shim throughout the transition.
+
+Record decisions, surprises and deviations as comments on your bead.
 
 ## Lanes
 
@@ -163,22 +186,16 @@ whose acceptance includes running the checks it unblocks, and record on your
 bead which checks went unrun and why. Never park it in a handoff or closing
 summary: nothing acts on those, so the gap silently becomes permanent.
 
-If a Warden bead that has not started yet depends on yours (check
-`bd dep list <bead> --direction=up --json`) and the issue is in the code it
-will review, comment the issue on that Warden bead instead of filing a bead.
+If a Warden bead that has not started yet depends on yours, check the
+incoming edges as described in [Task backend](#task-backend). If the Warden
+will review the affected code, comment on its bead instead of filing one.
 The Warden fixes it or files it.
 
-Otherwise file it:
-
-```sh
-bd create --title "..." --description "..." --acceptance "..." \
-  --priority 2 --parent <epic> --labels role:<role> --json
-```
-
-Use the run's top epic, or the relevant milestone epic, as the parent so the
-run picks it up. Choose the role that should do it (`executor` by default).
-Add `bd dep add <new> <prerequisite>` edges only for real dependencies. File
-everything before you close your own bead, then run `enact sync`.
+Otherwise create it with a description, verifiable `--acceptance`,
+`--priority 2`, and `--labels role:<role>` (`executor` by default).
+Use `--parent` to put it under the run epic or relevant milestone.
+Add `dep add <new> <prerequisite>` edges where work needs a prerequisite.
+Publish as described in [Task backend](#task-backend) before closing.
 
 ## Finish
 
@@ -186,10 +203,9 @@ everything before you close your own bead, then run `enact sync`.
    are filed.
    If you made no code change, remove your worktree with
    `enact worktree remove <bead>`.
-2. Leave a handoff for whoever builds on or reviews your work:
-   `bd comments add <bead> "Handoff: <files and functions touched, decisions,
-   gotchas, what a reviewer should check>"`. A few lines; `enact brief`
-   shows it to every dependent bead.
+2. Leave a comment starting with `Handoff:` for whoever builds on or reviews
+   your work. Give the files and functions touched, decisions and what a
+   reviewer should check. `enact brief` shows it to every dependent bead.
 3. `enact close <bead> --reason "<one-line outcome>"`, adding `--continue`
    in a [lane](#lanes). If it returns a `next` bead, work that one now.
 4. Retitle your session `✅ [<bead>] <same summary>`.
@@ -205,8 +221,8 @@ on the bead and, when it changes the run, on the run epic. Defaults:
 
 - **A bead pinned** (`enact_host`, `enact_provider`) to a host or provider
   no vizier serves: unpin it if it can run here; otherwise move it out of
-  the epic (`bd update <bead> --parent ""`), left open for that host, and
-  drop edges so nothing in the epic waits on it.
+  the epic by setting its parent to an empty string. Leave it open for that
+  host and drop edges so nothing in the epic waits on it.
 - **A bead only another machine can do or check**: its failure came from
   that host (its description, log or CI metadata says so), or it needs that
   OS, a device or hardware this host lacks, or that host's local logs. Do
@@ -227,7 +243,7 @@ on the bead and, when it changes the run, on the run epic. Defaults:
   change, its fix for a check your push fails, or a Steward's repair. Do not
   wait for it in your session: a watch loop on `origin/staging` holds a run
   slot doing nothing, often for an hour. Commit what you have to your
-  branch, add the edge (`bd dep add <yours> <theirs>`), comment on your bead
+  branch, add the edge (`dep add <yours> <theirs>`), comment on your bead
   what you need from it and where you stopped, and
   `enact release <bead> --reason "waits on <theirs>"`. Release pushes your
   commits to `enact/<bead>` on the remote, so the next session resumes from
@@ -251,7 +267,7 @@ which drops that one bead from the run rather than holding the run.
 
 - **Ordinary difficulty is not a blocker.** Failing tests, confusing code,
   merge conflicts and flaky checks are your job. Keep working.
-- **Impossible acceptance, an emergency** (Beads database gone or corrupt,
+- **Impossible acceptance, an emergency** (task store gone or corrupt,
   every push rejected, disk full, a core tool broken for everyone) **or a
   resume after an interruption**: read `recovery.md` and follow it.
 - Never wait for a human, never end your turn mid-task to ask a question, and
