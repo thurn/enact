@@ -25,12 +25,12 @@ export class ProjectUsage {
     }
   }
 
-  record(rows = 0): void {
+  record(rows = 0, requests = 1): void {
     // Keep serving reads after the write cutoff without consuming its reserve.
     if (this.counts.rows_written >= threshold.rows_written) return;
     const next = {
       day: this.counts.day,
-      requests: this.counts.requests + 1,
+      requests: this.counts.requests + requests,
       rows_written: this.counts.rows_written + rows + 1,
     };
     this.sql.exec(

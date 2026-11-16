@@ -4,6 +4,9 @@ compatibility_date = "2026-11-16"
 account_id = "0cc730645e29feff389c14f36cb9cf4c"
 workers_dev = true
 
+[vars]
+TICKET_REPOSITORIES = { by = "thurn/beryl", en = "thurn/enact" }
+
 [build]
 command = "node scripts/build-cirrus.mjs"
 watch_dir = "static"

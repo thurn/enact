@@ -8,13 +8,14 @@ import { ProjectUsage } from "./project-usage";
 import { exportTickets, importTickets } from "./ticket-transfer";
 import { TicketStore } from "./ticket-store";
 import { ApiError, integer, object } from "./ticket-types";
-import { authorizeWrite, registeredMachine, type Identity } from "./token-auth";
+import { authorizeWrite, TokenRegistry, type Identity } from "./token-auth";
 
 declare global {
   namespace Cloudflare {
     interface Env {
       ASSETS: Fetcher;
       TICKETS: DurableObjectNamespace<ProjectTickets>;
+      TICKET_REPOSITORIES: Record<string, string>;
     }
 
     interface GlobalProps {
@@ -34,6 +35,7 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
 
   private readonly feed = new ChangeFeed(this.ctx, this.store);
   private readonly deadlines = new ProjectDeadlines(this.store);
+  private readonly tokens = new TokenRegistry(this.ctx.storage, this.store);
 
   override webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
     this.feed.subscribe(socket, message);
@@ -125,7 +127,8 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
     let accounted = false;
     try {
       if (request.method === "POST" && (lease !== undefined || ["/batch", "/state", "/events", "/import"].includes(path))) {
-        const identity = await authorizeWrite(request, (hash) => registeredMachine(this.store.meta("token_hashes"), hash));
+        const repository = this.env.TICKET_REPOSITORIES?.[project];
+        const identity = await authorizeWrite(request, (hash) => this.tokens.lookup(repository, hash));
         const body = await request.json();
         if (path === "/events") {
           // Arm retention before writing the first event so an eviction cannot

@@ -4,6 +4,7 @@ mod client;
 mod commands;
 mod feed;
 mod migration;
+mod register;
 
 use args::{Command, Options};
 use clap::Parser;
@@ -45,6 +46,14 @@ fn run(options: Options) -> Result<()> {
             json!({"version": version})
         }
         Command::Bench { samples } => bench::run(&options, samples)?,
+        Command::Register => {
+            let machine = register::run()?;
+            if !options.json {
+                return writeln!(io::stdout().lock(), "Registered write token for {machine}")
+                    .map_err(usage);
+            }
+            json!({"machine": machine})
+        }
         command => {
             let client = Client::load(
                 options.project.as_deref(),

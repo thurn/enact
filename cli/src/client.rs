@@ -248,7 +248,7 @@ pub fn http_failure(status: u16, body: &str) -> Failure {
     }
 }
 
-fn read_config(here: &Path) -> Result<(PathBuf, toml::Table)> {
+pub fn read_config(here: &Path) -> Result<(PathBuf, toml::Table)> {
     for directory in here.ancestors() {
         let path = directory.join(".enact.toml");
         let result = fs::read_to_string(&path);

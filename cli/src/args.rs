@@ -123,6 +123,8 @@ pub enum Command {
         #[arg(long, default_value_t = 25, value_parser = clap::value_parser!(u32).range(1..))]
         samples: u32,
     },
+    /// Register or rotate this machine’s write token through the Git remote.
+    Register,
     Version,
 }
 
