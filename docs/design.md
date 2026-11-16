@@ -210,7 +210,11 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   and pending validation keep the run alive. A genuine deadlock requests a
   Justiciar; paused and blocked states retain unmet acceptance.
 - Spawn prompt names `roles/common.md` and `roles/<role>.md` by absolute path,
-  plus the bead and epic. Optional per-role model/effort from `.enact.toml`.
+  plus the bead and epic, and asks for both reads and `enact start` in the
+  first message: each extra request rereads the whole context (2026-11-15:
+  runs of read-only requests were about a quarter of Beryl's weekly spend).
+  The files stay out of the prompt itself because the vizier would have to
+  write them out as output tokens on every spawn. Optional per-role model/effort from `.enact.toml`.
 
 ## Justiciar
 

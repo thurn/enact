@@ -1989,10 +1989,11 @@ def spawn_prompt(role: str, bead: dict[str, Any], epic: str, vizier: str) -> str
         f"You are an Enact {role} session (emoji {EMOJI.get(role, '')}). "
         f"Your bead is {bead['id']} ({bead.get('title', '')}) in epic {epic}; "
         f"you were started by vizier {vizier} on host {host_name()}.\n\n"
-        f"Read {ROLES_DIR / 'common.md'} and then {ROLES_DIR / (role + '.md')}, "
-        f"and follow them. The Enact helper is `\"{python}\" \"{script}\"`, "
-        f"referred to as `enact` in those files.\n"
-        f"Start with `{start}`. Retitle ✅ (or ⛔) before your final turn ends."
+        f"Your first message reads {ROLES_DIR / 'common.md'} and "
+        f"{ROLES_DIR / (role + '.md')} together and runs `{start}` beside them, "
+        f"as parallel tool calls; then follow the two files. The Enact helper is "
+        f"`\"{python}\" \"{script}\"`, referred to as `enact` in those files.\n"
+        f"Retitle ✅ (or ⛔) before your final turn ends."
     )
 
 
@@ -2451,8 +2452,8 @@ def justiciar_prompt(request: dict[str, Any]) -> str:
         f"You are the Enact justiciar session (emoji {EMOJI['justiciar']}), requested by "
         f"{request.get('requester', 'unknown')} on host {request.get('host')}: "
         f"{request.get('reason', '')}\n\n"
-        f"Read {ROLES_DIR / 'common.md'} and then {ROLES_DIR / 'justiciar.md'}, and follow "
-        f"them. The Enact helper is `\"{python}\" \"{script}\"`, referred to as `enact`."
+        f"Read {ROLES_DIR / 'common.md'} and {ROLES_DIR / 'justiciar.md'} together in one "
+        f"message, and follow them. The Enact helper is `\"{python}\" \"{script}\"`, referred to as `enact`."
     )
 
 

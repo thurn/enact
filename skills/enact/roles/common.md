@@ -78,6 +78,10 @@ later step, so explore deliberately:
 - Prefer `grep` and line ranges to whole files, and focused test runs to
   full suites until you verify before pushing.
 - Read only your own role file and the sections of this one you need.
+- Send reads together. Every request rereads your whole context, so three
+  requests that each read one file cost about three times one request that
+  reads all three. Work out every file and search you need, then send them
+  in one message as parallel tool calls or one shell command.
 
 ## Work
 

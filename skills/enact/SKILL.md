@@ -148,7 +148,7 @@ You implement it yourself, in this session.
 1. `enact claim <bead>`. Exit 3 means someone else holds it or it is
    closed: report that and stop.
 2. Title yourself ⚒️, then read `ROLES/common.md` and `ROLES/executor.md`
-   and follow them as the Executor, with the inline rules in `common.md`.
+   together in one message and follow them as the Executor, with the inline rules in `common.md`.
    Outside a light run, a `review:inline` label means you run that
    cold-review subagent before pushing, as `executor.md` describes; that
    replaces the Warden.
@@ -214,7 +214,8 @@ Use a general-purpose subagent with a fresh context (Claude: the Agent tool;
 Codex: a spawned agent) and this prompt, filled in:
 
 > You are the `<emoji>` `<Role>` for bead `<bead>` in an inline Enact run.
-> Read `<ROLES>/common.md` and then `<ROLES>/<role>.md` and follow them,
+> Read `<ROLES>/common.md` and `<ROLES>/<role>.md` together in one message
+> and follow them,
 > including the inline-run rules in `common.md`. The helper is
 > `<enact command>`; the project's main checkout is `<path>`. The bead is
 > already claimed for you; if it has a `lane:` label, keep working its lane
