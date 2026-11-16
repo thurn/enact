@@ -7,8 +7,6 @@
 //   on hover, keyboard focus or a tap;
 // - [data-include] fragments load after the page, replacing a skeleton;
 // - <time> shows a relative time in the viewer's clock;
-// - the page polls the site's version.json and, when the site was rebuilt,
-//   refetches the current page and swaps in what changed;
 // - a service worker (sw.js) answers from its cache at once and revalidates.
 // Without script every page is still complete and every link still works.
 (() => {
@@ -19,7 +17,6 @@
     const HOVER_INTENT_MS = 60;
     const TIP_DELAY_MS = 350;
     const PROGRESS_DELAY_MS = 120;
-    const VERSION_POLL_MS = 30_000;
 
     const meta = (name) =>
         document.querySelector(`meta[name="${name}"]`)?.getAttribute("content");
@@ -31,7 +28,7 @@
 
     if ("serviceWorker" in navigator && location.protocol !== "file:") {
         navigator.serviceWorker
-            .register(new URL("sw.js", rootUrl()), {
+            .register(new URL("/sw.js", location.origin), {
                 scope: rootUrl().pathname,
             })
             .catch(() => {});
@@ -252,30 +249,6 @@
             scrollTo(0, y);
         } catch {}
     }
-
-    // The version is not written into pages, so that a rebuild leaves unchanged
-    // pages byte for byte the same; the first answer is the baseline.
-    let polling = 0;
-    let seen = null;
-    async function checkVersion() {
-        if (document.visibilityState !== "visible") return;
-        try {
-            const r = await fetch(new URL("version.json", rootUrl()), {
-                cache: "no-store",
-            });
-            if (!r.ok) return;
-            const { version } = await r.json();
-            if (seen !== null && version && version !== seen) await refresh();
-            seen = version;
-        } catch {}
-    }
-    function startPolling() {
-        clearInterval(polling);
-        polling = setInterval(checkVersion, VERSION_POLL_MS);
-    }
-    document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") checkVersion();
-    });
 
     // ---- Tooltips and hovercards --------------------------------------------
 
@@ -560,6 +533,4 @@
             .querySelector(decodeURIComponent(location.hash))
             ?.scrollIntoView();
     }
-    checkVersion();
-    startPolling();
 })();

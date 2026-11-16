@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { version } from "../package.json";
 import { ChangeFeed, type FeedChange } from "./change-feed";
+import { Dashboard, dashboardRoute } from "./dashboard";
 import { ProjectDeadlines } from "./project-deadlines";
 import { cutoverState, dayMilliseconds, events, leases, ProjectWrite } from "./project-state";
 import { ProjectUsage } from "./project-usage";
@@ -29,6 +30,7 @@ function apiPath(pathname: string): RegExpExecArray | null {
 
 export class ProjectTickets extends DurableObject<Cloudflare.Env> {
   readonly store = new TicketStore(this.ctx.storage);
+  private readonly dashboard = new Dashboard(this.store.sql);
 
   private readonly feed = new ChangeFeed(this.ctx, this.store);
   private readonly deadlines = new ProjectDeadlines(this.store);
@@ -106,7 +108,9 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const [, project, path] = apiPath(url.pathname) ?? [];
+    const [, apiProject, path] = apiPath(url.pathname) ?? [];
+    const dashboard = request.method === "GET" || request.method === "HEAD" ? dashboardRoute(url.pathname) : null;
+    const project = apiProject ?? dashboard?.project;
     if (!project || project !== this.ctx.id.name) return Response.json({error: "Unknown route"}, {status: 404});
 
     const lease = /^\/leases\/(.+)$/.exec(path)?.[1];
@@ -134,6 +138,7 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
       const usage = new ProjectUsage(this.store.sql, now);
       usage.record();
       accounted = true;
+      if (dashboard) return await this.dashboard.fetch(request, dashboard);
       if (request.method === "GET") return this.get(project, path, request, url.searchParams, usage, now);
       return Response.json({error: "Unknown route"}, {status: 404});
     } catch (error) {
@@ -194,7 +199,8 @@ export default {
     if (request.method === "GET" && pathname === "/version") {
       return new Response(version);
     }
-    const project = apiPath(pathname)?.[1];
+    const project = apiPath(pathname)?.[1]
+      ?? ((request.method === "GET" || request.method === "HEAD") ? dashboardRoute(pathname)?.project : undefined);
     if (project) return env.TICKETS.getByName(project).fetch(request);
     return env.ASSETS.fetch(request);
   },

@@ -3,7 +3,6 @@
 // copy differs from what was shown, the open pages are told, and cirrus.js
 // swaps in the new content. Content-hashed assets (name.<10 hex>.css|js) never
 // change, so they are served from the cache without asking the network.
-// version.json always goes to the network: it is how pages learn of a rebuild.
 
 const CACHE = "cirrus-pages-v1";
 const ASSETS = "cirrus-assets-v1";
@@ -19,12 +18,18 @@ self.addEventListener("fetch", (event) => {
     if (request.method !== "GET") return;
     const url = new URL(request.url);
     if (url.origin !== self.location.origin) return;
-    if (url.pathname.endsWith("/version.json")) return;
     if (HASHED.test(url.pathname)) {
         event.respondWith(fromAssets(request));
         return;
     }
-    event.respondWith(staleWhileRevalidate(event, request));
+    // The project scope includes API URLs. Keep JSON and API conditional
+    // requests out of the page cache.
+    const root = new URL(self.registration.scope).pathname;
+    if (!url.pathname.startsWith(root)) return;
+    const path = url.pathname.slice(root.length);
+    if (path === "" || /^tickets\/[^/]+$/.test(path)) {
+        event.respondWith(staleWhileRevalidate(event, request));
+    }
 });
 
 async function fromAssets(request) {
@@ -48,11 +53,15 @@ async function staleWhileRevalidate(event, request) {
     const cache = await caches.open(CACHE);
     const key = new Request(request.url, { credentials: "same-origin" });
     const cached = await cache.match(key);
+    const tag = cached?.headers.get("etag");
     const network = fetch(request.url, {
-        cache: "no-cache",
+        cache: "no-store",
         credentials: "same-origin",
+        redirect: request.redirect,
+        headers: tag ? { "If-None-Match": tag } : {},
     }).then(async (response) => {
-        if (response.ok) {
+        if (response.status === 304 && cached) return cached;
+        if (response.ok && !response.redirected) {
             const changed = cached && stamp(cached) !== stamp(response);
             await cache.put(key, response.clone());
             if (changed) notify(request.url);
