@@ -1948,15 +1948,17 @@ CODEX_LOOP_REMINDER = (
 STALL_NOTICE = (
     "Stalled workers: for each `stalled` entry, check that session (get_session "
     "in Claude Desktop, read_thread in Codex). If its turn is still running, "
-    "leave it. If it is idle, send it `nudge` verbatim with send_message (a "
-    "Codex follow-up). If it is archived or missing, release the bead with "
-    "`enact release --inactive` as for any lost worker. Each entry is listed "
-    "once per stall period."
+    "leave it and add `--running <bead>` to your next `enact next` call, so it "
+    "is not listed again for 90 minutes. If it is idle, send it `nudge` "
+    "verbatim with send_message (a Codex follow-up). If it is archived or "
+    "missing, release the bead with `enact release --inactive` as for any lost "
+    "worker. Each entry is listed once per stall period."
 )
 
 
 @serialized
-def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any]:
+def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
+             running: Collection[str] = ()) -> dict[str, Any]:
     fetch(repo)
     recover_deliveries(repo)
     beads = Beads(repo)
@@ -1994,7 +1996,9 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
         result["pool_notice"] = POOL_NOTICE
     inflight = [b for b in mine if b.get("status") != "closed"]
     result["inflight"] = [b["id"] for b in inflight]
-    result["stalled"] = stalled_workers(inflight)
+    marks = running_marks(inflight, running)
+    result["stalled"] = stalled_workers(inflight, marks)
+    result["running"] = sorted(marks)
     if provider() == "codex":
         # The host can wait for these chats without another Beads lookup.
         result["inflight_threads"] = sorted({meta(b, "enact_session") for b in inflight
@@ -2114,27 +2118,50 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str) -> dict[str, Any
 # hours on servers that never exit). Only the host knows whether the session
 # is idle, so the vizier checks before nudging.
 STALL_SECONDS = 90 * 60
+# Until the vizier has seen the worker's turn still running, the check comes
+# much sooner: in Beryl's by-q44s run, workers that ended their turn waiting
+# on a job outside the harness sat idle 90 to 180 minutes after it finished.
+IDLE_STALL_SECONDS = 15 * 60
 
 STALL_NUDGE = (
     "Enact: bead {bead} has had no update for {minutes} minutes and your turn "
     "has ended. If you are waiting on a background command that never exits "
-    "(a server, watcher or REPL), stop it and continue the bead. Otherwise "
-    "continue it, or close or release it as your role says."
+    "(a server, watcher or REPL), stop it and continue the bead. If you were "
+    "waiting on a job that has since finished, read its result and continue. "
+    "Otherwise continue it, or close or release it as your role says."
 )
 
 
-def stalled_workers(inflight: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Bound open beads untouched for STALL_SECONDS or more. `tier` counts
-    whole stall periods, so each period is reported once and a nudge that
-    did not help surfaces again one period later."""
+def running_mark(bead: dict[str, Any]) -> str:
+    return f"{bead['id']}@{bead.get('updated_at')}"
+
+
+def running_marks(inflight: list[dict[str, Any]], running: Collection[str]) -> set[str]:
+    """Beads whose worker the vizier last saw with its turn still running.
+    `running` holds marks kept from earlier calls and bead IDs just reported
+    with `--running`. A mark names the bead's `updated_at`, so any bead
+    update drops it."""
+    current = {running_mark(bead) for bead in inflight}
+    marks = {mark for mark in running if mark in current}
+    marks |= {running_mark(bead) for bead in inflight if bead["id"] in running}
+    return marks
+
+
+def stalled_workers(inflight: list[dict[str, Any]],
+                    running: Collection[str] = ()) -> list[dict[str, Any]]:
+    """Bound open beads untouched for IDLE_STALL_SECONDS, or STALL_SECONDS
+    once the vizier has seen the worker's turn running (`running` marks).
+    `tier` counts whole periods, so each period is reported once and a nudge
+    that did not help surfaces again one period later."""
     stalled = []
     for bead in inflight:
         session, idle = meta(bead, "enact_session"), seconds_since(bead.get("updated_at"))
-        if not session or idle is None or idle < STALL_SECONDS:
+        period = STALL_SECONDS if running_mark(bead) in running else IDLE_STALL_SECONDS
+        if not session or idle is None or idle < period:
             continue
         minutes = int(idle // 60)
         stalled.append({"bead": bead["id"], "session": session, "idle_minutes": minutes,
-                        "tier": int(idle // STALL_SECONDS),
+                        "tier": int(idle // period), "period_minutes": period // 60,
                         "nudge": STALL_NUDGE.format(bead=bead["id"], minutes=minutes)})
     return stalled
 
@@ -2179,18 +2206,21 @@ def next_step(repo: Repo, args: argparse.Namespace, vizier: str) -> dict[str, An
     while True:
         renew_lease(repo, vizier, args.epic)
         sync(repo)
-        result = schedule(repo, args.epic, args.parallel, vizier)
+        running = {key.removeprefix("running:") for key in reported
+                   if key.startswith("running:")} | set(getattr(args, "running", None) or ())
+        result = schedule(repo, args.epic, args.parallel, vizier, running)
         pending = {item["bead"] for item in result["archive"]}
+        marks = {f"running:{mark}" for mark in result.pop("running", [])}
         # Each stall period wakes the vizier once; it is not listed again.
-        stalls = {f"stalled:{item['bead']}:{item['tier']}": item
-                  for item in result.pop("stalled", [])}
+        stalls = {f"stalled:{item['bead']}:{item.get('period_minutes', 90)}:{item['tier']}":
+                  item for item in result.pop("stalled", [])}
         fresh = [item for key, item in stalls.items() if key not in reported]
         timed_out = time.monotonic() >= deadline
         if result["action"] in ("done", "paused", "blocked", "finished"):
             # The vizier stops looping, so nothing here repairs slow CI for it.
             drop_lease(repo, vizier)
         if result["action"] != "wait" or pending - reported or fresh or timed_out:
-            reported_file.write_text(json.dumps(sorted(pending | set(stalls))))
+            reported_file.write_text(json.dumps(sorted(pending | set(stalls) | marks)))
             if fresh:
                 result["stalled"] = fresh
                 result["stall_notice"] = STALL_NOTICE
@@ -4586,6 +4616,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--vizier", help="vizier identity (default: this session)")
     p.add_argument("--wait", type=int, default=0, help="block up to N seconds for an action")
     p.add_argument("--interval", type=int, default=60)
+    p.add_argument("--running", action="append", metavar="BEAD",
+                   help="a stalled bead whose worker's turn you saw still running")
 
     p = add("pool", cmd_pool, "Track the sessions a Claude Desktop vizier reuses.")
     p.add_argument("action", choices=["add", "drop", "rest", "status"])

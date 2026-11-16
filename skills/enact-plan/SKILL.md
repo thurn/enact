@@ -529,11 +529,12 @@ action or when the wait runs out. Handle the JSON:
    reason, run `enact run finish` anyway once its work is delivered.
    `action: finished` means a run was already finished: report it as `done`.
 8. **`stalled`** (any action may carry it): a worker's bead has had no
-   update for 90 minutes or more. Follow `stall_notice`: check that
-   session (`get_session` in Claude Desktop, `read_thread` in Codex); if
-   its turn still runs, leave it; if it is idle, send it `nudge` verbatim;
-   if it is archived or missing, release it as a lost worker (above). Each
-   entry comes once per 90-minute period.
+   update for 15 minutes, or 90 once you have seen its turn running.
+   Follow `stall_notice`: check that session (`get_session` in Claude
+   Desktop, `read_thread` in Codex); if its turn still runs, leave it and
+   add `--running <bead>` to your next `enact next`; if it is idle, send it
+   `nudge` verbatim; if it is archived or missing, release it as a lost
+   worker (above). Each entry comes once per period.
 9. **`action: paused` or `blocked`**: no new spawning or recovery. Report
    the shared reason, retitle `⛔ [<epic>] <same summary>` and end the turn,
    preserving unfinished requirements.

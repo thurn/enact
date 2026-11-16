@@ -837,11 +837,13 @@ class VizierLeaseTest(unittest.TestCase):
         self.assertEqual(result["action"], "finished")
         self.assertFalse(self.active(self.epic()))
 
+    @staticmethod
+    def ago(seconds):
+        stamp = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=seconds)
+        return stamp.isoformat()
+
     def test_a_bound_bead_untouched_for_a_stall_period_is_stalled(self):
-        def ago(seconds):
-            stamp = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=seconds)
-            return stamp.isoformat()
-        period = enact.STALL_SECONDS
+        ago, period = self.ago, enact.IDLE_STALL_SECONDS
         inflight = [
             {"id": "a", "updated_at": ago(period + 60), "metadata": {"enact_session": "s1"}},
             {"id": "b", "updated_at": ago(period - 60), "metadata": {"enact_session": "s2"}},
@@ -852,6 +854,44 @@ class VizierLeaseTest(unittest.TestCase):
         self.assertEqual([(s["bead"], s["session"], s["tier"]) for s in stalled],
                          [("a", "s1", 1), ("d", "s4", 2)])
         self.assertIn("bead a", stalled[0]["nudge"])
+
+    def test_a_worker_seen_running_is_not_flagged_again_until_the_long_period(self):
+        # The vizier saw this worker's turn running and passed `--running a`.
+        def bead(seconds):
+            return [{"id": "a", "updated_at": self.ago(seconds),
+                     "metadata": {"enact_session": "s1"}}]
+
+        short, long = enact.IDLE_STALL_SECONDS, enact.STALL_SECONDS
+        self.assertEqual(len(enact.stalled_workers(bead(short + 60))), 1)
+        quiet = bead(short + 60)
+        marks = enact.running_marks(quiet, {"a"})
+        self.assertEqual(enact.stalled_workers(quiet, marks), [])
+        # Marks carry over between calls while the bead stays untouched...
+        self.assertEqual(enact.running_marks(quiet, marks), marks)
+        # ...and any bead update drops them, back to the short check.
+        self.assertEqual(enact.running_marks(bead(short + 120), marks), set())
+        busy = bead(long - 60)
+        self.assertEqual(enact.stalled_workers(busy, enact.running_marks(busy, {"a"})), [])
+        overdue = bead(long + 60)
+        stalled = enact.stalled_workers(overdue, enact.running_marks(overdue, {"a"}))
+        self.assertEqual([(s["bead"], s["tier"]) for s in stalled], [("a", 1)])
+
+    def test_next_remembers_a_running_report_until_the_bead_changes(self):
+        args = types.SimpleNamespace(epic="e", parallel=1, wait=0, interval=1,
+                                     running=["a"])
+        seen = []
+
+        def schedule(repo, epic, parallel, vizier, running=()):
+            seen.append(set(running))
+            return {"action": "wait", "archive": [], "stalled": [],
+                    "running": ["a@t1"] if running else []}
+
+        with mock.patch.object(enact, "sync"), \
+                mock.patch.object(enact, "schedule", side_effect=schedule):
+            enact.next_step(self.repo, args, "v")
+            args.running = None
+            enact.next_step(self.repo, args, "v")
+        self.assertEqual(seen, [{"a"}, {"a@t1"}])
 
     def test_each_stall_period_wakes_the_vizier_once(self):
         args = types.SimpleNamespace(epic="e", parallel=1, wait=0, interval=1)

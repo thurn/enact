@@ -103,6 +103,13 @@ later step, so explore deliberately:
   vizier keeps the run alive until all delivered commits, including
   repairs, reach green master; closing your bead does not declare the run
   complete.
+- Wait on a long job (a benchmark, a VM or remote run, a sweep, slow CI) in
+  the foreground, or as a background command your host tracks and whose
+  exit starts your next turn (Claude: Bash with `run_in_background`; for a
+  job on another machine, a background loop that polls until it ends).
+  Never end your turn on a job nothing will report: no notice wakes you
+  when it finishes, and the vizier looks at idle sessions only after 15
+  minutes without a bead update.
 - Staging may be red because of someone else's change. That alone is not
   your problem. Do not stop for it; fast checks still gate your push.
 

@@ -1440,6 +1440,26 @@ instead of adopting it needs the plan's context.
   record of nudges (the period key gives the same spacing statelessly).
   Older viziers ignore the new fields.
 
+## Idle workers are checked after 15 minutes (2026-11-15)
+
+- In Beryl run by-q44s about a dozen workers ended their turn while a long
+  job ran outside the harness (a Callgrind count, a GPU gate in a VM, slow
+  CI). No notice woke them when it finished, so each sat idle until the
+  90-minute stall check, costing 90 to 180 minutes of a worker slot.
+- `common.md` now tells workers to wait on long jobs in the foreground or
+  with a host-tracked background command, never by ending the turn.
+- `enact next` now lists a bound bead after 15 minutes without an update.
+  When the vizier finds that worker's turn still running, it passes
+  `--running <bead>` on its next call; the bead is then not listed again
+  until 90 minutes, as before. The mark is the bead's ID and `updated_at`,
+  kept with the reported keys in the per-vizier `archive-reported` file,
+  so any bead update drops it and the short check starts over.
+- The stall key now includes the period length, so a 15-minute report does
+  not hide the first 90-minute one.
+- Cost: a healthy worker that runs quietly costs the vizier one session
+  lookup per bead update. Rejected: a turn-end hook in each host (Claude
+  and Codex differ, and it adds installed state on every machine).
+
 ## A run answers only to its own holds (2026-11-14)
 
 - Beryl paused two live runs on 2026-11-14. A Steward that repairs slow
