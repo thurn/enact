@@ -326,7 +326,8 @@ class Store:
             self.changes(name, {"status": "deferred", "defer_until": op["until"]}, ticket)
         elif action == "comment":
             self.db.execute(
-                """INSERT INTO comments SELECT ?, COALESCE(MAX(n), 0) + 1, ?, ?, ?
+                """INSERT INTO comments (ticket, n, author, at, text)
+                    SELECT ?, COALESCE(MAX(n), 0) + 1, ?, ?, ?
                     FROM comments WHERE ticket = ?""",
                 (name, self.actor, self.at, op["text"], name),
             )
