@@ -3793,6 +3793,9 @@ def bead_worktree(args: argparse.Namespace) -> dict[str, Any]:
         if not reused:
             saved_head = repo.git("rev-parse", "--verify", f"refs/heads/{branch}",
                                   check=False)
+            # Another host's release pushed its commits; resume from them.
+            if not saved_head and bead:
+                saved_head = pushed_branch_head(repo, bead, branch)
             if saved_head:
                 base, reused = saved_head, True
             # An ad hoc tree already made under its name keeps that directory.
@@ -4532,6 +4535,9 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
         receipt.unlink(missing_ok=True)
     else:
         raise Fail(f"could not push to {cfg.staging} after repeated attempts")
+    if args.bead and (dropped := drop_released_branch(
+            repo, bead, repo.git("rev-parse", "--abbrev-ref", "HEAD"))):
+        result["dropped_remote_branch"] = dropped
     graph = Beads(repo).all() if pending_ci else []
     # A held run's worker finishes what is in flight but starts no repair.
     if (pending_ci and not (bead and stopped_runs(bead, graph))
@@ -4567,6 +4573,28 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
             result["ci"] = start_ci(repo, runner)
             pending_ci.unlink(missing_ok=True)
     return result
+
+
+def drop_released_branch(repo: Repo, bead: dict[str, Any], branch: str) -> str | None:
+    """Delete the remote branch a release pushed, once its work is on staging.
+
+    Delivery rebases, so the pushed commits never become ancestors of
+    staging; a branch left behind would make a later replacement resume from
+    work already delivered. Only branches a release of this bead recorded
+    are touched, and the lease leaves a branch alone if it moved since it
+    was read. Best effort: a failure is logged and the branch stays.
+    """
+    if not any(r.get("pushed") and r.get("branch") == branch for r in recovery_records(bead)):
+        return None
+    remote, ref = repo.config.remote, f"refs/heads/{branch}"
+    listed = run(["git", "ls-remote", remote, ref], repo.top, check=False)
+    current = listed.stdout.split()[0] if listed.stdout.strip() else ""
+    if not current:
+        return None
+    if repo.git_ok("push", "-q", f"--force-with-lease={ref}:{current}", remote, f":{ref}"):
+        return branch
+    log(f"could not delete {ref} on {remote}; delete it by hand once delivered")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -5509,6 +5537,9 @@ def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
     if path and work_host == host_name() and Path(path).exists():
         verified_worktree(repo, Path(path), branch)
         record["head"] = repo.git("rev-parse", "HEAD", cwd=Path(path))
+        # Push before giving up ownership, so a rejected push leaves the bead
+        # assigned and the session can fix the cause and release again.
+        record.update(publish_released_branch(repo, Path(path), branch))
     records = recovery_records(bead) + [record]
     if server:
         beads.batch({"op": "update", "id": bead["id"], "set": {"assignee": None, "status": "open"},
@@ -5532,6 +5563,72 @@ def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
     beads.run("comments", "add", args.bead, f"Released by Enact: {args.reason}", actor=actor)
     sync(repo)
     return {"released": args.bead, "recovery": record, "sync": result}
+
+
+def publish_released_branch(repo: Repo, path: Path, branch: str) -> dict[str, Any]:
+    """Push a released worktree's commits to `branch` on the remote.
+
+    A bead released to wait on another bead is often taken up again on a
+    different host, which can only resume from commits it can fetch. Before
+    this push, those commits stayed in the releasing host's worktree and the
+    next session redid the work. Commits already on staging need no push.
+    The push uses a lease, so it never overwrites commits another host pushed
+    to the same branch. Returns what the recovery record should add:
+    `pushed`, the commit now on the remote branch, and `uncommitted` when
+    edits that no push can carry stayed behind in the worktree.
+    """
+    result: dict[str, Any] = {}
+    if repo.git("status", "--porcelain", cwd=path):
+        result["uncommitted"] = True
+    fetch(repo, check=False)
+    head = repo.git("rev-parse", "HEAD", cwd=path)
+    if repo.git_ok("merge-base", "--is-ancestor", head,
+                   repo.remote_ref(repo.config.staging), cwd=path):
+        return result
+    remote, ref = repo.config.remote, f"refs/heads/{branch}"
+    listed = run(["git", "ls-remote", remote, ref], path, check=False)
+    if listed.returncode != 0:
+        raise Fail(f"release could not read {ref} on {remote}, so the commits on "
+                   f"{branch} would stay on this host: "
+                   f"{(listed.stderr or listed.stdout).strip()[-2000:]}", code=2)
+    current = listed.stdout.split()[0] if listed.stdout.strip() else ""
+    if current and not repo.git_ok("merge-base", "--is-ancestor", current, head, cwd=path):
+        raise Fail(f"{ref} on {remote} has commits this worktree lacks ({current}); "
+                   f"merge {repo.remote_ref(branch)} into {path} and release again", code=2)
+    if current != head:
+        pushed = run(["git", "push", "-q", f"--force-with-lease={ref}:{current}",
+                      remote, f"{head}:{ref}"], path, check=False)
+        if pushed.returncode != 0:
+            raise Fail(f"release could not push {branch} to {remote}, so its commits "
+                       f"would stay on this host: "
+                       f"{(pushed.stderr or pushed.stdout).strip()[-2000:]}", code=2)
+    return {**result, "pushed": head}
+
+
+def pushed_branch_head(repo: Repo, bead: dict[str, Any], branch: str) -> str | None:
+    """The commit that a release on another host pushed to `branch`.
+
+    None when no release pushed this branch, or when what it pushed has since
+    reached staging. A recorded push whose commit can no longer be fetched is
+    lost work, so it fails rather than starting the bead again from staging.
+    """
+    pushed = next((r["pushed"] for r in reversed(recovery_records(bead))
+                   if r.get("pushed") and r.get("branch") == branch), None)
+    if not pushed:
+        return None
+    tracking = f"refs/remotes/{repo.config.remote}/{branch}"
+    run(["git", "fetch", "-q", repo.config.remote, f"+refs/heads/{branch}:{tracking}"],
+        repo.main, check=False)
+    tip = repo.git("rev-parse", "--verify", "-q", tracking, check=False)
+    if tip and not repo.git_ok("merge-base", "--is-ancestor", tip,
+                               repo.remote_ref(repo.config.staging)):
+        return tip
+    if not repo.git_ok("cat-file", "-e", f"{pushed}^{{commit}}"):
+        raise Fail(f"a release pushed {pushed} to {branch}, but {repo.config.remote} "
+                   "no longer has it", code=2)
+    if repo.git_ok("merge-base", "--is-ancestor", pushed, repo.remote_ref(repo.config.staging)):
+        return None
+    return pushed
 
 
 # ---------------------------------------------------------------------------

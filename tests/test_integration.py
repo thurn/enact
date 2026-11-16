@@ -1462,7 +1462,7 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.assertFalse(path.exists())
         self.assertIn(head, self.a.show(bead)["metadata"]["enact_commits"].split())
 
-    def test_remote_replacement_preserves_original_recovery_location(self):
+    def test_remote_replacement_resumes_from_pushed_branch(self):
         epic = self.a.create("remote recovery", type="epic")
         bead = self.a.create("unfinished remote", parent=epic)
         self.a.enact("next", "--epic", epic)
@@ -1471,20 +1471,50 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.a.commit_file("unpublished", "local commit", cwd=original)
         head = self.a.git("rev-parse", "HEAD", cwd=original)
         (original / "untracked").write_text("local edit")
-        self.a.enact("release", bead, "--reason", "relocating", session="old")
+        released = self.a.enact("release", bead, "--reason", "relocating", session="old")
+        self.assertEqual(released["recovery"]["pushed"], head)
+        self.assertTrue(released["recovery"]["uncommitted"])
+        self.assertEqual(self.remote_sha(f"enact/{bead}"), head)
         self.b.enact("next", "--epic", epic)
         self.start_worker(self.b, bead, "remote")
         replacement = self.b.enact("worktree", "create", bead, session="remote")
         fresh = Path(replacement["path"])
-        self.assertFalse(replacement["recovered"])
-        self.assertEqual(self.b.git("rev-parse", "HEAD", cwd=fresh), self.remote_sha("staging"))
+        # Host b resumes from the commit host a pushed; only the untracked
+        # file, which no push carries, stays behind on host a.
+        self.assertTrue(replacement["recovered"])
+        self.assertEqual(self.b.git("rev-parse", "HEAD", cwd=fresh), head)
+        self.assertEqual((fresh / "unpublished").read_text(), "local commit")
         self.assertEqual((original / "untracked").read_text(), "local edit")
-        self.assertEqual(self.a.git("rev-parse", "HEAD", cwd=original), head)
         records = self.b.show(bead)["metadata"]["enact_recovery"]
         record = (json.loads(records) if isinstance(records, str) else records)[0]
         self.assertEqual((record["host"], record["path"], record["head"]),
                          ("host-a", str(original), head))
-        self.assertTrue(original.exists())
+        self.b.commit_file("finished", "remote commit", cwd=fresh)
+        pushed = self.b.enact("push", "--bead", bead, "--no-ci", cwd=fresh, session="remote")
+        self.assertEqual(pushed["dropped_remote_branch"], f"enact/{bead}")
+        self.assertFalse(sh(["git", "for-each-ref", f"refs/heads/enact/{bead}"], self.origin))
+        self.assertEqual(sh(["git", "show", "staging:unpublished"], self.origin), "local commit")
+
+    def test_rejected_release_push_keeps_the_assignment(self):
+        epic = self.a.create("rejected push", type="epic")
+        bead = self.a.create("release refused", parent=epic)
+        self.a.enact("next", "--epic", epic)
+        self.start_worker(self.a, bead, "old")
+        path = Path(self.a.enact("worktree", "create", bead, session="old")["path"])
+        self.a.commit_file("unpublished", "local commit", cwd=path)
+        hook = self.origin / "hooks" / "pre-receive"
+        hook.write_text("#!/bin/sh\necho 'enact branches are protected' >&2\nexit 1\n")
+        hook.chmod(0o755)
+        try:
+            refused = self.a.enact("release", bead, "--reason", "waits", session="old", code=2)
+        finally:
+            hook.unlink()
+        self.assertIn("enact branches are protected", refused["error"])
+        saved = self.a.show(bead)
+        self.assertEqual(saved["assignee"], "old")
+        self.assertFalse(saved["metadata"].get("enact_recovery"))
+        released = self.a.enact("release", bead, "--reason", "waits", session="old")
+        self.assertEqual(self.remote_sha(f"enact/{bead}"), released["recovery"]["pushed"])
 
     def test_claim_race_has_one_winner(self):
         bead = self.a.create("contested")

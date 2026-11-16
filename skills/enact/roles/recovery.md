@@ -11,10 +11,12 @@ evidence in your summary.
 `enact worktree create` printed `recovered: true`: the prior owner
 explicitly released, or a routed lookup confirmed it inactive. Inspect that
 tree's commits and edits against current staging; preserve useful work and
-finish it. This is the authorized local handoff. Remote replacements start
-at the latest pushed state; `enact_recovery` retains the original host,
-path, branch, head and chat route. Never delete that original work or edit
-an unassigned tree.
+finish it. This is the authorized local handoff. On another host, the
+new worktree starts from the commits the release pushed to `enact/<bead>`
+(`recovered: true` again), or from staging if it pushed none. Uncommitted
+edits never travel: `enact_recovery` records `uncommitted` when some stayed
+behind, with the original host, path, branch, head and chat route. Never
+delete that original work or edit an unassigned tree.
 
 ## When things go wrong
 

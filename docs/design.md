@@ -542,9 +542,16 @@ inspection; uncertainty never authorizes releasing ownership.
   The current worker may explicitly relinquish its own assignment. A new
   local owner reuses the verified abandoned git worktree without resetting,
   cleaning or rebasing it; all commits, tracked edits and untracked files
-  survive. Inspect against staging before continuing. A remote replacement
-  starts from staging and retains the original recovery record, including its
-  original host; it cannot transfer unpublished files across machines.
+  survive. Inspect against staging before continuing. Release pushes the
+  worktree's commits that are not on staging to its branch on the remote,
+  with a lease so it never overwrites another host's commits, before it
+  gives up ownership; a rejected push fails the release and keeps the
+  assignment (2026-11-16: two Beryl beads released on one host were redone
+  from scratch on another). A remote replacement starts from that pushed
+  branch and keeps the original recovery record, including its original
+  host; uncommitted files cannot cross machines and are only flagged
+  `uncommitted`. Delivery deletes the pushed branch, since its rebased
+  commits never become ancestors of staging.
 - Worktree creation records its host/path/branch and can be retried. A
   never-assigned bead is claimed for direct CLI work; released beads must be
   reassigned first. Explicit removal refuses dirty or unpublished work,

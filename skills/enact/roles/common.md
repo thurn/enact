@@ -229,11 +229,15 @@ on the bead and, when it changes the run, on the run epic. Defaults:
   slot doing nothing, often for an hour. Commit what you have to your
   branch, add the edge (`bd dep add <yours> <theirs>`), comment on your bead
   what you need from it and where you stopped, and
-  `enact release <bead> --reason "waits on <theirs>"`. The vizier starts
-  your bead again once `<theirs>` closes, and its next session resumes from
-  your branch (`recovery.md`). If the work you need has no bead, file one
-  first. The exception is a bead that is closed already: its commits are
-  on staging, so rebase (`enact push` does) instead of waiting.
+  `enact release <bead> --reason "waits on <theirs>"`. Release pushes your
+  commits to `enact/<bead>` on the remote, so the next session resumes from
+  them on any host (`recovery.md`); uncommitted edits stay behind. If
+  release fails because that push was rejected, fix the cause it reports
+  and release again; never push the branch yourself. The vizier starts
+  your bead again once `<theirs>` closes. If the work you need has no
+  bead, file one first. The exception is a bead that is closed already:
+  its commits are on staging, so rebase (`enact push` does) instead of
+  waiting.
 - **A performance figure measured on a loaded machine**: report it, never
   gate on it or file follow-ups chasing it, unless the acceptance criteria
   name a deterministic measure (`warden.md`, "Tests that survive load").
