@@ -117,15 +117,30 @@ class TicketContractTests(unittest.TestCase):
             root = Path(tmp)
             config = enact.Config.parse('[tickets]\nbackend = "server"\nproject = "by"\nurl = "http://example.test"')
             repo = enact.Repo(root, root, root, config)
-            snapshot = {"seq": 1, "tickets": [], "edges": []}
-            changed = {**snapshot, "seq": 2}
+            etag = "by-all-1-123456"
+            snapshot = {"seq": 1, "etag": etag, "tickets": [], "edges": []}
+            changed = {**snapshot, "etag": "by-all-2", "seq": 2}
             with mock.patch.object(enact.Beads, "ticket", side_effect=[snapshot, {"unchanged": True}, changed]) as tk:
                 self.assertEqual(enact.Beads(repo).ticket_graph(), ([], 1))
                 self.assertEqual(enact.Beads(repo).ticket_graph(), ([], 1))
                 self.assertEqual(enact.Beads(repo).ticket_graph(), ([], 2))
             self.assertEqual(tk.call_args_list, [mock.call("graph", "--all"),
-                                                 mock.call("graph", "--all", "--if-none-match", "1"),
-                                                 mock.call("graph", "--all", "--if-none-match", "1")])
+                                                 mock.call("graph", "--all", "--if-none-match", etag),
+                                                 mock.call("graph", "--all", "--if-none-match", etag)])
+
+    def test_cutover_cannot_guess_legacy_when_the_server_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = types.SimpleNamespace(state=root)
+            response = subprocess.CompletedProcess(["tk"], 4, "", "server unavailable")
+            with (mock.patch.object(enact, "find_repo", return_value=repo),
+                  mock.patch.object(enact, "ticket_process", return_value=response) as tk):
+                with self.assertRaises(enact.Fail) as error:
+                    enact.ticket_cutover(root, "by")
+                self.assertEqual(error.exception.code, 4)
+                (root / "ticket-cutover.json").write_text('"by"', encoding="utf-8")
+                self.assertEqual(enact.ticket_cutover(root, "by"), "after")
+                tk.assert_called_once()
 
     def test_schema_and_api_cover_the_design(self):
         root = SCRIPT.parents[1]
@@ -1507,6 +1522,28 @@ class CiWatchTest(unittest.TestCase):
         with mock.patch.object(enact, "sync"), mock.patch.object(enact, "fetch"), \
                 mock.patch.object(enact, "Beads", return_value=beads):
             return enact.superseding_repair(repo, "tip")
+
+    def test_slow_ci_reuses_the_saved_check_after_outage_and_daily_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = types.SimpleNamespace(
+                state=root, main=root, config=enact.Config(slow="slow", slow_tree="ci"),
+                remote_ref=lambda branch: f"origin/{branch}", git=lambda *a, **kw: "green")
+            replies = [enact.Fail("server unavailable", code=4),
+                       enact.Fail("server daily limit", code=5), "steward"]
+            with (mock.patch.object(enact, "uses_ticket_server", return_value=True),
+                  mock.patch.object(enact, "checkout_slow_tree", return_value=root),
+                  mock.patch.object(enact, "reap_processes"),
+                  mock.patch.object(enact, "superseding_repair", return_value=None),
+                  mock.patch.object(enact, "report_ci_failure", side_effect=replies),
+                  mock.patch.object(enact, "prune_runs", return_value=[]),
+                  mock.patch.object(enact, "run_bounded", return_value=(1, "slow check failed")) as check,
+                  mock.patch.object(enact.time, "sleep") as delay):
+                result = enact.retry_ci_ticket_operation(lambda: enact.ci_run_once(repo, "tip"))
+            self.assertEqual(result["steward"], "steward")
+            check.assert_called_once()
+            self.assertEqual(delay.call_args_list, [mock.call(60), mock.call(300)])
+            self.assertFalse((root / "ci-pending-report.json").exists())
 
     def test_a_failure_older_than_a_landed_repair_is_not_filed(self):
         repair = self.steward()

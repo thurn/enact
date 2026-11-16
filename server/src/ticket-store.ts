@@ -35,8 +35,8 @@ export class TicketStore {
     return this.sql.exec<{value: string}>("SELECT value FROM meta WHERE key = ?", key).toArray()[0]?.value;
   }
 
-  graph(ifNoneMatch: string | null, filter: URLSearchParams): Response {
-    return this.tickets.graph(ifNoneMatch, flag(filter, "all"));
+  graph(project: string, ifNoneMatch: string | null, filter: URLSearchParams): Response {
+    return this.tickets.graph(project, ifNoneMatch, flag(filter, "all"));
   }
 
   show(project: string, requested: string, filter: URLSearchParams): object {

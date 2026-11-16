@@ -146,11 +146,12 @@ fn commands_use_the_worker_protocol() {
         sim.ok(&["ready", "--label", "one"])[0]["trace"]["args"],
         json!([["label", "one"], ["ready", "1"]])
     );
+    let graph = sim.ok(&["graph"]);
+    assert!(graph["edges"].is_array());
     assert_eq!(
-        sim.ok(&["graph", "--if-none-match", "42"]),
+        sim.ok(&["graph", "--if-none-match", graph["etag"].as_str().unwrap()]),
         json!({"unchanged": true})
     );
-    assert!(sim.ok(&["graph"])["edges"].is_array());
 
     let create = sim.ok(&[
         "create",

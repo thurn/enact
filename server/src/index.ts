@@ -54,7 +54,7 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
   private get(project: string, path: string, request: Request, query: URLSearchParams, usage: ProjectUsage, now: number) {
     const sql = this.store.sql;
     if (path === "/feed") return this.feed.upgrade(request);
-    if (path === "/graph") return this.store.graph(request.headers.get("If-None-Match"), query);
+    if (path === "/graph") return this.store.graph(project, request.headers.get("If-None-Match"), query);
     if (path === "/tickets") return Response.json(this.store.list(project, query));
     if (path === "/state") return Response.json(this.state(usage));
     if (path === "/events") return Response.json(events(sql, query));

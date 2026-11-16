@@ -180,7 +180,7 @@ export class TicketIndex {
     }
   }
 
-  graph(ifNoneMatch: string | null, all = false, now = Date.now()): Response {
+  graph(project: string, ifNoneMatch: string | null, all = false, now = Date.now()): Response {
     let cache = this.graphCache.get(all);
     if (!cache || now >= cache.expires) {
       const live = [...this.live.values()].sort(byId);
@@ -195,7 +195,7 @@ export class TicketIndex {
         }
         return {...graphFields(ticket), ready, blocked_by: blocked_by.filter(({rule}) => rule !== 1)};
       });
-      const key = `${this.seq}${lastExpiry ? `-${lastExpiry}` : ""}`;
+      const key = `${project}-${all ? "all" : "live"}-${this.seq}${lastExpiry ? `-${lastExpiry}` : ""}`;
       // A revalidation should not load archived rows, even after the
       // Durable Object has woken with an empty archive cache.
       if (matchesTag(ifNoneMatch, key)) return graphResponse(null, key, 304);

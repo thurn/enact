@@ -35,7 +35,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Callable, Collection
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, TypeVar
 
 
 
@@ -538,10 +538,9 @@ def ticket_cutover(top: Path, project: str) -> str:
     with contextlib.suppress(OSError, ValueError):
         if json.loads(marker.read_text(encoding="utf-8")) == project:
             return "after"  # Cutover cannot reverse, even if the server is down.
-    proc = ticket_process(repo, "--retry-for", "2", "state")
-    if proc.returncode != 0:
-        return "before"
-    state = json.loads(proc.stdout)
+    # An outage on a machine that has not observed cutover yet is ambiguous.
+    # Do not fall back to the frozen Beads store.
+    state = ticket_reply(ticket_process(repo, "--retry-for", "2", "state"))
     draining = sys.argv[1:2] == ["sync"] and bool(os.environ.get("ENACT_SYNC_NOW"))
     while state["cutover"] == "paused" and not draining:
         wait = ticket_process(repo, "wait", "change", "--since", str(state["seq"]),
@@ -559,6 +558,14 @@ def uses_ticket_server(repo: Repo) -> bool:
         return True
     project = repo.config.ticket_project
     return bool(project and ticket_cutover(repo.top, project) == "after")
+
+
+def refresh_delivery_backend(repo: Repo) -> bool:
+    # A fast check can span cutover. Reconfirm the backend before delivery so
+    # an old process cannot publish using a Git lease after the switch.
+    if repo.config.ticket_project and not uses_ticket_server(repo):
+        ticket_cutover.cache_clear()
+    return uses_ticket_server(repo)
 
 
 def canonical_ticket_id(repo: Repo, value: str) -> str:
@@ -647,7 +654,7 @@ class Beads:
             if isinstance(snapshot, dict) and isinstance(snapshot.get("seq"), int) and \
                     isinstance(snapshot.get("tickets"), list) and isinstance(snapshot.get("edges"), list):
                 cached = snapshot
-        options = ["--if-none-match", str(cached["seq"])] if cached is not None else []
+        options = ["--if-none-match", str(cached.get("etag", cached["seq"]))] if cached is not None else []
         graph = self.ticket("graph", "--all", *options)
         if graph.get("unchanged"):
             if cached is None:
@@ -3665,8 +3672,13 @@ def worktree_bead(repo: Repo, path: Path) -> dict[str, Any] | None:
     # were recorded. Never let omitting --bead bypass ownership checks.
     slot = is_slot(repo, path)
     current = tree_branch(repo, path) if slot and path.is_dir() else ""
-    for bead in Beads(repo).all():
-        if path == repo.worktree_root() / bead["id"] or (
+    beads = Beads(repo)
+    project = repo.config.ticket_project
+    prefix = f"{project}-" if project and beads.server else ""
+    for bead in beads.all():
+        if path.name in (bead["id"], prefix + bead["id"]) and path.parent == repo.worktree_root():
+            return bead
+        if (
                 meta(bead, "enact_worktree_host") == host_name() and
                 (owns_slot(bead, path, current) if slot
                  else meta(bead, "enact_worktree") == str(path))) or any(
@@ -3951,7 +3963,7 @@ class StagingLease:
                 if self.server:
                     try:
                         self.renew_server()
-                    except LeaseLost:
+                    except (Fail, LeaseLost):
                         return
                 else:
                     next_sha = justiciar_commit(self.repo, {"owner": self.owner,
@@ -3970,7 +3982,9 @@ class StagingLease:
                                       STAGING_LOCK_SECONDS))
         except Fail as error:
             self.lost = True
-            raise LeaseLost() from error
+            if error.code == 3:
+                raise LeaseLost() from error
+            raise
         self.updated = time.time()
 
     def assert_owned(self) -> None:
@@ -4249,11 +4263,16 @@ def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], progress: QueueP
             land(repo, tree, [e for e in entries if e["id"] not in aside], progress, lease)
             land(repo, tree, [e for e in entries if e["id"] in aside], progress, lease)
             return
+        if not lease.server and refresh_delivery_backend(repo):
+            raise LeaseLost()
         with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED):
             graph: list[dict[str, Any]] = []
             if any(e["bead"] for e in picked):
                 sync(repo)
                 graph = Beads(repo).all()
+                if uses_ticket_server(repo):
+                    picked = [{**entry, "bead": canonical_ticket_id(repo, entry["bead"])}
+                              if entry["bead"] else entry for entry in picked]
             lost = False
             for entry in picked:
                 if not entry["bead"]:
@@ -4366,6 +4385,8 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     with ownership_lock(repo):
         sync(repo)
         assigned = worktree_bead(repo, repo.top)
+        if args.bead and uses_ticket_server(repo):
+            args.bead = canonical_ticket_id(repo, args.bead)
         if assigned and args.bead and args.bead != assigned["id"]:
             raise Fail("--bead differs from this worktree's assignment", code=3)
         args.bead = args.bead or (assigned["id"] if assigned else None)
@@ -4441,6 +4462,8 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
                 raise Fail("fast checks failed; fix them and run `enact push` again", code=2)
             checked = head
         commits = repo.git("rev-list", "--reverse", f"{before}..{head}").split()
+        if refresh_delivery_backend(repo) and args.bead:
+            args.bead = canonical_ticket_id(repo, args.bead)
         with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED if checked else OWNERSHIP_WAIT):
             graph = Beads(repo).all() if args.bead else []
             bead = next((b for b in graph if b["id"] == args.bead), {})
@@ -4950,6 +4973,22 @@ def retry_ci_promotion(repo: Repo) -> dict[str, Any] | None:
     return result
 
 
+CIResult = TypeVar("CIResult")
+
+
+def retry_ci_ticket_operation(operation: Callable[[], CIResult]) -> CIResult:
+    """Keep the runner alive when reporting must wait for the ticket server."""
+    while True:
+        try:
+            return operation()
+        except Fail as error:
+            if error.code not in (4, 5):
+                raise
+            delay = 300 if error.code == 5 else 60
+            log(f"slow CI will retry in {delay} s: {error}")
+            time.sleep(delay)
+
+
 def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     cfg = repo.config
@@ -4979,7 +5018,11 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
                 sweep_worktrees(repo, ci_trees=True)
             except (Fail, OSError) as error:
                 log(f"worktree sweep failed: {error}")
-            promotion = retry_ci_promotion(repo)
+            pending = repo.state / "ci-pending-report.json"
+            if pending.exists():
+                report_tip = json.loads(pending.read_text(encoding="utf-8"))["tip"]
+                results.append(retry_ci_ticket_operation(lambda: ci_supervise_check(repo, report_tip)))
+            promotion = retry_ci_ticket_operation(lambda: retry_ci_promotion(repo))
             if promotion:
                 results.append(promotion)
             while True:
@@ -5000,7 +5043,7 @@ def cmd_ci(args: argparse.Namespace) -> dict[str, Any]:
                     # unpromoted tip once rather than stranding an old run.
                 if ci_wait_for_gap(repo):
                     continue  # new commits may have arrived while waiting: retest the newest tip
-                result = ci_supervise_check(repo, tip)
+                result = retry_ci_ticket_operation(lambda: ci_supervise_check(repo, tip))
                 results.append(result)
         finally:
             release_lock(lock, guard)
@@ -5079,7 +5122,8 @@ def ci_supervise_check(repo: Repo, tip: str) -> dict[str, Any]:
             worker.wait()
     sys.stderr.write(output.read_text(encoding="utf-8", errors="replace")[-20000:])
     if worker.returncode:
-        raise Fail(f"slow-CI check keeper exited {worker.returncode}; see {output}")
+        code = worker.returncode if worker.returncode in (4, 5) else 1
+        raise Fail(f"slow-CI check keeper exited {worker.returncode}; see {output}", code=code)
     return json.loads((repo.state / "ci-result.json").read_text())
 
 
@@ -5171,6 +5215,11 @@ def checkout_slow_tree(repo: Repo, name: str, tip: str) -> Path:
 
 def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
     cfg = repo.config
+    pending = repo.state / "ci-pending-report.json"
+    if pending.exists():
+        report = json.loads(pending.read_text(encoding="utf-8"))
+        if report["tip"] == tip:
+            return publish_ci_report(repo, pending, report)
     green = repo.git("rev-parse", repo.remote_ref(cfg.master), cwd=repo.main, check=False) or "?"
     promotion = repo.state / "ci-promotion.json"
     if promotion.exists():
@@ -5199,21 +5248,36 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
             remove_worktree(repo, path, None)
     seconds = round(time.monotonic() - started)
     sys.stderr.write(output[-20000:])
-    if returncode == 0:
+    report = {"tip": tip, "green": green, "seconds": seconds, "passed": returncode == 0,
+              "tail": "\n".join(output.strip().splitlines()[-60:])}
+    if uses_ticket_server(repo):
+        write_json(pending, report)
+    return publish_ci_report(repo, pending, report)
+
+
+def publish_ci_report(repo: Repo, pending: Path, report: dict[str, Any]) -> dict[str, Any]:
+    result = publish_ci_result(repo, report)
+    pending.unlink(missing_ok=True)
+    return result
+
+
+def publish_ci_result(repo: Repo, report: dict[str, Any]) -> dict[str, Any]:
+    tip, seconds = report["tip"], report["seconds"]
+    if report["passed"]:
+        promotion = repo.state / "ci-promotion.json"
         write_json(promotion, {"tip": tip})
         advanced = ci_pass(repo, tip)
         if advanced:
             promotion.unlink(missing_ok=True)
         log(f"slow CI passed at {tip[:12]} in {seconds} s; master advanced: {advanced}")
         return {"tip": tip, "passed": True, "master_advanced": advanced, "seconds": seconds}
-    tail = "\n".join(output.strip().splitlines()[-60:])
     repaired = superseding_repair(repo, tip)
     if repaired:
         log(f"slow CI failed at {tip[:12]}, which predates {repaired}'s repair "
             "on staging; retesting the newer tip before filing")
         post_ci_event(repo, tip, passed=False, superseded_by=repaired, seconds=seconds)
         return {"tip": tip, "passed": False, "superseded_by": repaired}
-    bead_id = report_ci_failure(repo, tip, green, tail, seconds)
+    bead_id = report_ci_failure(repo, tip, report["green"], report["tail"], seconds)
     try:
         for run in prune_runs(repo):
             log(f"pruned run {run['epic']} ({run['state']}): {run['reason']}")

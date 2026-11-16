@@ -95,7 +95,9 @@ later step, so explore deliberately:
   records the commits on your bead, starts slow CI and deletes the worktree.
   If push succeeds but bookkeeping fails, retry it: its receipt repairs
   metadata and CI. On exit 2, fix what it reports (rebase conflicts, failing
-  fast checks) in the same worktree and run it again.
+  fast checks) in the same worktree and run it again. A ticket server outage
+  (exit 4) or daily limit (exit 5) leaves the branch and any delivery receipt
+  in place. Retry the push after one or five minutes, respectively.
 - Write scratch output (build logs, captures, probe scripts) to your
   session's scratchpad or the system temp directory, never into the
   worktree root or the main checkout. Untracked files in your worktree stop

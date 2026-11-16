@@ -36,7 +36,7 @@ pub enum Command {
     Ready(Ready),
     Graph {
         #[arg(long)]
-        if_none_match: Option<u64>,
+        if_none_match: Option<String>,
         #[arg(long)]
         all: bool,
     },

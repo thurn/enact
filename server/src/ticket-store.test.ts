@@ -107,7 +107,7 @@ test("creates nested IDs, resolves aliases, and lists using every filter", async
 
   const response = await request("/graph");
   const etag = response.headers.get("ETag");
-  expect(etag).toBe(`"${seq}"`);
+  expect(etag).toBeTruthy();
   const graph = await checked<{seq: number; tickets: Partial<Ticket>[]; edges: Edge[]}>(Promise.resolve(response));
   expect(graph.seq).toBe(seq);
   expect(graph.tickets.map(({id}) => id)).toEqual([epic, milestone, bug]);
@@ -261,6 +261,10 @@ test("the all-ticket graph keeps closed assignments and updates the archive on w
   ]));
   const etag = (await request("/graph?all=1")).headers.get("ETag")!;
   expect((await request("/graph?all=1", {headers: {"If-None-Match": etag}})).status).toBe(304);
+  expect((await request("/graph", {headers: {"If-None-Match": etag}})).status).toBe(200);
+  const other = await fixture("other-archive");
+  await other.batch([create("Live"), {op: "close", id: "$0", reason: "Done"}, create("Another")]);
+  expect((await other.request("/graph?all=1", {headers: {"If-None-Match": etag}})).status).toBe(200);
 
   await batch([{op: "update", id: archived, set: {assignee: "new-worker"}}, {op: "dep_remove", id: archived, on: live}]);
   const updated = await all();
@@ -280,10 +284,10 @@ test("a defer time passing invalidates graph readiness at the same sequence", as
   const {seq} = await batch([create("Later", undefined, {defer_until: deadline})]);
   const at = Date.parse(deadline);
   const result = await runInDurableObject(stub, async ({store}) => {
-    const first = store.tickets.graph(null, false, at);
+    const first = store.tickets.graph("timed-readiness", null, false, at);
     const tag = first.headers.get("ETag");
-    const unchanged = store.tickets.graph(tag, false, at);
-    const after = store.tickets.graph(tag, false, at + 1);
+    const unchanged = store.tickets.graph("timed-readiness", tag, false, at);
+    const after = store.tickets.graph("timed-readiness", tag, false, at + 1);
     return {
       before: await first.json(), after: await after.json(),
       stable: unchanged.status, tags: [tag, after.headers.get("ETag")],

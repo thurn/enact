@@ -39,8 +39,9 @@ export default {
     }
     if (route === "state") return Response.json({ cutover: body?.cutover ?? "before", seq });
     if (route === "graph") {
-      if (etag === '"42"') return new Response(null, { status: 304 });
-      return Response.json({ tickets: [], edges: [], seq });
+      const validator = `"${project}-live-${seq}"`;
+      if (etag === validator) return new Response(null, { status: 304 });
+      return Response.json({ tickets: [], edges: [], seq }, { headers: { ETag: validator } });
     }
     if (route === "tickets" && target) {
       if (target === "missing") return Response.json({ error: "unknown ticket" }, { status: 404 });

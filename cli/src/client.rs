@@ -40,6 +40,7 @@ pub struct Client {
 pub struct Reply {
     pub status: u16,
     pub body: String,
+    pub etag: Option<String>,
 }
 
 impl Reply {
@@ -113,7 +114,7 @@ impl Client {
         url
     }
 
-    pub fn get(&self, url: &Url, etag: Option<u64>, budget: Duration) -> Result<Reply> {
+    pub fn get(&self, url: &Url, etag: Option<&str>, budget: Duration) -> Result<Reply> {
         self.request(url, None, true, etag, budget)
     }
 
@@ -126,7 +127,7 @@ impl Client {
         url: &Url,
         body: Option<&Value>,
         replay_safe: bool,
-        etag: Option<u64>,
+        etag: Option<&str>,
         budget: Duration,
     ) -> Result<Reply> {
         let authorization = body
@@ -180,7 +181,13 @@ impl Client {
                     };
                     match body {
                         Ok(body) if status == 304 || (200..300).contains(&status) => {
-                            return Ok(Reply { status, body });
+                            let etag = response
+                                .headers()
+                                .get("ETag")
+                                .and_then(|value| value.to_str().ok())
+                                .and_then(|value| value.strip_prefix('"')?.strip_suffix('"'))
+                                .map(str::to_owned);
+                            return Ok(Reply { status, body, etag });
                         }
                         Ok(body) => {
                             let failure = http_failure(status, &body);

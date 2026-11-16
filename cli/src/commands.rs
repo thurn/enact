@@ -50,13 +50,17 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
         Command::Graph { if_none_match, all } => {
             let mut query = Query::new();
             flag(&mut query, "all", all);
-            client
-                .get(
-                    &client.url(&["graph"], &query),
-                    if_none_match,
-                    client.retry_for,
-                )?
-                .json()
+            let reply = client.get(
+                &client.url(&["graph"], &query),
+                if_none_match.as_deref(),
+                client.retry_for,
+            )?;
+            let etag = reply.etag.clone();
+            let mut graph = reply.json()?;
+            if let Some(etag) = etag.filter(|_| graph["unchanged"] != true) {
+                graph["etag"] = json!(etag);
+            }
+            Ok(graph)
         }
         Command::Create(args) => create(client, args),
         Command::Update(args) => update(client, args),

@@ -71,7 +71,6 @@ class TicketCoordinationTest(unittest.TestCase):
 
     def seed_checkout(self, clone):
         (clone / ".enact.toml").write_text(f"""[tickets]
-backend = "server"
 project = "{self.project}"
 url = "{self.address}"
 [checks]
@@ -81,17 +80,23 @@ slow = "python3 check.py slow"
 queue = true
 """, encoding="utf-8")
         (clone / "check.py").write_text("""import os, sys
+from pathlib import Path
 
-if sys.argv[1] == "slow":
-    sys.exit("simulated slow-CI failure" if os.environ.get("TEST_FAIL_SLOW") else 0)
+if sys.argv[1] == "slow" and (os.environ.get("TEST_FAIL_SLOW") or Path("SLOW").exists()):
+    sys.exit("simulated slow-CI failure")
 """, encoding="utf-8")
         sh(["git", "add", "-A"], clone)
         sh(["git", "commit", "-qm", "Initial commit"], clone)
         sh(["git", "push", "-q", "origin", "HEAD:staging", "HEAD:master"], clone)
 
+    def cutover(self):
+        self.tk(self.hosts[0], "state", "--set-cutover", "paused")
+        self.tk(self.hosts[0], "state", "--set-cutover", "after")
+
     def assert_no_enact_refs(self):
         for path in [self.origin, *self.clones.values()]:
             self.assertEqual(sh(["git", "for-each-ref", "refs/enact/"], path), "")
+            self.assertFalse((path / ".git" / "enact" / "ownership.lock").exists())
 
     def fixture(self, action, data):
         request = Request(f"{self.address}/__coordination/{self.project}/{action}",
@@ -99,16 +104,17 @@ if sys.argv[1] == "slow":
         with urlopen(request, timeout=10) as response:
             return json.load(response)
 
-    def tk(self, host, *args):
-        return self.call(host, [os.environ["ENACT_TEST_TK"], "--json", *args])
+    def tk(self, host, *args, data=None):
+        return self.call(host, [os.environ["ENACT_TEST_TK"], "--json", *args], data=data)
 
     def enact(self, host, *args, code=0, cwd=None):
         return self.call(host, [sys.executable, str(SCRIPT), *args], code=code, cwd=cwd)
 
-    def call(self, host, command, *, cwd=None, code=0, extra=None):
+    def call(self, host, command, *, cwd=None, code=0, extra=None, data=None):
         env = {**self.envs[host], **(extra or {})}
         result = subprocess.run(command, cwd=cwd or self.clones[host], env=env, text=True,
-                                capture_output=True, timeout=90)
+                                input=json.dumps(data) if data is not None else None,
+                                capture_output=True, timeout=180)
         self.assertEqual(result.returncode, code, result.stdout + result.stderr)
         return json.loads(result.stdout)
 
@@ -130,6 +136,7 @@ if sys.argv[1] == "slow":
         self.fail("the integration fixture did not reach its next state")
 
     def test_staging_serializes_pushes_and_replaces_an_expired_holder(self):
+        self.cutover()
         a, b = self.hosts
         first = self.branch_change(a, "first")
         second = self.branch_change(b, "second")
@@ -184,6 +191,7 @@ fi
         self.assertEqual(self.tk(a, "leases"), [])
 
     def test_justiciar_is_per_machine_and_fences_stale_transitions(self):
+        self.cutover()
         a, b = self.hosts
         self.enact(a, "justiciar", "request", "--reason", "repair requested")
         old = self.enact(a, "justiciar", "status")["justiciar"]
@@ -201,6 +209,7 @@ fi
         self.assertIsNotNone(self.enact(b, "justiciar", "status")["justiciar"])
 
     def test_slow_ci_reuses_a_steward_per_os_and_posts_results(self):
+        self.cutover()
         a, b = self.hosts
         change = self.branch_change(a, "needs-check")
         tip = self.enact(a, "push", "--no-ci", cwd=change)["staging"]
@@ -238,3 +247,64 @@ print(json.dumps(enact.ci_run_once(enact.find_repo(), sys.argv[2])))
         self.assertEqual(status["macos"]["steward"], mac_steward)
         self.assertTrue(status["windows"]["master_advanced"])
         self.assertEqual(self.enact(a, "ci", "--wait", tip, "--timeout", "0")["state"], "passed")
+
+
+    def test_vizier_finishes_legacy_named_lane_through_steward_repair(self):
+        vizier, worker = self.hosts
+        self.assertEqual(self.enact(worker, "backend")["backend"], "beads")
+        self.cutover()
+        epic, first, second = (item["id"] for item in self.tk(vizier, "batch", data={"ops": [
+            {"op": "create", "fields": {"title": "Run", "type": "epic"}},
+            {"op": "create", "parent": "$0", "fields": {"title": "First", "labels": ["lane:work"]}},
+            {"op": "create", "parent": "$0", "deps": ["$1"],
+             "fields": {"title": "Second", "labels": ["lane:work"]}},
+        ]})["results"])
+
+        def next_step():
+            return self.enact(vizier, "next", "--epic", epic)
+
+        def start(step):
+            self.enact(worker, "start", step["bead"], "--reservation", step["reservation"])
+
+        def push(ticket, filename, *, remove=False):
+            legacy_id = f"{self.project}-{ticket}"
+            tree = Path(self.enact(worker, "worktree", "create", legacy_id)["path"])
+            target = tree / filename
+            if remove:
+                target.unlink()
+            else:
+                target.touch()
+            sh(["git", "add", "-A"], tree)
+            sh(["git", "commit", "-qm", ticket], tree)
+            result = self.enact(worker, "push", "--bead", legacy_id, "--no-ci", cwd=tree)
+            self.assertTrue(result["pushed"])
+            self.assertEqual(result["queue"]["batch"], 1)
+            return result["staging"]
+
+        step = next_step()
+        self.assertEqual((step["action"], step["bead"]), ("spawn", first))
+        start(step)
+        push(first, "FIRST")
+        continued = self.enact(worker, "close", first, "--reason", "delivered", "--continue")
+        self.assertEqual(continued["next"]["id"], second)
+        failing = push(second, "SLOW")
+        self.enact(worker, "close", second, "--reason", "delivered")
+        failed = self.enact(vizier, "ci")["ran"][-1]
+        self.assertEqual(failed["tip"], failing)
+        self.assertFalse(failed["passed"])
+
+        step = next_step()
+        self.assertEqual(step["action"], "spawn", step)
+        self.assertEqual(step["bead"], failed["steward"])
+        start(step)
+        fixed = push(step["bead"], "SLOW", remove=True)
+        self.enact(worker, "close", step["bead"], "--reason", "repaired")
+        passed = self.enact(worker, "ci")["ran"][-1]
+        self.assertTrue(passed["master_advanced"])
+        self.assertEqual(passed["tip"], fixed)
+        done = next_step()
+        self.assertEqual(done["action"], "done")
+        self.assertTrue(done["delivery"]["complete"])
+        self.assertIn(fixed, done["delivery"]["commits"])
+        self.assertEqual({entry["bead"] for entry in done["archive"]},
+                         {first, second, step["bead"]})

@@ -473,6 +473,11 @@ Handle its action, including `archive`, before waiting. For `action: wait`:
   most 60 seconds, or a yielded orchestration cell with its `wait` tool.
   Read the final JSON after exit and handle it as usual.
 
+If the ticket server is unavailable (`next` exits 4) or has reached a daily
+limit (exit 5), preserve existing reservations and restart the same loop
+after one minute for an outage or five minutes for a daily limit. Reconcile
+ownership from the server once it responds.
+
 Never launch a second `next` while one runs. Check user steering between
 waits; `wait_threads` returns early for new user input. On a stop, record
 the shared pause immediately, then drain a running `next` without acting
