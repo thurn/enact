@@ -178,6 +178,17 @@ test("home fragments show current project status independently of the ticket boa
   ]) expect(html).toContain(value);
   expect(html).not.toMatch(/>Pat<|obsolete|<main|<script/);
 
+  await runInDurableObject(stub, ({store}) => {
+    store.sql.exec(
+      "INSERT INTO events VALUES (7, ?, 'ci', 'Mac runner', 'ci', ?)",
+      new Date().toISOString(), '{"os":"MACOS","passed":false,"tip":"a1b2c3d4e5"}',
+    );
+  });
+  const updated = await (await request("/?fragment=status")).text();
+  expect(updated).toContain("a1b2c3d4");
+  expect(updated).toContain("01234567");
+  expect(updated).not.toContain("abcdef12");
+
   const live = await (await request("/?fragment=all")).text();
   expect(live).toContain('<main class="c-main"');
   expect(live).toContain('<template id="c-status-fragment">');

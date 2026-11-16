@@ -13,7 +13,11 @@ export type RequestReservation = {day: string; used: number; ceiling: number};
 export class ProjectUsage {
   private counts: Counts;
 
-  constructor(private readonly sql: SqlStorage, now: number, private readonly requests: RequestReservation) {
+  constructor(
+    private readonly sql: SqlStorage,
+    now: number,
+    private readonly requests: RequestReservation = {day: "", used: 0, ceiling: 0},
+  ) {
     const day = new Date(now).toISOString().slice(0, 10);
     const row = sql.exec<{value: string}>("SELECT value FROM meta WHERE key = 'daily_usage'").toArray()[0];
     const saved: Counts | undefined = row && JSON.parse(row.value);

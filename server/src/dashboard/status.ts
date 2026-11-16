@@ -69,22 +69,23 @@ function ci(entries: Event[]) {
 }
 
 export class ProjectStatus {
-  private ciKey?: string;
+  private ciRetentionDay?: string;
+  private ciSequence?: number;
+  private readonly ciByOs = new Map<string, Event>();
   private ciMarkup = "";
   private sessionsKey?: string;
   private sessions: Event[] = [];
 
   constructor(private readonly sql: SqlStorage) {}
 
-  private eventKey(kind: string, day: string): string {
-    const newest = this.sql.exec<{seq: number}>(`
+  private latestSequence(kind: string): number | undefined {
+    return this.sql.exec<{seq: number}>(`
       SELECT seq FROM events WHERE kind = ? ORDER BY seq DESC LIMIT 1
     `, kind).toArray()[0]?.seq;
-    return `${day}:${newest}`;
   }
 
   private recentSessions(day: string): Event[] {
-    const key = this.eventKey("session", day);
+    const key = `${day}:${this.latestSequence("session")}`;
     if (key !== this.sessionsKey) {
       this.sessions = events(this.sql, new URLSearchParams({kind: "session"}));
       this.sessionsKey = key;
@@ -94,20 +95,30 @@ export class ProjectStatus {
 
   private latestCi(day: string): string {
     const {sql} = this;
-    const key = this.eventKey("ci", day);
-    if (key === this.ciKey) return this.ciMarkup;
+    const seq = this.latestSequence("ci");
+    const retained = sql.exec<{value: string}>("SELECT value FROM meta WHERE key = 'last_retention_day'").toArray()[0]?.value;
+    const retentionDay = retained ?? day;
+    const sameRetention = this.ciRetentionDay === retentionDay;
+    if (sameRetention && seq === this.ciSequence) return this.ciMarkup;
 
-    // An OS with no recent runs still has a latest result in the retained
-    // history. Cache it across ticket changes and lease renewals.
-    const entries = sql.exec<Omit<Event, "data"> & {data: string}>(`
+    // A new result only changes one OS. Read the retained history on the first
+    // render and after daily retention, then group only newer rows.
+    if (!sameRetention) this.ciByOs.clear();
+    const rows = sql.exec<Omit<Event, "data"> & {data: string}>(`
       SELECT * FROM events WHERE seq IN (
         SELECT MAX(seq) FROM events
-        WHERE kind = 'ci' AND json_type(data, '$.os') = 'text'
+        WHERE kind = 'ci' AND seq > ? AND json_type(data, '$.os') = 'text'
         GROUP BY lower(json_extract(data, '$.os'))
       ) ORDER BY seq DESC
-    `).toArray().map((event) => ({...event, data: JSON.parse(event.data)}));
-    this.ciKey = key;
-    this.ciMarkup = ci(entries);
+    `, sameRetention ? this.ciSequence ?? Number.MIN_SAFE_INTEGER : Number.MIN_SAFE_INTEGER);
+    for (const row of rows) {
+      const event = {...row, data: JSON.parse(row.data)};
+      const os = field(event, "os")?.toLowerCase();
+      if (os) this.ciByOs.set(os, event);
+    }
+    this.ciRetentionDay = retentionDay;
+    this.ciSequence = seq;
+    this.ciMarkup = ci([...this.ciByOs.values()]);
     return this.ciMarkup;
   }
 
