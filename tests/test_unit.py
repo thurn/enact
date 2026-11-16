@@ -4,6 +4,7 @@ import importlib.util
 import contextlib
 import datetime as dt
 import functools
+import gzip
 import io
 import json
 import multiprocessing
@@ -2407,6 +2408,58 @@ class CommandPolicyTest(unittest.TestCase):
                      ("release", bead, "--reason", "stale")):
             self.a.enact(*args, session="old", code=3)
         self.assertEqual(self.a.show(bead)["assignee"], "new")
+
+
+class BdRecordingTest(unittest.TestCase):
+    def test_forwards_and_records_binary_streams_even_if_log_cannot_open(self):
+        recorder = SCRIPT.with_name("bd_record.py")
+        script = (
+            "import os, sys; "
+            "os.write(1, sys.stdin.buffer.read() + os.environ['RECORD_TEST'].encode()); "
+            "os.write(2, b'error\\xff'); sys.exit(17)"
+        )
+        fixture = [sys.executable, "-c", script]
+        input_bytes = b"input\x00"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            log_dir = root / ".git" / "enact" / "bd-record"
+            log_dir.mkdir(parents=True)
+            log_path = log_dir / "calls.jsonl.gz"
+            opts = dict(cwd=root, env={**os.environ, "RECORD_TEST": "test"},
+                        input=input_bytes, capture_output=True)
+            direct = subprocess.run(fixture, **opts)
+            wrapped = [sys.executable, "-S", recorder, *fixture]
+            recorded = subprocess.run(wrapped, **opts)
+            with gzip.open(log_path, "rt", encoding="ascii") as log:
+                call, = map(json.loads, log)
+            self.assertEqual(call["cwd"], str(root.resolve()))
+            self.assertEqual(call["argv"], fixture[1:])
+            self.assertEqual(call["returncode"], direct.returncode)
+            for field, data in (("stdin", input_bytes), ("stdout", direct.stdout),
+                                ("stderr", direct.stderr)):
+                self.assertEqual(call[field].encode("utf-8", "surrogateescape"), data)
+            log_path.unlink()
+            log_path.mkdir()
+            unrecorded = subprocess.run(wrapped, **opts)
+            for result in (recorded, unrecorded):
+                self.assertEqual((result.returncode, result.stdout, result.stderr),
+                                 (direct.returncode, direct.stdout, direct.stderr))
+
+    def test_corpus_contains_distinct_real_command_shapes(self):
+        corpus = SCRIPT.parent.parent / "tests" / "corpus"
+        with gzip.open(corpus / "start.jsonl.gz", "rt", encoding="utf-8") as snapshot:
+            ids = {json.loads(line)["id"] for line in snapshot}
+        self.assertIn("by-r61mr", ids)
+        with gzip.open(corpus / "calls.jsonl.gz", "rt", encoding="ascii") as log:
+            cases = list(map(json.loads, log))
+        keys = {(tuple(case["command"]), tuple(case["flags"])) for case in cases}
+        self.assertEqual(len(keys), len(cases))
+        successes = {case["command"][0] for case in cases if case["returncode"] == 0}
+        self.assertTrue({
+            "create", "show", "list", "ready", "update", "close", "dep",
+            "label", "comments", "epic", "defer",
+        } <= successes)
+        self.assertTrue(any(case["stdin"] and "--body-file" in case["flags"] for case in cases))
 
 
 if __name__ == "__main__":

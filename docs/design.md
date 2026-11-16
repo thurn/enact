@@ -2101,3 +2101,89 @@ caller is seen long before it stops the fleet.
 ### 11. Deployment target
 
 Use the existing `tickets` Worker in Cloudflare account `0cc730645e29feff389c14f36cb9cf4c` and its enabled `thurn.workers.dev` account subdomain. Set the Worker name to `tickets` and deploy the server to `https://tickets.thurn.workers.dev/`. The existing dashboard-created version serves `Hello World!`; replace that version when the deployment bead is ready. The account subdomain and Worker route were verified through Cloudflare on 2026-11-16, and the placeholder returned HTTP 200 over HTTPS. The dashboard is at https://dash.cloudflare.com/0cc730645e29feff389c14f36cb9cf4c/workers/services/view/tickets/production. Do not create a second Worker or change the account subdomain.
+
+## Recording Beads calls for the ticket cutover (2026-11-16)
+
+`scripts/bd_record.py` forwards the command to the pinned real Beads binary.
+Each participating clone gets a private `bd-record` directory in its
+`<git-common-dir>/enact` state. The recorder appends one gzip member per JSON
+line, so concurrent callers share a log and repeated full-store exports take
+less disk space. It streams redirected I/O and records bytes as UTF-8 with
+surrogate escapes for invalid bytes. A terminal stream is inherited and
+recorded as `null` to preserve color and prompts. A merged pipe is recorded as
+one stdout stream. If the recorder cannot write the log, the caller still
+receives the real command's exit status.
+
+To install on a Mac where the effective `bd` entry is a Homebrew symlink, run
+this in the clone to record. Set `recorder` to the Enact script's absolute path
+and `python` to the absolute path of Python 3.11 or newer. The self-contained
+launcher survives worktree removal. Replacing it atomically also reaches shells
+that already have its path cached.
+
+```sh
+set -e
+umask 077
+clone="$(git rev-parse --show-toplevel)"
+state="$(git rev-parse --path-format=absolute --git-common-dir)/enact/bd-record"
+store="$HOME/.local/share/enact/bd-record"
+entry="$(command -v bd)"
+target="$(readlink "$entry")"
+case "$target" in /*) real="$target" ;; *) real="$(dirname "$entry")/$target" ;; esac
+test -n "$target" && test -x "$real"
+mkdir -p "$state" "$store"
+test ! -e "$state/start.jsonl"
+printf '%s\n' "$target" > "$store/original-link"
+launcher="$(mktemp "$(dirname "$entry")/.bd-record.XXXXXX")"
+"$python" - "$recorder" "$real" "$launcher" <<'PYINSTALL'
+from pathlib import Path
+import sys
+
+recorder, real, launcher = sys.argv[1:]
+script = Path(recorder).read_text(encoding="utf-8").split("\n", 1)[1]
+script = script.replace("PINNED_BINARY = None", f"PINNED_BINARY = {real!r}", 1)
+Path(launcher).write_text(f"#!{sys.executable} -S\n" + script, encoding="utf-8")
+PYINSTALL
+chmod 755 "$launcher"
+"$real" export > "$state/start.jsonl"
+test -s "$state/start.jsonl"
+date -u '+%Y-%m-%dT%H:%M:%SZ' > "$state/start-time"
+test "$(readlink "$entry")" = "$target"
+mv -f "$launcher" "$entry"
+```
+
+Run this block in a separate shell so a failed check aborts the installation.
+`bd list --json` should produce the same stdout, stderr and exit
+status as `"$real" list --json` on an unchanged store, and an entry should
+appear in `"$state/calls.jsonl.gz"`. To remove the wrapper, verify that
+`"$entry"` is still the launcher above. Restore the original Homebrew symlink
+by creating it alongside the launcher and then renaming it over the launcher.
+
+```sh
+restore="$(mktemp -d "$(dirname "$entry")/.bd-restore.XXXXXX")"
+ln -s "$(cat "$store/original-link")" "$restore/bd"
+mv -f "$restore/bd" "$entry"
+rmdir "$restore"
+```
+
+Beryl's live recording started on 2026-11-16 at 18:25:06 UTC. The first
+minutes are in the uncompressed `calls.jsonl`. Pass both files to the reducer
+and use a half-open interval in Unix nanoseconds to select the first day.
+
+```sh
+python3 scripts/bd_corpus.py --real-bd "$real" \
+  --source live "$clone" "$state/calls.jsonl" \
+  --source live "$clone" "$state/calls.jsonl.gz" \
+  --since-ns 1794853506000000000 --before-ns 1794939906000000000 \
+  /tmp/bd-day.jsonl.gz
+```
+
+The reducer groups by command path and flag names, including repeated flags.
+It uses the recording version's help to identify which flags take a value and
+prefers successful examples when a shape appears more than once. The checked-in
+snapshot is the real `bd export` at the start. The initial cases came from real
+Beads 1.3.4 in an isolated Git clone seeded by that export. Replay those cases
+in file order against a fresh import. The tests use child IDs allocated from a
+fixture epic and include cases for stdin and invalid invocations. To incorporate
+live calls, reproduce their state and file inputs against an isolated import
+before adding them as replay cases. The live records preserve original
+responses from the changing production store.
