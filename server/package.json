@@ -7,6 +7,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "pretest": "node scripts/build-cirrus.mjs",
     "test": "tsc --noEmit && vitest run"
   },
   "devDependencies": {
