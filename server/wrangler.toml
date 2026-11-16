@@ -19,3 +19,8 @@ class_name = "ProjectTickets"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ProjectTickets"]
+
+[[rules]]
+type = "Text"
+globs = ["**/*.sql"]
+fallthrough = true

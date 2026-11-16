@@ -1890,6 +1890,8 @@ CREATE TABLE aliases (alias TEXT PRIMARY KEY, id TEXT NOT NULL) WITHOUT ROWID;
   retried on collision with a ticket or an alias.
 - A child's ID is `<parent>.<next_child>`, taking and incrementing the
   parent's `next_child` in the same transaction. Depth is not limited.
+  A ticket keeps its ID when an update changes its parent. Readiness uses
+  the stored parent.
 - Every lookup strips a leading `<project>-` and then consults `aliases`. The
   importer sets each parent's `next_child` to one past its highest child.
   Imported roots keep whatever characters they have.
@@ -1905,7 +1907,7 @@ All routes are under `/<project>/api`. Reads need no token. Writes need
 | `GET /state` | `{cutover, cutover_at, seq, day, requests, rows_written, limits}` |
 | `GET /tickets/<id>?comments=1&history=1` | One ticket with its edges in both directions, children, `ready` and `blocked_by` |
 | `GET /tickets?status=&type=&parent=&ancestor=&label=&assignee=&ready=1&all=1&limit=` | A list; closed tickets only with `all=1` or `status=closed` |
-| `GET /graph?all=1` | Live tickets by default, or all tickets with `all=1`. Includes `ready`, edges within the selected graph, and `seq`. Omits `body`, `design` and `notes`. `If-None-Match` with the last `seq` returns 304. |
+| `GET /graph?all=1` | Live tickets by default, or all tickets with `all=1`. Includes `ready`, edges within the selected graph, and `seq`. Omits `body`, `design` and `notes`. Matching the projection's `ETag` returns 304. |
 | `POST /batch` | The only way to write tickets (below) |
 | `POST /leases/<name>` | `{op: acquire\|renew\|release, holder, ttl_s, payload}` |
 | `GET /leases` | Every lease with its holder, expiry and waiters |
@@ -1972,6 +1974,12 @@ A ticket is **ready** when all of these hold:
 `GET /tickets/<id>` reports `blocked_by` as the list of ticket IDs that make
 it not ready, with which rule each came from, so a listing can always say
 why. Nothing is hidden from listings for being blocked.
+
+Each live graph ticket includes `blocked_by` for rules 2–5 so a scheduler
+can see blockers involving closed tickets omitted from the live graph. The
+graph includes the full readiness result in `ready`. When an eligible
+ticket's defer time passes, the graph's ETag changes without a new write.
+The graph's numeric `seq` remains the batch precondition.
 
 ### 5. Leases
 
@@ -2086,10 +2094,23 @@ Invoked as `bd`, the binary is the shim (section 7).
 
 ### 10. Budget
 
-Rows written count index entries. Per operation: `create` about 4, plus 2 for
-each dependency; `update`, `claim`, `close` about 3 (the ticket, its
-history row, and a `tickets_live` entry when the status changes); `comment`
-1; `event` 2; a lease operation 1.
+SQLite reports the rows and index entries written. A changed batch writes
+the shared `meta.seq` row once. Excluding that row:
+
+- A keyed root `create` writes 4 rows (ticket, live index, history and request
+  key). A child writes 2 more (parent index and the parent's allocation
+  counter). A newly added dependency writes 2. An unkeyed or closed creation
+  omits its request-key or live-index row, respectively. A keyed retry
+  writes zero.
+- A ticket update writes 2 rows for the ticket and history. An insert or
+  update of a live status adds 1, and a new parent adds 1. In the simulator
+  a close writes 2 rows per closed ticket, including any closed ancestors.
+- A comment writes 1 row. Removing a dependency writes 1. Comments and
+  dependency changes advance graph `seq`; they have their own tables and
+  leave the ticket's field `version` unchanged. The allocation counter
+  also leaves the parent's field `version` unchanged.
+- An event writes 2 rows and a lease operation writes 1, before shared
+  bookkeeping.
 
 | A normal day | Count | Requests | Rows written |
 | --- | --- | --- | --- |
@@ -2101,6 +2122,11 @@ history row, and a `tickets_live` entry when the status changes); `comment`
 | Dashboard pages and fragments | 3,000 | 3,000 | 0 |
 | Feed connections and messages | | 500 | 0 |
 | **Total** | | **31,500 of 100,000** | **29,000 of 100,000** |
+
+The table estimates operation rows. One shared sequence write for each
+of the 7,000 changed ticket and comment requests would bring the estimate
+to 36,000 rows. Keyed child creation adds the allocation rows described
+above. Daily quota checks use the measured rows, including bookkeeping.
 
 Rows read stay far below 5 million because live tickets are served from
 memory. Static assets are not counted as requests. The server refuses writes

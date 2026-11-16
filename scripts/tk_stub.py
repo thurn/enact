@@ -188,8 +188,13 @@ class Store:
         rows = {}
         for row in tickets:
             ticket = decoded(row)
-            rows[ticket["id"]] = {k: v for k, v in ticket.items() if k not in omit}
-            rows[ticket["id"]]["ready"] = self.readiness(ticket)["ready"]
+            readiness = self.readiness(ticket)
+            rows[ticket["id"]] = {
+                **{k: v for k, v in ticket.items() if k not in omit},
+                "ready": readiness["ready"],
+            }
+            if ticket["status"] != "closed":
+                rows[ticket["id"]]["blocked_by"] = [item for item in readiness["blocked_by"] if item["rule"] != 1]
         edges = [edge for edge in self.edges() if edge["src"] in rows and edge["dst"] in rows]
         return {"tickets": list(rows.values()), "edges": edges, "seq": self.seq()}
 

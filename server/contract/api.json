@@ -51,9 +51,9 @@
     },
     {
       "method": "GET", "path": "/graph",
-      "request": {"query": {"all": "1?"}, "headers": {"If-None-Match": "seq?"}},
-      "response": {"tickets": "Ticket[] (live unless all=1, with ready, omitting body, design and notes)", "edges": "Edge[]", "seq": "integer", "headers": {"ETag": "seq"}},
-      "statuses": [200, 304]
+      "request": {"query": {"all": "1?"}, "headers": {"If-None-Match": "ETag?"}},
+      "response": {"tickets": "Ticket[] (live unless all=1; includes ready and live blocked_by rules 2-5; omits body, design and notes)", "edges": "Edge[] (within the selected graph)", "seq": "integer", "headers": {"ETag": "graph projection version"}},
+      "statuses": [200, 304, 400]
     },
     {
       "method": "POST", "path": "/batch",
