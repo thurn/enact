@@ -1,7 +1,7 @@
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 -- keys: seq (global change counter), cutover (before|paused|after),
--- cutover_at, day (UTC date of the counters), requests, rows_written,
--- token_hashes (JSON array), token_fetched_at
+-- cutover_at, daily_usage ({day, requests, rows_written}),
+-- token_hashes (hash to machine), token_fetched_at
 
 CREATE TABLE tickets (
   id          TEXT PRIMARY KEY,          -- 'q44s.7.24', no project prefix
@@ -62,3 +62,4 @@ CREATE TABLE events (
 CREATE INDEX events_kind ON events(kind, seq);
 
 CREATE TABLE aliases (alias TEXT PRIMARY KEY, id TEXT NOT NULL) WITHOUT ROWID;
+CREATE INDEX aliases_id ON aliases(id);

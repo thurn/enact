@@ -28,6 +28,7 @@
     "Edge": {"src": "ticket ID", "dst": "ticket ID", "kind": "blocks|conditional-blocks|waits-for|related|discovered-from"},
     "Comment": {"ticket": "ticket ID", "n": "integer", "author": "string", "at": "timestamp", "text": "string"},
     "History": {"ticket": "ticket ID", "seq": "integer", "actor": "string", "at": "timestamp", "change": "field changes or imported event array"},
+    "Whole ticket": {"ticket fields": "Ticket (version optional on import and assigned by the server)", "edges": "outgoing Edge[]", "comments": "Comment[]", "history": "History[]", "aliases": "string[] (optional on import)"},
     "Lease": {"name": "string", "holder": "string", "machine": "string", "expires_at": "timestamp", "payload": "object", "waiters": "{holder, since}[]"},
     "Event": {"seq": "integer", "at": "timestamp", "kind": "session|ci|machine|cutover|usage", "machine": "string", "actor": "string", "data": "JSON"}
   },
@@ -93,14 +94,14 @@
     },
     {
       "method": "POST", "path": "/import",
-      "request": {"body": "up to 200 whole tickets with edges, comments and history"},
-      "response": {"body": "success acknowledgement (fields unspecified)"},
+      "request": {"body": {"tickets": "up to 200 flat Whole ticket objects"}},
+      "response": {"seq": "integer", "imported": "number of changed tickets", "rows_written": "SQLite writes for data and shared sequence"},
       "statuses": [200, 400, 401, 429]
     },
     {
       "method": "GET", "path": "/export",
       "request": {"query": {"after": "ticket ID?"}},
-      "response": {"body": "JSON lines of whole tickets ordered by ID, paged"},
+      "response": {"body": "up to 200 Whole ticket objects as JSON Lines ordered by ID, empty at EOF"},
       "statuses": [200, 400]
     },
     {

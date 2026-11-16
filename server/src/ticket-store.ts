@@ -12,6 +12,7 @@ export class TicketStore {
     if (!this.sql.exec("SELECT 1 FROM sqlite_master WHERE name = 'meta' AND type = 'table'").toArray().length) {
       storage.transactionSync(() => this.sql.exec(schema));
     }
+    this.sql.exec("CREATE INDEX IF NOT EXISTS aliases_id ON aliases(id)");
   }
 
   get tickets(): TicketIndex {
@@ -21,6 +22,10 @@ export class TicketStore {
   // Use after an import, which writes the contract tables directly.
   invalidateIndex(): void {
     this.index = undefined;
+  }
+
+  advanceSequence(seq: number): void {
+    if (this.index) this.index.seq = seq;
   }
 
   meta(key: string): string | undefined {

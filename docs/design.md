@@ -1808,8 +1808,8 @@ SQLite database is `server/contract/schema.sql`:
 ```sql
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 -- keys: seq (global change counter), cutover (before|paused|after),
--- cutover_at, day (UTC date of the counters), requests, rows_written,
--- token_hashes (JSON array), token_fetched_at
+-- cutover_at, daily_usage ({day, requests, rows_written}),
+-- token_hashes (hash to machine), token_fetched_at
 
 CREATE TABLE tickets (
   id          TEXT PRIMARY KEY,          -- 'q44s.7.24', no project prefix
@@ -1870,6 +1870,7 @@ CREATE TABLE events (
 CREATE INDEX events_kind ON events(kind, seq);
 
 CREATE TABLE aliases (alias TEXT PRIMARY KEY, id TEXT NOT NULL) WITHOUT ROWID;
+CREATE INDEX aliases_id ON aliases(id);
 ```
 
 - Labels and metadata are JSON in the ticket's row, not tables. Filtering by
@@ -1917,6 +1918,15 @@ All routes are under `/<project>/api`. Reads need no token. Writes need
 | `POST /import` | Up to 200 tickets with edges, comments and history; idempotent |
 | `GET /export?after=<id>` | JSON lines of whole tickets sorted by ID, paged |
 | `POST /state` | `{cutover}`; only moves forward, except `paused` to `before` |
+
+The import body is `{tickets: [...]}`. Each element has the ticket fields
+plus its outgoing `edges`, `comments`, `history` and `aliases` arrays. Export
+uses the same flat objects, up to 200 per page and an empty page at the end.
+The server assigns the version of changed ticket fields and preserves the
+higher child allocation counter. It skips snapshots older than the stored
+ticket by `updated_at`. Import returns `{seq, imported, rows_written}`, where
+`imported` counts changed tickets and `rows_written` counts their data and
+the shared sequence write.
 
 `POST /batch` takes `{if: [...], ops: [...]}` and applies all of it in one
 transaction or none of it.
@@ -2022,7 +2032,8 @@ idle connection costs nothing.
 - `paused`: on first seeing it, publish the machine's bead store (`enact
   sync` with `ENACT_SYNC_NOW`) and post a `machine` event `{drained: true}`;
   then wait on the feed for the state to change.
-- `after`: answer from the server.
+- `after`: answer from the server. The transition from `paused` preserves
+  `cutover_at` from the start of the pause. Returning to `before` clears it.
 - The cutover session sets `paused`, waits until every machine that posted a
   `machine` event in the previous 10 minutes has posted `drained` (at most 5
   minutes, else it sets `before` again and stops), pulls the bead store, runs
@@ -2123,10 +2134,14 @@ the shared `meta.seq` row once. Excluding that row:
 | Feed connections and messages | | 500 | 0 |
 | **Total** | | **31,500 of 100,000** | **29,000 of 100,000** |
 
-The table estimates operation rows. One shared sequence write for each
-of the 7,000 changed ticket and comment requests would bring the estimate
-to 36,000 rows. Keyed child creation adds the allocation rows described
-above. Daily quota checks use the measured rows, including bookkeeping.
+The table estimates operation rows. A shared sequence write per changed
+request adds up to 13,000 rows. Exact durable request accounting can add
+another 31,500 rows, for about 73,500 in total before child allocation and
+Cloudflare's alarm scheduling writes. The daily counters reset at 00:00 UTC.
+The usage row itself counts toward the limit. When the row counter reaches
+the 90 percent threshold, accounting stops writing and public reads remain
+available. The server review verifies the remaining margin for both projects
+sharing the account.
 
 Rows read stay far below 5 million because live tickets are served from
 memory. Static assets are not counted as requests. The server refuses writes
