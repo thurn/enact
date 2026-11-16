@@ -769,6 +769,42 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         swept = self.a.enact("worktree", "prune")
         self.assertEqual(swept["kept"][str(path)], "slot with a stopped rebase or merge")
 
+    def test_a_slot_holding_work_is_never_handed_to_another_bead(self):
+        config = self.a.path / ".enact.toml"
+        config.write_text(config.read_text() + "[worktree]\nslots = 3\n")
+        self.a.git("commit", "-q", "-am", "use slots")
+        self.a.git("push", "-q", "origin", "HEAD:master", "HEAD:staging")
+        # An in-progress bead's slot sits on a detached HEAD with a clean tree, as when
+        # its session is gone (say, an app restart) partway through detaching work.
+        held = self.a.create("held")
+        held_path = Path(self.a.enact("worktree", "create", held)["path"])
+        self.assertEqual(held_path.name, "slot-01")
+        self.a.commit_file("held", "work", cwd=held_path)
+        self.a.git("checkout", "-q", "--detach", cwd=held_path)
+        # A tree left detached with uncommitted changes and no bead behind it.
+        dirty = Path(self.a.enact("worktree", "create", "dirty")["path"])
+        self.assertEqual(dirty.name, "slot-02")
+        self.a.git("checkout", "-q", "--detach", cwd=dirty)
+        (dirty / "README.md").write_text("uncommitted")
+        # Neither is handed out: the next bead gets the last slot, and the one after
+        # that a directory of its own.
+        other = self.a.create("other")
+        other_path = Path(self.a.enact("worktree", "create", other)["path"])
+        self.assertEqual(other_path.name, "slot-03")
+        later = Path(self.a.enact("worktree", "create", self.a.create("later"))["path"])
+        self.assertNotIn(later, (held_path, dirty))
+        self.assertEqual((dirty / "README.md").read_text(), "uncommitted")
+        self.assertEqual(self.a.git("rev-parse", "--abbrev-ref", "HEAD", cwd=held_path),
+                         "HEAD")
+        swept = self.a.enact("worktree", "prune")
+        self.assertEqual(swept["kept"][str(held_path)],
+                         f"slot with the branch of bead {held}, which is in_progress")
+        self.assertEqual(swept["kept"][str(dirty)], "slot with uncommitted or untracked files")
+        # A push from a tree with another bead's branch checked out is refused.
+        self.a.git("checkout", "-q", f"enact/{held}", cwd=other_path)
+        refused = self.a.enact("push", "--bead", other, "--no-ci", cwd=other_path, code=2)
+        self.assertIn(f"not enact/{other}", refused["error"])
+
     def test_an_ad_hoc_worktree_reuses_the_newest_free_slot(self):
         config = self.a.path / ".enact.toml"
         config.write_text(config.read_text() + "[worktree]\nslots = 2\n")

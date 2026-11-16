@@ -2650,13 +2650,31 @@ def tree_branch(repo: Repo, path: Path) -> str:
             or repo.git("rev-parse", "--abbrev-ref", "HEAD", cwd=path, check=False))
 
 
-def slot_in_use(repo: Repo, path: Path) -> bool:
-    """Whether a detached slot still holds someone's work: a rebase, cherry-pick, merge or
-    revert stopped on conflicts, or unmerged paths. Each leaves HEAD detached or the
-    resolution uncommitted, so the slot looks parked but taking it would discard that."""
+def slot_busy(repo: Repo, path: Path, graph: list[dict[str, Any]] | None) -> str:
+    """Why a detached slot still holds someone's work, or "" when it is free to hand out.
+
+    A rebase, cherry-pick, merge or revert stopped on conflicts, or unmerged paths, leave
+    HEAD detached or the resolution uncommitted, so the slot looks parked. So does a tree
+    with uncommitted or untracked files, which a released slot never has, since release
+    resets and cleans it. And a bead that is not closed, records this slot on this host and
+    still has its branch is working there even when its session is gone (say, during an
+    app restart): delivery and `worktree remove` delete the branch when they release the
+    slot. Taking a slot in any of these states would discard that work. `graph` is the
+    whole Beads graph, or None when it is unavailable.
+    """
     git_dir = Path(repo.git("rev-parse", "--absolute-git-dir", cwd=path, check=False) or "/")
-    return (any((git_dir / state).exists() for state in PAUSED_OPERATIONS)
-            or bool(repo.git("ls-files", "--unmerged", cwd=path, check=False)))
+    if (any((git_dir / state).exists() for state in PAUSED_OPERATIONS)
+            or repo.git("ls-files", "--unmerged", cwd=path, check=False)):
+        return "a stopped rebase or merge"
+    if repo.git("status", "--porcelain", cwd=path, check=False):
+        return "uncommitted or untracked files"
+    for bead in graph or []:
+        branch = meta(bead, "enact_branch")
+        if (bead.get("status") != "closed" and meta(bead, "enact_worktree") == str(path)
+                and meta(bead, "enact_worktree_host") == host_name() and branch
+                and repo.git_ok("rev-parse", "--verify", f"refs/heads/{branch}")):
+            return f"the branch of bead {bead['id']}, which is {bead.get('status')}"
+    return ""
 
 
 def claim_slot(repo: Repo, branch: str, base: str) -> Path | None:
@@ -2665,25 +2683,23 @@ def claim_slot(repo: Repo, branch: str, base: str) -> Path | None:
     rustc keys its incremental caches to the worktree's path, so a worktree that starts
     in a directory built before recompiles only what changed, incrementally (measured on
     Beryl: 18 CPU-seconds for a test build after a one-function change, against 421-544
-    in a new directory). A free slot is a registered worktree on a detached HEAD with no
-    git operation stopped in it (`slot_in_use`). Of the free slots, the one parked at the
-    newest commit is taken, since its build is the closest to staging; a new slot is made
-    only when none is free. Its ignored files (`rust/target`, `node_modules`) are kept; tracked changes and untracked files are
-    discarded, since a released slot holds no work.
+    in a new directory). A free slot is a registered worktree on a detached HEAD that
+    holds nobody's work (`slot_busy`). Of the free slots, the one parked at the newest
+    commit is taken, since its build is the closest to staging; a new slot is made only
+    when none is free. Its ignored files (`rust/target`, `node_modules`) are kept.
     """
     parked = {Path(entry["worktree"]).resolve() for entry in worktree_entries(repo)
               if "detached" in entry}
     slots = [repo.worktree_root() / f"slot-{number:02d}"
              for number in range(1, repo.config.worktree_slots + 1)]
-    free = [path for path in slots
-            if path.resolve() in parked and not slot_in_use(repo, path)]
+    candidates = [path for path in slots if path.resolve() in parked]
+    graph = Beads(repo).all() if candidates and (repo.main / ".beads").is_dir() else None
+    free = [path for path in candidates if not slot_busy(repo, path, graph)]
     path = None
     if free:
         # Slots are parked at staging tips, so the longest history is the newest.
         path = max(free, key=lambda p: int(
             repo.git("rev-list", "--count", "HEAD", cwd=p, check=False) or 0))
-        repo.git("reset", "-q", "--hard", cwd=path)
-        repo.git("clean", "-q", "-fd", cwd=path)
     else:
         path = next((p for p in slots if not p.exists()), None)
         if path is None:
@@ -2911,8 +2927,8 @@ def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
             repo.git("worktree", "unlock", str(path), cwd=repo.main, check=False)
             remove(path, None)
         elif is_slot(repo, path) and "detached" in entry:
-            kept[str(path)] = ("slot with a stopped rebase or merge"
-                               if slot_in_use(repo, path) else "idle slot")
+            busy = slot_busy(repo, path, graph)
+            kept[str(path)] = f"slot with {busy}" if busy else "idle slot"
         elif not branch.startswith("enact/"):
             kept[str(path)] = "not an Enact branch"
         elif "locked" in entry:
@@ -3587,7 +3603,15 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
             raise Fail("--bead differs from this worktree's assignment", code=3)
         args.bead = args.bead or (assigned["id"] if assigned else None)
         if args.bead:
-            require_owner(Beads(repo).show(args.bead), require_actor(None))
+            bead = Beads(repo).show(args.bead)
+            require_owner(bead, require_actor(None))
+            # Another bead's branch checked out here (a slot handed to two beads, say)
+            # would deliver its commits under this bead's name.
+            expected, current = meta(bead, "enact_branch"), tree_branch(repo, repo.top)
+            if expected and current != expected:
+                raise Fail(f"this worktree has {current} checked out, not {expected}, the "
+                           f"branch of bead {args.bead}; check out {expected} here or push "
+                           "from its own worktree", code=2)
     cfg = repo.config
     if repo.git("status", "--porcelain", "--untracked-files=no"):
         raise Fail("working tree has uncommitted changes; commit them first", code=2)

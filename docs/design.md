@@ -304,6 +304,16 @@ inspection; uncertainty never authorizes releasing ownership.
   slot abandoned mid-rebase stays busy until someone aborts or finishes it;
   the pool then makes another slot or a named directory, which costs a cold
   build, never someone's work.
+- Slots that hold work are never handed out (2026-11-15): a detached slot is
+  also busy when it has uncommitted or untracked files, or when a bead that is
+  not closed records it (`enact_worktree` on this host) and its `enact_branch`
+  still exists, since release deletes that branch. `claim_slot` no longer
+  resets or cleans the slot it takes, because a free slot is already clean.
+  `enact push` exits 2 when the tree's branch is not the bead's
+  `enact_branch`. Before this, after an app restart on Beryl, a slot whose
+  owner was mid-rebase was handed to a second bead (the rebase guard had not
+  reached `master` yet); the owner's rebase then finished on the wrong branch
+  and an amend rewrote the other bead's commit.
 - Reused slow-CI tree (2026-11-14): `[checks] slow_tree = "<name>"` makes
   every slow-CI run check its tip out, detached, in one worktree of that name
   instead of a new `ci-<tip>` tree that is removed afterwards. The reset,
