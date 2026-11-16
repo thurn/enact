@@ -2,6 +2,7 @@ name = "tickets"
 main = "src/index.ts"
 compatibility_date = "2026-11-16"
 account_id = "0cc730645e29feff389c14f36cb9cf4c"
+# The existing account subdomain routes tickets.thurn.workers.dev here.
 workers_dev = true
 
 [vars]

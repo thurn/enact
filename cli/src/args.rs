@@ -128,7 +128,11 @@ pub enum Command {
         samples: u32,
     },
     /// Register or rotate this machine’s write token through the Git remote.
-    Register,
+    Register {
+        /// Keep the current token and ensure it is registered in this repository.
+        #[arg(long)]
+        ensure: bool,
+    },
     Version,
 }
 

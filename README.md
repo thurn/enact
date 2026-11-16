@@ -99,8 +99,10 @@ Install Rust with Cargo on `PATH` before running `install`. Enact builds
 `tk` in the machine's user cache and reports the executable's path in its
 JSON output. Ticket commands rebuild it when the CLI sources change.
 Set `ENACT_TK` to an absolute executable path to use a prebuilt client.
-For projects configured with `[tickets]`, `setup` also runs `tk register`
-if this machine has no token.
+For projects configured with `[tickets]`, `setup` runs `tk register --ensure`
+against the configured Git remote. The first enrollment creates a machine
+token. Enrollment in other projects registers the same token's hash in
+each project's remote.
 
 Then run `/enact-setup` in each project. It writes `.enact.toml`:
 
@@ -129,10 +131,38 @@ model = "sonnet"
 Requirements: git, Python 3.11+, Beads (`bd`) 1.2+ in its default embedded
 Dolt mode, and the `dolt` CLI (used to resolve Beads merge conflicts).
 
-For a project configured with `tk`, `[tickets] backend = "server"` opts in
-to the ticket backend. `backend` defaults to `"beads"`. When `[tickets]`
-names a `project`, Enact also switches to the server once that project's
-cutover state is `after`.
+### Ticket enrollment and cutover
+
+The production coordinates in Enact and Beryl are commented out. With no
+active `[tickets]` table, Enact uses Beads and the optional `bd` shim passes
+through to the original executable. For an enrolled project, configure
+`[tickets].project` and `[tickets].url` in its `.enact.toml`. Use the Worker
+root URL. A worktree’s `.enact.toml` takes precedence over the main
+checkout’s file. Bring existing worktrees up to date before pausing writes.
+
+Use `install` to obtain the managed `tk` path and pass it to
+`scripts/install_bd_shim.py TK REAL_BD ENTRY`. Pass the actual Beads
+executable and the absolute path of a `bd` entry (or `bd.exe` on Windows)
+in a directory ahead of it on `PATH`. The installer saves the original
+beside the shim as `bd-real`. Use `ENACT_SHIM_HELPER` and `ENACT_SHIM_PYTHON`
+if the shim should run a different Enact helper or Python interpreter
+during the pause.
+
+Run `setup` from each enrolled project on each machine with the shim on
+`PATH`. Setup posts an authenticated `machine` event after it succeeds.
+Use a stable, distinct `ENACT_HOST` per machine if the hostname is
+unsuitable. Machine tokens are kept outside the checkout. `tk register`
+rotates the shared local token, so run `tk register --ensure` again in the
+other enrolled projects after a rotation. If a new registration reaches the
+Worker during its one-minute GitHub lookup cooldown, rerun setup after the
+cooldown expires.
+
+With the default backend, the shim and Enact both use the project's
+cutover state. They use Beads in `before`, wait during `paused`, and use
+tickets in `after`. `[tickets] backend = "server"` directs the Enact
+helper to use the ticket API immediately. Leave that override unset when
+preparing a fleet cutover. Tool and prompt callers can keep invoking
+`bd` through `PATH` throughout the transition.
 
 ## Helper commands
 

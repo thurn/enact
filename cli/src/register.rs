@@ -1,4 +1,4 @@
-use crate::client::{Result, read_config, token_path, usage};
+use crate::client::{Result, read_config, token, token_path, usage};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{ErrorKind, Write};
@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 use tempfile::NamedTempFile;
 
-pub fn run() -> Result<String> {
+pub fn run(ensure: bool) -> Result<String> {
     let here = std::env::current_dir().map_err(usage)?;
     let (config_path, config) = read_config(&here)?;
     let repository = config_path.parent().expect("config directory");
@@ -31,6 +31,10 @@ pub fn run() -> Result<String> {
         Ok(metadata) if !metadata.is_file() => {
             return Err(usage(format!("{} is not a regular file", path.display())));
         }
+        Ok(_) if ensure => {
+            publish(repository, remote, &machine, &token_hash(&token()?))?;
+            return Ok(machine);
+        }
         Ok(_) => {}
         Err(error) if error.kind() == ErrorKind::NotFound => {}
         Err(error) => return Err(usage(error)),
@@ -39,7 +43,7 @@ pub fn run() -> Result<String> {
     let mut random = [0_u8; 32];
     getrandom::fill(&mut random).map_err(usage)?;
     let token: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
-    let hash = format!("{:x}", Sha256::digest(token.as_bytes()));
+    let hash = token_hash(&token);
     let mut pending = NamedTempFile::new_in(directory).map_err(usage)?;
     writeln!(pending, "{token}").map_err(usage)?;
     pending.as_file().sync_all().map_err(usage)?;
@@ -53,6 +57,10 @@ pub fn run() -> Result<String> {
         ))
     })?;
     Ok(machine)
+}
+
+fn token_hash(token: &str) -> String {
+    format!("{:x}", Sha256::digest(token.as_bytes()))
 }
 
 fn machine_name() -> Result<String> {
@@ -85,14 +93,21 @@ fn publish(repository: &Path, remote: &str, machine: &str, hash: &str) -> Result
     let prefix = format!("refs/enact/tokens/{machine}/");
     let pattern = format!("{prefix}*");
     let advertised = git(repository, &["ls-remote", "--", remote, "HEAD", &pattern])?;
+    let reference = format!("{prefix}{hash}");
     let mut head = None;
+    let mut registered = false;
     let mut removals = Vec::new();
-    for (oid, reference) in advertised.lines().filter_map(|line| line.split_once('\t')) {
-        if reference == "HEAD" {
+    for (oid, name) in advertised.lines().filter_map(|line| line.split_once('\t')) {
+        if name == "HEAD" {
             head = Some(oid);
-        } else if reference.starts_with(&prefix) {
-            removals.push(format!(":{reference}"));
+        } else if name == reference {
+            registered = true;
+        } else if name.starts_with(&prefix) {
+            removals.push(format!(":{name}"));
         }
+    }
+    if registered && removals.is_empty() {
+        return Ok(());
     }
     let head = head.ok_or_else(|| usage("the Git remote has no default branch commit"))?;
     if git(repository, &["rev-parse", "--is-shallow-repository"])?.trim() == "true" {
@@ -117,7 +132,7 @@ fn publish(repository: &Path, remote: &str, machine: &str, hash: &str) -> Result
         repository,
         &["rev-list", "--first-parent", "--max-parents=0", head],
     )?;
-    let registration = format!("{}:{prefix}{hash}", root.trim());
+    let registration = format!("{}:{reference}", root.trim());
     let mut args = vec![
         "-c",
         "push.followTags=false",

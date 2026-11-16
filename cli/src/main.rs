@@ -50,8 +50,8 @@ fn run(options: Options) -> Result<()> {
             json!({"version": version})
         }
         Command::Bench { samples } => bench::run(&options, samples)?,
-        Command::Register => {
-            let machine = register::run()?;
+        Command::Register { ensure } => {
+            let machine = register::run(ensure)?;
             if !options.json {
                 return writeln!(io::stdout().lock(), "Registered write token for {machine}")
                     .map_err(usage);

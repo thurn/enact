@@ -62,18 +62,19 @@ fn registration_rotates_one_machine_ref_and_keeps_the_token_private() {
     }
     .join("enact")
     .join("token");
-    let register = || {
+    let register = |directory: &Path, flags: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_tk"))
-            .current_dir(&repository)
+            .current_dir(directory)
             .env(if cfg!(windows) { "APPDATA" } else { "HOME" }, &home)
             .env("ENACT_HOST", "Test-Machine")
             .args(["register", "--json"])
+            .args(flags)
             .output()
             .unwrap()
     };
     let verify =
         || {
-            let result = checked(register());
+            let result = checked(register(&repository, &[]));
             assert_eq!(result.trim(), r#"{"machine":"test-machine"}"#);
             let saved = fs::read_to_string(&token_path).unwrap();
             let token = saved.trim();
@@ -108,13 +109,70 @@ fn registration_rotates_one_machine_ref_and_keeps_the_token_private() {
             }
             saved
         };
+    let enrolled = checked(register(&repository, &["--ensure"]));
+    assert_eq!(enrolled.trim(), r#"{"machine":"test-machine"}"#);
+    let saved = fs::read_to_string(&token_path).unwrap();
+    let hash = format!("{:x}", Sha256::digest(saved.trim().as_bytes()));
+    let reference = format!("refs/enact/tokens/test-machine/{hash}");
+    assert_eq!(git(&remote, &["rev-parse", &reference]), first);
+
+    let second_remote = temp.path().join("second-remote.git");
+    let second_checkout = temp.path().join("second-checkout");
+    git(
+        temp.path(),
+        &[
+            "clone",
+            "--bare",
+            remote.to_str().unwrap(),
+            second_remote.to_str().unwrap(),
+        ],
+    );
+    git(
+        temp.path(),
+        &[
+            "clone",
+            second_remote.to_str().unwrap(),
+            second_checkout.to_str().unwrap(),
+        ],
+    );
+    fs::write(
+        second_checkout.join(".enact.toml"),
+        "[tickets]\nproject = 'en'\n",
+    )
+    .unwrap();
+    assert!(
+        git(&second_remote, &["for-each-ref", "refs/enact/tokens"]).is_empty(),
+        "the second remote must start without registration refs"
+    );
+    let linked_worktree = temp.path().join("linked-worktree");
+    git(
+        &second_checkout,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            linked_worktree.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+    assert!(!linked_worktree.join(".enact.toml").exists());
+    checked(register(&linked_worktree, &["--ensure"]));
+    assert_eq!(git(&second_remote, &["rev-parse", &reference]), first);
+    assert_eq!(fs::read_to_string(&token_path).unwrap(), saved);
+    git(
+        &second_remote,
+        &["config", "receive.advertiseAtomic", "false"],
+    );
+    checked(register(&second_checkout, &["--ensure"]));
+    assert_eq!(fs::read_to_string(&token_path).unwrap(), saved);
+
     let original = verify();
     let rotated = verify();
     assert_ne!(rotated, original);
 
     git(&remote, &["config", "receive.advertiseAtomic", "false"]);
     let refs = git(&remote, &["for-each-ref", "refs/enact/tokens"]);
-    assert!(!register().status.success());
+    assert!(!register(&repository, &[]).status.success());
     assert!(fs::read_to_string(&token_path).unwrap() == rotated);
     assert_eq!(git(&remote, &["for-each-ref", "refs/enact/tokens"]), refs);
 }

@@ -423,14 +423,6 @@ def ticket_cache_dir() -> Path:
     return local / "enact" / "tk"
 
 
-def ticket_token_path() -> Path:
-    if WINDOWS:
-        if not (appdata := os.environ.get("APPDATA")):
-            raise Fail("APPDATA is unset; cannot locate the Enact token directory")
-        return Path(appdata) / "enact" / "token"
-    return Path.home() / ".config" / "enact" / "token"
-
-
 def ticket_source_hash(crate: Path) -> str:
     files = [crate / "Cargo.toml", crate / "Cargo.lock", *(crate / "src").rglob("*")]
     files.extend(crate.glob("build.rs"))
@@ -520,15 +512,13 @@ def ticket_process(repo: Repo, *args: str, actor: str | None = None,
         cmd += ["--project", repo.config.ticket_project]
     if actor := actor or session_actor():
         cmd += ["--actor", actor]
-    return run([*cmd, *args], repo.main, check=False, input_text=input_text)
+    # tk reads the same worktree configuration that find_repo selected.
+    cwd = repo.top if (repo.top / ".enact.toml").is_file() else repo.main
+    return run([*cmd, *args], cwd, check=False, input_text=input_text)
 
 
 def register_ticket_client(repo: Repo) -> None:
-    token = ticket_token_path()
-    if not token.is_file():
-        with ticket_install_lock(token.with_name("register.lock")):
-            if not token.is_file():
-                ticket_reply(ticket_process(repo, "register"))
+    ticket_reply(ticket_process(repo, "register", "--ensure"))
 
 
 @functools.lru_cache
@@ -5765,7 +5755,8 @@ def untrack_audit_log(repo: Repo) -> str:
 def cmd_setup(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     report: dict[str, Any] = {}
-    if repo.config.ticket_project or repo.config.ticket_backend == "server":
+    tickets_configured = bool(repo.config.ticket_project or repo.config.ticket_backend == "server")
+    if tickets_configured:
         report["tk"] = str(ticket_binary())
         report["has_tk"] = True
         register_ticket_client(repo)
@@ -5817,6 +5808,9 @@ def cmd_setup(args: argparse.Namespace) -> dict[str, Any]:
     report["beads_remote"] = beads.has_remote()
     if report["beads_remote"]:
         report["sync"] = sync(repo, publish=True)
+    if tickets_configured:
+        event = ticket_process(repo, "event", "machine", '{"enrolled":true}')
+        report["ticket_enrollment"] = ticket_reply(event)
     report["agents_template"] = str(ENACT_ROOT / "templates" / "AGENTS.md")
     return report
 

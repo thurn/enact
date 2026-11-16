@@ -8,12 +8,15 @@ async function tokenRef(machine: string, token: string) {
   return {ref: `refs/enact/tokens/${machine}/${hex}`};
 }
 
-test("discovers rotated refs on a miss and keeps a durable cooldown for failed lookups", async () => {
+test.each([
+  {project: "by", repository: "thurn/beryl"},
+  {project: "en", repository: "thurn/enact"},
+])("$project discovers Git token refs and keeps a durable cooldown for failed lookups", async ({project, repository}) => {
   const original = "original-bearer";
   const rotated = "rotated-bearer";
   const machine = "test-machine";
-  const url = "https://api.github.com/repos/thurn/beryl/git/matching-refs/enact/tokens";
-  const stub = env.TICKETS.getByName("by");
+  const url = `https://api.github.com/repos/${repository}/git/matching-refs/enact/tokens`;
+  const stub = env.TICKETS.getByName(project);
   let refs = [await tokenRef(machine, original)];
   let status = 200;
   const realFetch = globalThis.fetch;
@@ -23,10 +26,10 @@ test("discovers rotated refs on a miss and keeps a durable cooldown for failed l
     return address.startsWith("https://api.github.com/") ? github(input, init) : realFetch(input, init);
   });
 
-  const write = (token?: string) => exports.default.fetch("https://example.com/by/api/batch", {
+  const write = (token?: string) => exports.default.fetch(`https://example.com/${project}/api/events`, {
     method: "POST",
     headers: token ? {Authorization: `Bearer ${token}`, "X-Actor": "test-actor"} : {},
-    body: JSON.stringify({ops: [{op: "create", fields: {title: "Token test"}}]}),
+    body: JSON.stringify({kind: "machine", data: {enrolled: true}}),
   });
   const allowRefresh = () => runInDurableObject(stub, ({store}) => {
     store.sql.exec("UPDATE meta SET value = ? WHERE key = 'token_fetched_at'", String(Date.now() - 60_000));
@@ -37,6 +40,7 @@ test("discovers rotated refs on a miss and keeps a durable cooldown for failed l
     expect(github).toHaveBeenCalledTimes(0);
     const writes = await Promise.all([write(original), write("unknown"), write("also-unknown")]);
     expect(writes.map((write) => write.status)).toEqual([200, 401, 401]);
+    expect(await writes[0].json()).toMatchObject({kind: "machine", machine, data: {enrolled: true}});
     await runInDurableObject(stub, ({store}) => {
       expect(Object.values(JSON.parse(store.meta("token_hashes")!))).toEqual([machine]);
       expect(Number(store.meta("token_fetched_at"))).toBeGreaterThan(0);

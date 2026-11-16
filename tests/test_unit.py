@@ -76,16 +76,15 @@ class TicketInstallTests(unittest.TestCase):
             self.assertEqual(enact.ticket_binary(), rebuilt)
             self.assertEqual(cargo.call_count, 2)
 
-    def test_windows_uses_local_cache_roaming_token_and_exe(self):
+    def test_windows_uses_local_cache_and_exe(self):
         with (mock.patch.dict(os.environ, {
                   "LOCALAPPDATA": str(self.root / "Local"),
-                  "APPDATA": str(self.root / "Roaming"), "ENACT_TK": "",
+                  "ENACT_TK": "",
               }),
               mock.patch.object(enact, "WINDOWS", True),
               mock.patch.object(enact, "ENACT_ROOT", self.crate.parent)):
             cache = self.root / "Local" / "enact" / "tk"
             self.assertEqual(enact.ticket_cache_dir(), cache)
-            self.assertEqual(enact.ticket_token_path(), self.root / "Roaming" / "enact" / "token")
             binary = cache / enact.ticket_source_hash(self.crate) / "tk.exe"
             binary.parent.mkdir(parents=True)
             binary.touch()
@@ -96,19 +95,23 @@ class TicketInstallTests(unittest.TestCase):
             with self.assertRaisesRegex(enact.Fail, "Install Rust and make cargo available"):
                 enact.build_ticket_client(self.crate, self.cache, "tk")
 
-    def test_setup_registration_runs_once_if_a_token_is_missing(self):
+    def test_setup_ensures_registration_in_the_current_project(self):
         repo = enact.Repo(self.root, self.root, self.root, enact.Config(ticket_project="by"))
-        token = self.root / "config" / "enact" / "token"
-
-        def register(*args):
-            token.touch()
-            return subprocess.CompletedProcess([], 0, "{}", "")
-
-        with (mock.patch.object(enact, "ticket_token_path", return_value=token),
-              mock.patch.object(enact, "ticket_process", side_effect=register) as tk):
+        result = subprocess.CompletedProcess([], 0, "{}", "")
+        with mock.patch.object(enact, "ticket_process", return_value=result) as tk:
             enact.register_ticket_client(repo)
-            enact.register_ticket_client(repo)
-        tk.assert_called_once_with(repo, "register")
+        tk.assert_called_once_with(repo, "register", "--ensure")
+
+    def test_ticket_process_reads_the_worktree_configuration(self):
+        worktree = self.root / "worktree"
+        worktree.mkdir()
+        config = worktree / ".enact.toml"
+        config.write_text('[tickets]\nproject = "by"\nurl = "http://localhost:9999"\n')
+        repo = enact.Repo(worktree, self.root, self.root, enact.Config.parse(config.read_text()))
+        with (mock.patch.object(enact, "ticket_binary", return_value=self.root / "tk"),
+              mock.patch.object(enact, "run") as run):
+            enact.ticket_process(repo, "state")
+        self.assertEqual(run.call_args.args[1], worktree)
 
 
 class TicketContractTests(unittest.TestCase):

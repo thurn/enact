@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{Duration, Instant};
 use std::{env, fs, thread};
 use url::Url;
@@ -257,24 +258,50 @@ pub fn http_failure(status: u16, body: &str) -> Failure {
 
 pub fn read_config(here: &Path) -> Result<(PathBuf, toml::Table)> {
     for directory in here.ancestors() {
-        let path = directory.join(".enact.toml");
-        let result = fs::read_to_string(&path);
-        match result {
-            Ok(contents) => {
-                let config = contents
-                    .parse()
-                    .map_err(|error| usage(format!("{}: {error}", path.display())))?;
-                return Ok((path, config));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if directory.join(".git").exists() {
-                    break;
+        if let Some(config) = config_in(directory)? {
+            return Ok(config);
+        }
+        let git = directory.join(".git");
+        if git.is_dir() {
+            break;
+        }
+        if git.is_file() {
+            // Match Enact's fallback for a linked worktree without a config.
+            let result = Command::new("git")
+                .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+                .current_dir(directory)
+                .output()
+                .map_err(usage)?;
+            if result.status.success() {
+                let common = String::from_utf8(result.stdout).map_err(usage)?;
+                let common = Path::new(common.trim_end_matches(['\r', '\n']));
+                let main = if common.file_name().is_some_and(|name| name == ".git") {
+                    common.parent().unwrap_or(common)
+                } else {
+                    common
+                };
+                if let Some(config) = config_in(main)? {
+                    return Ok(config);
                 }
             }
-            Err(error) => return Err(usage(format!("{}: {error}", path.display()))),
+            break;
         }
     }
     Err(usage("no repository .enact.toml found"))
+}
+
+fn config_in(directory: &Path) -> Result<Option<(PathBuf, toml::Table)>> {
+    let path = directory.join(".enact.toml");
+    match fs::read_to_string(&path) {
+        Ok(contents) => {
+            let config = contents
+                .parse()
+                .map_err(|error| usage(format!("{}: {error}", path.display())))?;
+            Ok(Some((path, config)))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(usage(format!("{}: {error}", path.display()))),
+    }
 }
 
 pub fn token_path() -> Result<PathBuf> {
@@ -287,7 +314,7 @@ pub fn token_path() -> Result<PathBuf> {
         .ok_or_else(|| usage("cannot locate the Enact token directory"))
 }
 
-fn token() -> Result<String> {
+pub(crate) fn token() -> Result<String> {
     let path = token_path()?;
     let token =
         fs::read_to_string(&path).map_err(|error| usage(format!("{}: {error}", path.display())))?;
