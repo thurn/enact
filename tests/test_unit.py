@@ -40,6 +40,11 @@ class TicketInstallTests(unittest.TestCase):
         (self.crate / "Cargo.toml").write_text("[package]\nname = 'tk'\n")
         (self.crate / "Cargo.lock").touch()
         self.cache = self.root / "cache"
+        # Slow CI supplies its own source checkout. These tests install the fixture.
+        self.enterContext(mock.patch.dict(os.environ, {
+            "ENACT_TK": "",
+            "ENACT_TK_SOURCE": str(self.crate.parent),
+        }))
 
     def test_source_hash_tracks_contents_names_and_touches(self):
         original = enact.ticket_source_hash(self.crate)
@@ -61,9 +66,7 @@ class TicketInstallTests(unittest.TestCase):
             binary.write_text("built")
             return binary
 
-        with (mock.patch.dict(os.environ, {"ENACT_TK": ""}),
-              mock.patch.object(enact, "ENACT_ROOT", self.crate.parent),
-              mock.patch.object(enact, "ticket_cache_dir", return_value=self.cache),
+        with (mock.patch.object(enact, "ticket_cache_dir", return_value=self.cache),
               mock.patch.object(enact, "build_ticket_client", side_effect=build) as cargo):
             installed = enact.ticket_binary()
             self.assertEqual(installed.read_text(), "built")
@@ -77,12 +80,8 @@ class TicketInstallTests(unittest.TestCase):
             self.assertEqual(cargo.call_count, 2)
 
     def test_windows_uses_local_cache_and_exe(self):
-        with (mock.patch.dict(os.environ, {
-                  "LOCALAPPDATA": str(self.root / "Local"),
-                  "ENACT_TK": "",
-              }),
-              mock.patch.object(enact, "WINDOWS", True),
-              mock.patch.object(enact, "ENACT_ROOT", self.crate.parent)):
+        with (mock.patch.dict(os.environ, {"LOCALAPPDATA": str(self.root / "Local")}),
+              mock.patch.object(enact, "WINDOWS", True)):
             cache = self.root / "Local" / "enact" / "tk"
             self.assertEqual(enact.ticket_cache_dir(), cache)
             binary = cache / enact.ticket_source_hash(self.crate) / "tk.exe"
