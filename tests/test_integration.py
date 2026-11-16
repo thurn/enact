@@ -1630,6 +1630,112 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.assertIn(repaired["staging"], step["delivery"]["commits"])
 
 
+@unittest.skipUnless(shutil.which("git"), "needs git")
+class TicketBackendTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.repo = root / "checkout"
+        self.repo.mkdir()
+        self.trace = root / "requests"
+        self.trace.touch()
+        self.stub = SCRIPT.with_name("tk_stub.py")
+        self.env = {
+            **os.environ, "TK_STUB_DB": str(root / "tickets.sqlite"),
+            "TK_STUB_TRACE": str(self.trace), "PATH": str(root) + os.pathsep + os.environ["PATH"],
+            "ENACT_NO_SELF_UPDATE": "1", "ENACT_PROVIDER": "codex", "ENACT_HOST": "test-host",
+        }
+        if os.name == "nt":
+            (root / "tk.cmd").write_text(f'@"{sys.executable}" "{self.stub}" %*\n')
+        else:
+            tk = root / "tk"
+            tk.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(self.stub))} \"$@\"\n")
+            tk.chmod(0o755)
+        sh(["git", "init", "-q"], self.repo)
+        sh(["git", "config", "user.name", "Test"], self.repo)
+        sh(["git", "config", "user.email", "test@example.com"], self.repo)
+        sh(["git", "commit", "-qm", "Initial commit", "--allow-empty"], self.repo)
+        sh(["git", "branch", "-M", "master"], self.repo)
+        sh(["git", "branch", "staging"], self.repo)
+        sh(["git", "remote", "add", "origin", "."], self.repo)
+        self.config = self.repo / ".enact.toml"
+        self.config.write_text('[tickets]\nbackend = "server"\nproject = "by"\n')
+
+    def tk(self, *args, data=None, actor="vizier"):
+        proc = subprocess.run([sys.executable, str(self.stub), "--json", "--actor", actor, *args],
+                              cwd=self.repo, env=self.env, input=json.dumps(data),
+                              capture_output=True, text=True, check=True)
+        return json.loads(proc.stdout)
+
+    def enact(self, *args, actor="vizier", code=0):
+        self.trace.write_text("")
+        proc = subprocess.run([sys.executable, str(SCRIPT), *args], cwd=self.repo,
+                              env={**self.env, "ENACT_SESSION": actor}, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, code, proc.stdout + proc.stderr)
+        self.assertFalse((self.repo / ".git" / "enact" / "ownership.lock").exists())
+        return json.loads(proc.stdout), self.trace.read_text().splitlines()
+
+    def test_reserve_start_close_and_continue_a_lane(self):
+        epic, first, second = [r["id"] for r in self.tk("batch", data={"ops": [
+            {"op": "create", "fields": {"title": "Run", "type": "epic", "body": "Plan"}},
+            {"op": "create", "parent": "$0", "fields": {"title": "First", "labels": ["lane:test"]}},
+            {"op": "create", "parent": "$0", "deps": ["$1"],
+             "fields": {"title": "Second", "labels": ["lane:test"]}},
+        ]})["results"]]
+        step, requests = self.enact("next", "--epic", "by-" + epic)
+        self.assertEqual((step["action"], step["bead"]), ("spawn", first))
+        self.assertEqual(requests, ["graph", "batch"])
+        self.enact("start", first, "--reservation", "wrong", actor="worker", code=3)
+        started, requests = self.enact("start", first, "--reservation", step["reservation"], actor="worker")
+        self.assertEqual(started["bead"]["assignee"], "worker")
+        self.assertEqual(requests, ["graph", "batch"])
+        self.enact("close", first, "--reason", "wrong owner", actor="stale", code=3)
+        continued, requests = self.enact("close", first, "--continue", "--reason", "done", actor="worker")
+        self.assertEqual(continued["next"]["id"], second)
+        self.assertEqual(requests, ["graph", "batch", "batch"])
+        brief, _ = self.enact("brief", second, actor="worker")
+        self.assertEqual(brief["epics"][0]["description"], "Plan")
+        self.assertEqual(brief["dependencies"][0]["status"], "closed")
+        closed, requests = self.enact("close", second, "--reason", "done", actor="worker")
+        self.assertEqual(closed["epics_closed"], [epic])
+        self.assertEqual(requests, ["graph", "batch"])
+        done, requests = self.enact("next", "--epic", epic)
+        self.assertEqual(done["action"], "done")
+        self.assertEqual(done["archive"], [{"bead": first, "session": "worker"},
+                                           {"bead": second, "session": "worker"}])
+        self.assertEqual(requests, ["graph"])
+
+    def test_completed_cutover_overrides_default_backend(self):
+        self.config.write_text('[tickets]\nproject = "by"\n')
+        for state in ("paused", "after"):
+            self.tk("state", "--set-cutover", state)
+        synced, requests = self.enact("sync")
+        self.assertEqual(synced["backend"], "server")
+        self.assertEqual(requests, ["state"])
+        synced, requests = self.enact("sync", "--deferred")
+        self.assertEqual(synced["backend"], "server")
+        self.assertEqual(requests, [])
+
+    def test_run_holds_and_websocket_wait_commands(self):
+        epic, child = [r["id"] for r in self.tk("batch", data={"ops": [
+            {"op": "create", "fields": {"title": "Run", "type": "epic"}},
+            {"op": "create", "parent": "$0", "fields": {"title": "Child"}},
+        ]})["results"]]
+        self.enact("run", "register", epic)
+        self.enact("run", "pause", epic, "--reason", "hold")
+        self.enact("claim", child, actor="worker", code=3)
+        self.assertEqual(self.enact("next", "--epic", epic)[0]["action"], "paused")
+        self.enact("run", "resume", epic, "--reason", "continue", "--explicit")
+        self.assertEqual(self.enact("next", "--epic", epic)[0]["action"], "spawn")
+        result, requests = self.enact("next", "--epic", epic, "--wait", "60")
+        self.assertEqual((result["action"], result["reason"]), ("wait", "capacity"))
+        self.assertEqual(requests, ["graph", "wait", "graph"])
+        result, requests = self.enact("wait", child, "--timeout", "60")
+        self.assertEqual(result["state"], "waiting")
+        self.assertEqual(requests, ["graph", "wait", "graph"])
+
+
 class ParallelScenarios(unittest.TestSuite):
     """Run independent scenarios with separate absolute-path fixtures.
 
@@ -1724,6 +1830,7 @@ class ParallelScenarios(unittest.TestSuite):
 
 def load_tests(loader, standard_tests, pattern):
     return ParallelScenarios([
+        *loader.loadTestsFromTestCase(TicketBackendTest),
         *loader.loadTestsFromTestCase(CiLifetimeTest),
         *loader.loadTestsFromTestCase(WorktreeSweepTest),
         *loader.loadTestsFromTestCase(QueueLeaseRetryTest),

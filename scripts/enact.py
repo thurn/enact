@@ -17,6 +17,7 @@ import errno
 import functools
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -112,6 +113,7 @@ def run(
     cwd: Path,
     check: bool = True,
     env: dict[str, str] | None = None,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     full_env = {**os.environ, **(env or {})}
     try:
@@ -123,7 +125,7 @@ def run(
             encoding="utf-8",
             errors="replace",
             capture_output=True,
-            stdin=subprocess.DEVNULL,
+            **({"stdin": subprocess.DEVNULL} if input_text is None else {"input": input_text}),
         )
     except FileNotFoundError:
         # A fresh clone has no local Beads database until `enact setup`
@@ -289,6 +291,8 @@ class Config:
     push_timeout: int = DEFAULT_PUSH_TIMEOUT
     roles: dict[str, Any] = field(default_factory=dict)
     tiers: dict[str, Any] = field(default_factory=dict)
+    ticket_backend: str = "beads"
+    ticket_project: str | None = None
 
     @staticmethod
     def parse(text: str) -> Config:
@@ -296,6 +300,10 @@ class Config:
         checks = data.get("checks", {})
         worktree = data.get("worktree", {})
         push = data.get("push", {})
+        tickets = data.get("tickets", {})
+        backend = tickets.get("backend", "beads")
+        if backend not in ("beads", "server"):
+            raise Fail("[tickets] backend must be 'beads' or 'server'")
         return Config(
             remote=data.get("remote", "origin"),
             staging=data.get("staging_branch", "staging"),
@@ -314,6 +322,8 @@ class Config:
             push_timeout=int(push.get("timeout") or DEFAULT_PUSH_TIMEOUT),
             roles=data.get("roles", {}),
             tiers=data.get("tiers", {}),
+            ticket_backend=backend,
+            ticket_project=tickets.get("project"),
         )
 
     def role_settings(self, role: str, host_provider: str,
@@ -400,10 +410,104 @@ def find_repo(cwd: Path | None = None) -> Repo:
 # Beads
 
 
+def ticket_process(repo: Repo, *args: str, actor: str | None = None,
+                   input_text: str | None = None) -> subprocess.CompletedProcess[str]:
+    cmd = ["tk", "--json"]
+    if repo.config.ticket_project:
+        cmd += ["--project", repo.config.ticket_project]
+    if actor := actor or session_actor():
+        cmd += ["--actor", actor]
+    return run([*cmd, *args], repo.main, check=False, input_text=input_text)
+
+
+@functools.lru_cache
+def ticket_cutover(top: Path, project: str) -> str:
+    repo = find_repo(top)
+    marker = repo.state / "ticket-cutover.json"
+    with contextlib.suppress(OSError, ValueError):
+        if json.loads(marker.read_text(encoding="utf-8")) == project:
+            return "after"  # Cutover cannot reverse, even if the server is down.
+    if not shutil.which("tk"):
+        return "before"
+    proc = ticket_process(repo, "--retry-for", "2", "state")
+    if proc.returncode != 0:
+        return "before"
+    state = json.loads(proc.stdout)
+    draining = sys.argv[1:2] == ["sync"] and bool(os.environ.get("ENACT_SYNC_NOW"))
+    while state["cutover"] == "paused" and not draining:
+        wait = ticket_process(repo, "wait", "change", "--since", str(state["seq"]),
+                              "--timeout", "120")
+        if wait.returncode != 6:
+            ticket_reply(wait)
+        state = ticket_reply(ticket_process(repo, "state"))
+    if state["cutover"] == "after":
+        write_json(marker, project)
+    return state["cutover"]
+
+
+def uses_ticket_server(repo: Repo) -> bool:
+    if repo.config.ticket_backend == "server":
+        return True
+    project = repo.config.ticket_project
+    return bool(project and ticket_cutover(repo.top, project) == "after")
+
+
+def canonical_ticket_id(repo: Repo, value: str) -> str:
+    prefix = repo.config.ticket_project
+    return value.removeprefix(prefix + "-") if prefix else value
+
+
+def ticket_as_bead(repo: Repo, ticket: dict[str, Any], edges=()) -> dict[str, Any]:
+    result = dict(ticket)
+    for old, new in (("description", "body"), ("acceptance_criteria", "acceptance"),
+                     ("issue_type", "type")):
+        result[old] = ticket.get(new)
+    result["dependencies"] = [
+        {"id": edge["dst"], "depends_on_id": edge["dst"], "dependency_type": edge["kind"]}
+        for edge in edges if edge["src"] == ticket["id"]
+    ]
+    metadata = dict(ticket.get("metadata") or {})
+    for key in ("enact_run", "enact_runs"):
+        if metadata.get(key):
+            metadata[key] = " ".join(canonical_ticket_id(repo, value)
+                                     for value in metadata[key].split())
+    result["metadata"] = metadata
+    return result
+
+
+def ticket_reply(proc: subprocess.CompletedProcess[str]) -> Any:
+    if proc.returncode:
+        # A conflict reply can include the current reservation.
+        detail = "state changed" if proc.returncode == 3 else (proc.stderr or proc.stdout).strip()
+        raise Fail(f"tk failed: {detail}", code=proc.returncode)
+    return json.loads(proc.stdout)
+
+
 class Beads:
     def __init__(self, repo: Repo) -> None:
         self.repo = repo
         self.env = {"BD_NON_INTERACTIVE": "1"}
+
+    @property
+    def server(self) -> bool:
+        return uses_ticket_server(self.repo)
+
+    def ticket(self, *args: str) -> Any:
+        return ticket_reply(ticket_process(self.repo, *args))
+
+    def batch(self, *ops: dict[str, Any], actor: str | None = None,
+              conditions: Collection[dict[str, Any]] = ()) -> dict[str, Any]:
+        request = {"if": list(conditions), "ops": ops}
+        return ticket_reply(ticket_process(self.repo, "batch", actor=actor,
+                                           input_text=json.dumps(request)))
+
+    def ticket_graph(self) -> tuple[list[dict[str, Any]], int]:
+        graph = self.ticket("graph", "--all")
+        edges: dict[str, list[dict[str, Any]]] = {}
+        for edge in graph["edges"]:
+            edges.setdefault(edge["src"], []).append(edge)
+        return ([ticket_as_bead(self.repo, t, edges.get(t["id"], ())) for t in graph["tickets"]],
+                graph["seq"])
 
     def raw(self, *args: str, actor: str | None = None) -> subprocess.CompletedProcess[str]:
         if args[0] not in {"show", "list", "ready"}:
@@ -416,6 +520,14 @@ class Beads:
         return run([*cmd, *args], self.repo.main, check=False, env=self.env)
 
     def run(self, *args: str, actor: str | None = None) -> str:
+        if self.server:
+            command, bead_id, *_ = args
+            if command == "reopen":
+                bead = self.show(bead_id)
+                self.batch({"op": "reopen", "id": bead["id"]}, actor=actor,
+                           conditions=[ticket_version(bead)])
+                return ""
+            raise Fail(f"unsupported ticket write: {command}")
         proc = self.raw(*args, actor=actor)
         if proc.returncode != 0:
             output = (proc.stderr or proc.stdout).strip()
@@ -426,6 +538,17 @@ class Beads:
         return proc.stdout
 
     def json(self, *args: str, actor: str | None = None) -> Any:
+        if self.server:
+            command, *fields = args
+            if command == "comments":
+                return self.ticket("show", fields[0], "--comments").get("comments", [])
+            if command == "ready":
+                return [ticket_as_bead(self.repo, t) for t in self.ticket("ready")
+                        if t["type"] != "epic" and not t.get("assignee")]
+            if command == "list":
+                filters = fields[:-2] if fields[-2:] == ["-n", "0"] else fields
+                return [ticket_as_bead(self.repo, t) for t in self.ticket("list", *filters)]
+            raise Fail(f"unsupported ticket read: {command}")
         out = self.run(*args, "--json", actor=actor)
         return json.loads(out) if out.strip() else None
 
@@ -441,21 +564,39 @@ class Beads:
         return json.loads(out) if out.strip() else None
 
     def show(self, bead_id: str) -> dict[str, Any]:
+        if self.server:
+            ticket = self.ticket("show", bead_id)
+            return ticket_as_bead(self.repo, ticket, ticket.get("edges", ()))
         data = self.read("show", bead_id)
         return data[0] if isinstance(data, list) else data
 
     def all(self) -> list[dict[str, Any]]:
+        if self.server:
+            return self.ticket_graph()[0]
         return self.read("list", "--all", "-n", "0") or []
 
     def has_remote(self) -> bool:
+        if self.server:
+            return True
         proc = self.raw("dolt", "remote", "list")
         return proc.returncode == 0 and bool(proc.stdout.strip())
 
     def set_meta(self, bead_id: str, pairs: dict[str, str], actor: str | None = None) -> None:
+        if self.server:
+            self.batch({"op": "update", "id": bead_id, "set_meta": pairs}, actor=actor)
+            return
         args = ["update", bead_id]
         for key, value in pairs.items():
             args += ["--set-metadata", f"{key}={value}"]
         self.run(*args, actor=actor)
+
+    def wait_for_change(self, deadline: float, seq: int) -> bool:
+        timeout = str(max(0, math.ceil(deadline - time.monotonic())))
+        proc = ticket_process(self.repo, "wait", "change", "--since", str(seq), "--timeout", timeout)
+        if proc.returncode == 6:
+            return False
+        ticket_reply(proc)
+        return True
 
 
 def meta(bead: dict[str, Any], key: str) -> str | None:
@@ -763,6 +904,9 @@ def ownership_lock(repo: Repo, wait: float = OWNERSHIP_WAIT):
     still waiting. Older helpers that skip the queue can still take the lock
     between two queued waiters.
     """
+    if uses_ticket_server(repo):
+        yield
+        return
     path = repo.state / "ownership.lock"
     if path in _ownership_locks:
         yield
@@ -933,6 +1077,8 @@ def sync(repo: Repo, force: bool = False, publish: bool = False) -> dict[str, An
     Without `force`, the sync is skipped when nothing was written here and the
     remote has not moved since the last one (see `_beads_dirty`). Its time is
     added to the ownership lock's line in the lock log (`log_lock_wait`)."""
+    if uses_ticket_server(repo):
+        return {"backend": "server", "skipped": "tickets are already on the server"}
     start = time.monotonic()
     try:
         return sync_unlogged(repo, force, publish)
@@ -978,7 +1124,7 @@ DEFERRED_SYNC_DELAY = 2.0
 def defer_sync(repo: Repo) -> dict[str, Any]:
     """Publish this process's Beads writes in the background. The caller holds
     the ownership lock. With `ENACT_SYNC_NOW` set, sync now instead."""
-    if os.environ.get(PUBLISH_IN_LOCK):
+    if uses_ticket_server(repo) or os.environ.get(PUBLISH_IN_LOCK):
         return sync(repo, publish=True)
     try:
         (repo.state / SYNC_PENDING).write_text(f"{os.getpid()}\n", encoding="utf-8")
@@ -1239,9 +1385,39 @@ def reassign(beads: Beads, bead_id: str, *fields: str, actor: str) -> None:
         beads.run("update", bead_id, *fields, "--force", actor=actor)
 
 
+def ticket_version(ticket: dict[str, Any]) -> dict[str, Any]:
+    return {"id": ticket["id"], "version": ticket["version"]}
+
+
+def reserve_ticket(beads: Beads, bead: dict[str, Any], actor: str,
+                   metadata: dict[str, str], seq: int,
+                   *other_ops: dict[str, Any]) -> bool:
+    bead_id = bead["id"]
+    try:
+        beads.batch({"op": "claim", "id": bead_id},
+                    {"op": "update", "id": bead_id, "set_meta": metadata,
+                     "unset_meta": ["enact_unowned"]}, *other_ops, actor=actor,
+                    conditions=[{"seq": seq}, ticket_version(bead)])
+    except Fail as error:
+        if error.code == 3:
+            return False
+        raise
+    return True
+
+
 def claim(repo: Repo, bead_id: str, actor: str, extra_meta: dict[str, str]) -> bool:
     """Claim a bead fleet-wide. Returns False when another actor won."""
     beads = Beads(repo)
+    if uses_ticket_server(repo):
+        graph, seq = beads.ticket_graph()
+        bead = next((b for b in graph if b["id"] == canonical_ticket_id(repo, bead_id)), None)
+        if bead is None or bead["status"] == "closed":
+            return False
+        require_running(bead, graph, extra_meta.get("enact_run"))
+        if bead.get("assignee"):
+            return bead["assignee"] == actor and all(
+                meta(bead, key) == value for key, value in extra_meta.items())
+        return reserve_ticket(beads, bead, actor, extra_meta, seq)
     sync(repo)
     bead = beads.show(bead_id)
     require_running(bead, beads.all(), extra_meta.get("enact_run"))
@@ -1278,8 +1454,16 @@ def cmd_start(args: argparse.Namespace) -> dict[str, Any]:
     actor = require_actor(args.actor)
     beads = Beads(repo)
     sync(repo)
-    bead = beads.show(args.bead)
-    require_running(bead, beads.all())
+    server = uses_ticket_server(repo)
+    if server:
+        graph, seq = beads.ticket_graph()
+        bead = next((b for b in graph if b["id"] == canonical_ticket_id(repo, args.bead)), None)
+        if bead is None:
+            raise Fail(f"{args.bead} is closed or no longer reserved", code=3)
+        require_running(bead, graph)
+    else:
+        bead = beads.show(args.bead)
+        require_running(bead, beads.all())
     actor = as_owner(actor, bead)
     owner = bead.get("assignee") or ""
     token = meta(bead, "enact_reservation")
@@ -1293,6 +1477,13 @@ def cmd_start(args: argparse.Namespace) -> dict[str, Any]:
         # Legacy reservations have no token: only the recorded child may start.
         if (token and args.reservation != token) or (not token and assigned != actor):
             raise Fail("reservation does not match this worker", code=3)
+    assignment = {"enact_actor": actor, "enact_session": actor}
+    if server:
+        fields = {"assignee": actor, "status": "in_progress"}
+        beads.batch({"op": "update", "id": bead["id"], "set": fields, "set_meta": assignment},
+                    actor=actor, conditions=[{"seq": seq}, ticket_version(bead)])
+        saved = {**bead, **fields, "metadata": {**bead["metadata"], **assignment}}
+        return {"bead": saved, "role": role_of(saved), "emoji": EMOJI.get(role_of(saved), "")}
     reassign(beads, args.bead, "--assignee", actor, "--status", "in_progress",
              "--set-metadata", f"enact_actor={actor}",
              "--set-metadata", f"enact_session={actor}", actor=actor)
@@ -1309,12 +1500,40 @@ def cmd_close(args: argparse.Namespace) -> dict[str, Any]:
     actor = require_actor(args.actor)
     beads = Beads(repo)
     sync(repo)
-    bead = beads.show(args.bead)
+    server = uses_ticket_server(repo)
+    if server:
+        graph, seq = beads.ticket_graph()
+        bead = next((b for b in graph if b["id"] == canonical_ticket_id(repo, args.bead)), None)
+        if bead is None:
+            raise Fail(f"no active assignment for {args.bead}", code=3)
+    else:
+        bead = beads.show(args.bead)
+    actor = as_owner(actor, bead)
     require_owner(bead, actor, closed=True)
     if bead.get("issue_type") == "epic":
-        require_running(bead, beads.all())
-    # bd 1.3 only lets the assignee close, under the exact name it recorded.
-    actor = as_owner(actor, bead)
+        require_running(bead, graph if server else beads.all())
+    if server:
+        if bead["status"] == "closed":
+            return {"closed": args.bead, "epics_closed": [], "sync": sync(repo)}
+        lane = args.continue_lane and bool(label_value(bead, "lane"))
+        close = {"op": "close", "id": bead["id"], "reason": args.reason}
+        if lane:
+            close["include_ready"] = True
+        result = beads.batch(close,
+                             actor=actor, conditions=[{"seq": seq}, ticket_version(bead)])
+        saved = result["results"][0]
+        report = {"closed": args.bead, "epics_closed": saved.get("closed", []),
+                  "sync": sync(repo)}
+        if args.continue_lane:
+            following = None
+            if lane:
+                closed_ids = {bead["id"], *report["epics_closed"]}
+                updated = [{**b, "status": "closed"} if b["id"] in closed_ids else b for b in graph]
+                following = continue_lane(repo, beads, {**bead, "status": "closed"}, actor,
+                                          (updated, result["seq"], saved["ready"]))
+            report["next"] = following and {key: following.get(key) for key in (
+                "id", "title", "description", "acceptance_criteria", "labels")}
+        return report
     beads.run("close", args.bead, "--reason", args.reason, actor=actor)
     result = defer_sync(repo)
     saved = beads.show(args.bead)
@@ -1373,6 +1592,10 @@ def cmd_meta(args: argparse.Namespace) -> dict[str, Any]:
     if any(key.startswith(("enact_control", "enact_vizier_route_",
                            "enact_marshal_attempt_")) for key in pairs):  # legacy recovery keys
         raise Fail("run state and recovery fields are managed by enact run", code=3)
+    if uses_ticket_server(repo):
+        beads.batch({"op": "update", "id": bead["id"], "set_meta": pairs},
+                    actor=actor, conditions=[ticket_version(bead)])
+        return {"bead": args.bead, "metadata": pairs, "sync": sync(repo)}
     beads.set_meta(args.bead, pairs, actor=actor)
     result = defer_sync(repo)
     if not result.get("deferred"):
@@ -1383,10 +1606,13 @@ def cmd_meta(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def cmd_sync(args: argparse.Namespace) -> dict[str, Any]:
+    repo = find_repo()
+    if uses_ticket_server(repo):
+        return sync(repo)
     if args.deferred:
-        return deferred_sync(find_repo())
+        return deferred_sync(repo)
     # Run after raw bd writes this process cannot see, so never skipped.
-    return sync(find_repo(), force=True, publish=True)
+    return sync(repo, force=True, publish=True)
 
 
 def handoff(comments: list[dict[str, Any]]) -> str | None:
@@ -1419,7 +1645,7 @@ def cmd_brief(args: argparse.Namespace) -> dict[str, Any]:
     epics = []
     parent = bead.get("parent")
     while parent in by_id and len(epics) < 10:
-        epic = by_id[parent]
+        epic = beads.show(parent) if uses_ticket_server(repo) else by_id[parent]
         epics.append({k: epic.get(k) for k in ("id", "title", "description",
                                                "acceptance_criteria", "labels")})
         parent = epic.get("parent")
@@ -1606,14 +1832,17 @@ def cmd_pool(args: argparse.Namespace) -> dict[str, Any]:
             "limit": POOL_LIMIT, "idle": idle_members(pool, graph, justiciar_state(repo))}
 
 
-def continue_lane(repo: Repo, beads: Beads, closed: dict[str, Any],
-                  actor: str) -> dict[str, Any] | None:
+def continue_lane(repo: Repo, beads: Beads, closed: dict[str, Any], actor: str,
+                  snapshot: tuple[list[dict[str, Any]], int, list[str]] | None = None
+                  ) -> dict[str, Any] | None:
     """Claim the next ready bead of the closed bead's lane for the same session."""
     if not label_value(closed, "lane"):
         return None
-    graph = beads.all()
+    graph = snapshot[0] if snapshot else beads.all()
     by_id = {b["id"]: b for b in graph}
-    ready = beads.json("ready", "-n", "0", "--exclude-type", "epic", "--unassigned") or []
+    ready = ([b for name in snapshot[2] if (b := by_id.get(name))
+              and b["issue_type"] != "epic" and not b.get("assignee")] if snapshot else
+             beads.json("ready", "-n", "0", "--exclude-type", "epic", "--unassigned") or [])
     options = [by_id.get(b["id"], b) for b in ready]
     options = sorted((b for b in options
                       if same_lane(closed, b, graph) and role_of(b) == role_of(closed)
@@ -1622,6 +1851,10 @@ def continue_lane(repo: Repo, beads: Beads, closed: dict[str, Any],
     if meta(closed, "enact_reservation"):
         carry["enact_reservation"] = uuid.uuid4().hex
     for bead in options:
+        if snapshot:
+            if reserve_ticket(beads, bead, actor, carry, snapshot[1]):
+                return bead
+            return None  # Retry through the scheduler with a fresh graph.
         if claim(repo, bead["id"], actor, carry):
             return beads.show(bead["id"])
     return None
@@ -1748,8 +1981,16 @@ def require_running(bead: dict[str, Any], graph: list[dict[str, Any]],
                    code=3, runs={b["id"]: run_control(b) for b in halted})
 
 
-def save_run_meta(repo: Repo, epic: str, key: str, value: Any) -> None:
+def save_run_meta(repo: Repo, epic: str, key: str, value: Any,
+                  expected: dict[str, Any] | None = None, *, reopen: bool = False) -> None:
     beads = Beads(repo)
+    if uses_ticket_server(repo):
+        bead = expected or beads.show(epic)
+        ops = [{"op": "update", "id": bead["id"], "set_meta": {key: json.dumps(value)}}]
+        if reopen:
+            ops.append({"op": "reopen", "id": bead["id"]})
+        beads.batch(*ops, conditions=[ticket_version(bead)])
+        return
     beads.set_meta(epic, {key: json.dumps(value)})
     sync(repo)
     if json_meta(beads.show(epic), key, None) != value:
@@ -1900,6 +2141,15 @@ def bead_watched(repo: Repo, graph: list[dict[str, Any]], bead: dict[str, Any]) 
 def register_run(repo: Repo, epic: str, vizier: str, parallel: int,
                  authorized: bool = False) -> dict[str, Any]:
     bead = Beads(repo).show(epic)
+    key, route, changed = vizier_route(repo, bead, vizier, parallel, authorized)
+    if changed:
+        save_run_meta(repo, epic, key, route,
+                      **({"expected": bead} if uses_ticket_server(repo) else {}))
+    return route
+
+
+def vizier_route(repo: Repo, bead: dict[str, Any], vizier: str, parallel: int,
+                 authorized: bool = False) -> tuple[str, dict[str, Any], bool]:
     if bead.get("issue_type") != "epic":
         raise Fail("run must name an epic")
     key = route_key(vizier)
@@ -1907,15 +2157,15 @@ def register_run(repo: Repo, epic: str, vizier: str, parallel: int,
     route = {"session": vizier, "host": host_name(), "provider": provider(),
              "app": os.environ.get("ENACT_APP", provider()), "project": str(repo.main),
              "parallel": parallel, "authorized": authorized or old.get("authorized", False)}
-    if old != route:
-        save_run_meta(repo, epic, key, route)
-    return route
+    return key, route, old != route
 
 
 @serialized
 def close_finished_epics(repo: Repo) -> list[str]:
     # bd close-eligible has no exclusion for paused/blocked runs. Close only
     # eligible active epics, bottom-up, preserving held acceptance criteria.
+    if uses_ticket_server(repo):
+        return []  # The closing batch already closes completed ancestors.
     beads = Beads(repo)
     graph = beads.all()
     closed = []
@@ -2028,7 +2278,8 @@ def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
                        code=3)
         control = {"state": "finished", "epoch": control["epoch"],
                    "reason": args.reason, "actor": actor, "at": now()}
-        save_run_meta(repo, args.epic, "enact_control", control)
+        save_run_meta(repo, args.epic, "enact_control", control,
+                      **({"expected": bead} if uses_ticket_server(repo) else {}))
         return {"epic": args.epic, "control": control}
     if args.action in ("pause", "block", "resume"):
         if not args.reason:
@@ -2040,9 +2291,12 @@ def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
         control = {"state": {"pause": "paused", "block": "blocked", "resume": "active"}[args.action],
                    "epoch": uuid.uuid4().hex if args.action == "resume" else control["epoch"],
                    "reason": args.reason, "actor": actor, "at": now()}
-        save_run_meta(repo, args.epic, "enact_control", control)
+        server = uses_ticket_server(repo)
+        reopen = args.action != "resume" and bead.get("status") == "closed"
+        save_run_meta(repo, args.epic, "enact_control", control,
+                      **({"expected": bead, "reopen": reopen} if server else {}))
         cleared = resume_pruned_milestones(repo, args.epic, control) if args.action == "resume" else []
-        if args.action != "resume" and bead.get("status") == "closed":
+        if reopen and not server:
             beads.run("reopen", args.epic, "--reason", args.reason)
             sync(repo)
         return {"epic": args.epic, "control": control,
@@ -2191,12 +2445,22 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
     fetch(repo)
     recover_deliveries(repo, drop_dead=True)
     beads = Beads(repo)
-    register_run(repo, epic, vizier, parallel)
-    close_finished_epics(repo)
-    graph = beads.all()
+    server = uses_ticket_server(repo)
+    if server:
+        epic = canonical_ticket_id(repo, epic)
+        graph, seq = beads.ticket_graph()
+    else:
+        register_run(repo, epic, vizier, parallel)
+        close_finished_epics(repo)
+        graph = beads.all()
     by_id = {b["id"]: b for b in graph}
     if epic not in by_id:
         raise Fail(f"epic {epic} not found")
+    route_ops = []
+    if server:
+        key, route, changed = vizier_route(repo, by_id[epic], vizier, parallel)
+        if changed:
+            route_ops.append({"op": "update", "id": epic, "set_meta": {key: json.dumps(route)}})
     mine = [b for b in graph if meta(b, "enact_vizier") == vizier]
     busy = busy_sessions(graph)
     pool = load_pool(repo, vizier) if provider() == "claude" else {}
@@ -2221,6 +2485,9 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
         "reminder": (POOL_REMINDER if pooled else CODEX_LOOP_REMINDER
                      if provider() == "codex" else LOOP_REMINDER),
     }
+    if server:
+        result["ticket_seq"] = seq
+        result["ticket_route"] = route_ops
     if pooled:
         result["pool_notice"] = POOL_NOTICE
     inflight = [b for b in mine if b.get("status") != "closed"]
@@ -2275,7 +2542,9 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
 
     scope = {b["id"] for b in descendants(graph, epic)} | set(delivery["stewards"])
     hold_archivist = archivist_waits([by_id[i] for i in scope])
-    ready = beads.json("ready", "-n", "0", "--exclude-type", "epic", "--unassigned") or []
+    ready = ([b for b in graph if b["ready"] and b["issue_type"] != "epic"
+              and not b.get("assignee")] if server else
+             beads.json("ready", "-n", "0", "--exclude-type", "epic", "--unassigned") or [])
     candidates = [
         b
         for b in ready
@@ -2305,14 +2574,24 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
         }
         if pooled:
             reservation["enact_pool_session"] = idle[0]
-        if claim(repo, bead["id"], f"vizier:{host_name()}:{provider()}:{vizier}", reservation):
-            action = spawn_action(repo, beads.show(bead["id"]), epic, vizier)
+        owner = f"vizier:{host_name()}:{provider()}:{vizier}"
+        claimed = (reserve_ticket(beads, bead, owner, reservation, seq, *route_ops) if server
+                   else claim(repo, bead["id"], owner, reservation))
+        if claimed:
+            saved = ({**bead, "assignee": owner, "status": "in_progress",
+                      "metadata": {**bead["metadata"], **reservation}}
+                     if server else beads.show(bead["id"]))
+            action = spawn_action(repo, saved, epic, vizier)
             if pooled:
                 take_member(repo, vizier, pool, idle[0])
                 # A pool member already exists: no holding prompt is needed.
                 action.pop("model_required", None)
                 action["session"] = idle[0]
+            if server:
+                result.pop("ticket_route")  # It was part of the reservation batch.
             return {**result, **action}
+        if server:
+            return {**result, "action": "wait", "reason": "claims changed"}
         log(f"lost the claim race for {bead['id']}; trying the next bead")
     if candidates:
         # The graph predates the winning claim; it cannot prove a deadlock.
@@ -2433,11 +2712,20 @@ def next_step(repo: Repo, args: argparse.Namespace, vizier: str) -> dict[str, An
     except (OSError, ValueError):
         reported = set()
     while True:
-        renew_lease(repo, vizier, args.epic)
+        server = uses_ticket_server(repo)
+        epic = canonical_ticket_id(repo, args.epic) if server else args.epic
+        renew_lease(repo, vizier, epic)
         sync(repo)
         running = {key.removeprefix("running:") for key in reported
                    if key.startswith("running:")} | set(getattr(args, "running", None) or ())
-        result = schedule(repo, args.epic, args.parallel, vizier, running)
+        result = schedule(repo, epic, args.parallel, vizier, running)
+        seq = result.pop("ticket_seq", None)
+        if (route := result.pop("ticket_route", None)) and result.get("reason") != "claims changed":
+            try:
+                seq = Beads(repo).batch(*route, actor=vizier, conditions=[{"seq": seq}])["seq"]
+            except Fail as error:
+                if error.code != 3:
+                    raise
         pending = {item["bead"] for item in result["archive"]}
         marks = {f"running:{mark}" for mark in result.pop("running", [])}
         # Each stall period wakes the vizier once; it is not listed again.
@@ -2454,13 +2742,33 @@ def next_step(repo: Repo, args: argparse.Namespace, vizier: str) -> dict[str, An
                 result["stalled"] = fresh
                 result["stall_notice"] = STALL_NOTICE
             return result
-        time.sleep(min(args.interval, max(deadline - time.monotonic(), 1)))
+        if server:
+            if result["reason"] != "claims changed" and not Beads(repo).wait_for_change(deadline, seq):
+                deadline = time.monotonic()
+        else:
+            time.sleep(min(args.interval, max(deadline - time.monotonic(), 1)))
 
 
 def cmd_wait(args: argparse.Namespace) -> dict[str, Any]:
     """Block until every named bead is closed, for work that must start after."""
     repo = find_repo()
     deadline = time.monotonic() + max(args.timeout, 0)
+    if uses_ticket_server(repo):
+        beads = Beads(repo)
+        while True:
+            graph, seq = beads.ticket_graph()
+            by_id = {b["id"]: b for b in graph}
+            open_beads = []
+            for name in args.beads:
+                bead = by_id.get(canonical_ticket_id(repo, name)) or beads.show(name)
+                if bead["status"] != "closed":
+                    open_beads.append({key: bead[key] for key in ("id", "status", "assignee")})
+            if not open_beads:
+                return {"state": "closed", "beads": args.beads}
+            if time.monotonic() >= deadline:
+                return {"state": "waiting", "open": open_beads}
+            if not beads.wait_for_change(deadline, seq):
+                deadline = time.monotonic()
     while True:
         sync(repo)
         beads = Beads(repo)
@@ -2822,7 +3130,8 @@ def claim_slot(repo: Repo, branch: str, base: str) -> Path | None:
     slots = [repo.worktree_root() / f"slot-{number:02d}"
              for number in range(1, repo.config.worktree_slots + 1)]
     candidates = [path for path in slots if path.resolve() in parked]
-    graph = Beads(repo).all() if candidates and (repo.main / ".beads").is_dir() else None
+    graph = Beads(repo).all() if candidates and (uses_ticket_server(repo) or
+                                               (repo.main / ".beads").is_dir()) else None
     free = []
     for path in candidates:
         if busy := slot_busy(repo, path, graph):
@@ -3038,7 +3347,7 @@ def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
         return {"removed": [], "kept": {}}
     repo.git("worktree", "prune", cwd=repo.main, check=False)
     graph: list[dict[str, Any]] | None = None  # only closed beads release trees
-    if (repo.main / ".beads").is_dir():
+    if uses_ticket_server(repo) or (repo.main / ".beads").is_dir():
         with contextlib.suppress(Fail, OSError, ValueError):
             graph = Beads(repo).all()
     staging = repo.remote_ref(repo.config.staging)
@@ -3288,6 +3597,16 @@ def finish_delivery(repo: Repo, receipt: Path, data: dict[str, Any],
             for key, values in (("enact_commits", data["history"]),
                                 ("enact_runs", data["runs"])):
                 pairs[key] = " ".join(dict.fromkeys(values + (meta(bead, key) or "").split()))
+            if uses_ticket_server(repo):
+                try:
+                    beads.batch({"op": "update", "id": bead["id"], "set_meta": pairs},
+                                actor=session_actor(), conditions=[ticket_version(bead)])
+                except Fail as error:
+                    if error.code == 3:
+                        continue
+                    raise
+                result["sync"] = sync(repo)
+                break
             beads.set_meta(data["bead"], pairs, actor=session_actor())
             result["sync"] = sync(repo)
             saved = beads.show(data["bead"])
@@ -4067,7 +4386,9 @@ def ci_wait(repo: Repo, sha: str, seconds: int, interval: int) -> dict[str, Any]
     while True:
         sync(repo)
         fetch(repo)
-        graph = Beads(repo).all()
+        beads = Beads(repo)
+        server = uses_ticket_server(repo)
+        graph, seq = beads.ticket_graph() if server else (beads.all(), None)
         covering = [b for b in graph if role_of(b) == "steward"
                     and b.get("status") != "closed" and steward_covers(repo, b, sha)]
         # Another OS failing does not stop this one promoting master, but the
@@ -4091,7 +4412,11 @@ def ci_wait(repo: Repo, sha: str, seconds: int, interval: int) -> dict[str, Any]
             status = start_ci(repo)
         if time.monotonic() >= deadline:
             return {"sha": sha, "state": "waiting", "ci": status, **elsewhere}
-        time.sleep(min(interval, max(deadline - time.monotonic(), 1)))
+        if server:
+            if not beads.wait_for_change(deadline, seq):
+                deadline = time.monotonic()
+        else:
+            time.sleep(min(interval, max(deadline - time.monotonic(), 1)))
 
 
 def ci_runner(repo: Repo, script: Path | None = None) -> Path:
@@ -4202,10 +4527,26 @@ def report_ci_failure(repo: Repo, tip: str, green: str, log_tail: str) -> str:
         if not open_stewards[0].get("assignee") and not runs_watched(repo, graph, runs):
             body += UNOWNED_NOTE
             changes["enact_unowned"] = "true"
-        beads.run("comments", "add", bead_id, body)
-        beads.set_meta(bead_id, changes)
+        if uses_ticket_server(repo):
+            beads.batch({"op": "comment", "id": bead_id, "text": body},
+                        {"op": "update", "id": bead_id, "set_meta": changes},
+                        conditions=[ticket_version(open_stewards[0])])
+        else:
+            beads.run("comments", "add", bead_id, body)
+            beads.set_meta(bead_id, changes)
     else:
         unowned = not runs_watched(repo, graph, runs)
+        metadata = {"enact_ci_os": os_name, "enact_ci_host": host_name(),
+                    "enact_ci_range": f"{green}..{tip}", "enact_runs": " ".join(runs),
+                    **({"enact_unowned": "true"} if unowned else {})}
+        if uses_ticket_server(repo):
+            created = beads.batch({"op": "create", "request_key": uuid.uuid4().hex,
+                                   "fields": {"title": f"Fix slow CI failure on {os_name}",
+                                              "body": body + (UNOWNED_NOTE if unowned else ""),
+                                              "acceptance": f"`{repo.config.slow}` passes on {os_name} at the staging tip.",
+                                              "priority": 0, "labels": ["role:steward"],
+                                              "metadata": metadata}})
+            return created["results"][0]["id"]
         created = beads.json(
             "create",
             "--title", f"Fix slow CI failure on {os_name}",
@@ -4213,10 +4554,7 @@ def report_ci_failure(repo: Repo, tip: str, green: str, log_tail: str) -> str:
             "--acceptance", f"`{repo.config.slow}` passes on {os_name} at the staging tip.",
             "--priority", "0",
             "--labels", "role:steward",
-            "--metadata", json.dumps({"enact_ci_os": os_name, "enact_ci_host": host_name(),
-                                     "enact_ci_range": f"{green}..{tip}",
-                                     "enact_runs": " ".join(runs),
-                                     **({"enact_unowned": "true"} if unowned else {})}),
+            "--metadata", json.dumps(metadata),
         )
         bead_id = created["id"]
     sync(repo)
@@ -4686,7 +5024,12 @@ def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
     actor = require_actor(args.actor)
     sync(repo)
     bead = beads.show(args.bead)
-    require_running(bead, beads.all())
+    server = uses_ticket_server(repo)
+    if server:
+        graph, seq = beads.ticket_graph()
+        require_running(bead, graph)
+    else:
+        require_running(bead, beads.all())
     actor = as_owner(actor, bead)
     owner = bead.get("assignee")
     if not owner or bead.get("status") == "closed":
@@ -4728,6 +5071,14 @@ def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
         verified_worktree(repo, Path(path), branch)
         record["head"] = repo.git("rev-parse", "HEAD", cwd=Path(path))
     records = recovery_records(bead) + [record]
+    if server:
+        beads.batch({"op": "update", "id": bead["id"], "set": {"assignee": None, "status": "open"},
+                     "set_meta": {"enact_recovery": records},
+                     "unset_meta": ["enact_vizier", "enact_session", "enact_actor", "enact_archived",
+                                    "enact_reservation", "enact_pool_session"]},
+                    {"op": "comment", "id": bead["id"], "text": f"Released by Enact: {args.reason}"},
+                    actor=actor, conditions=[{"seq": seq}, ticket_version(bead)])
+        return {"released": args.bead, "recovery": record, "sync": sync(repo)}
     reassign(
         beads, args.bead, "--assignee", "", "--status", "open",
         "--set-metadata", "enact_recovery=" + json.dumps(records),
@@ -4880,9 +5231,12 @@ def untrack_audit_log(repo: Repo) -> str:
 def cmd_setup(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     report: dict[str, Any] = {}
-    for tool in ("git", "bd", "dolt"):
+    server = uses_ticket_server(repo)
+    for tool in (("git", "tk") if server else ("git", "bd", "dolt")):
         report[f"has_{tool}"] = bool(shutil.which(tool))
-    if not report["has_bd"]:
+    if server and not report["has_tk"]:
+        raise Fail("tk is not installed")
+    if not server and not report["has_bd"]:
         raise Fail("bd (Beads) is not installed")
     toml = repo.main / ".enact.toml"
     if not toml.exists():
@@ -4898,7 +5252,9 @@ def cmd_setup(args: argparse.Namespace) -> dict[str, Any]:
         report["enact_toml"] = "present"
     repo = find_repo()
     beads = Beads(repo)
-    if not (repo.main / ".beads").exists():
+    if server:
+        report["tickets"] = "server"
+    elif not (repo.main / ".beads").exists():
         # Enact's AGENTS.md section replaces bd's agent files and git hooks.
         cmd = ["init", "--non-interactive", "--skip-agents", "--skip-hooks"]
         if args.prefix:

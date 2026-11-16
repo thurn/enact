@@ -948,7 +948,7 @@ class VizierLeaseTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.repo = types.SimpleNamespace(state=Path(tmp.name))
+        self.repo = types.SimpleNamespace(state=Path(tmp.name), config=enact.Config())
         for name, value in (("host_name", "jarvis"), ("provider", "claude")):
             patcher = mock.patch.object(enact, name, return_value=value)
             patcher.start()
@@ -1522,7 +1522,9 @@ class WaitTest(unittest.TestCase):
         beads = mock.Mock()
         beads.show.side_effect = lambda i: {"id": i, "status": statuses[i]}
         args = types.SimpleNamespace(beads=list(ids), timeout=0, interval=1)
-        with mock.patch.object(enact, "find_repo"), mock.patch.object(enact, "sync"), \
+        repo = types.SimpleNamespace(config=enact.Config())
+        with mock.patch.object(enact, "find_repo", return_value=repo), \
+                mock.patch.object(enact, "sync"), \
                 mock.patch.object(enact, "Beads", return_value=beads):
             return enact.cmd_wait(args)
 

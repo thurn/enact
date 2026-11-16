@@ -1905,7 +1905,7 @@ All routes are under `/<project>/api`. Reads need no token. Writes need
 | `GET /state` | `{cutover, cutover_at, seq, day, requests, rows_written, limits}` |
 | `GET /tickets/<id>?comments=1&history=1` | One ticket with its edges in both directions, children, `ready` and `blocked_by` |
 | `GET /tickets?status=&type=&parent=&ancestor=&label=&assignee=&ready=1&all=1&limit=` | A list; closed tickets only with `all=1` or `status=closed` |
-| `GET /graph` | Every live ticket (all fields except `body`, `design`, `notes`) with edges and `seq`; `ETag` is `seq`, so `If-None-Match` gives 304 |
+| `GET /graph?all=1` | Live tickets by default, or all tickets with `all=1`. Includes `ready`, edges within the selected graph, and `seq`. Omits `body`, `design` and `notes`. `If-None-Match` with the last `seq` returns 304. |
 | `POST /batch` | The only way to write tickets (below) |
 | `POST /leases/<name>` | `{op: acquire\|renew\|release, holder, ttl_s, payload}` |
 | `GET /leases` | Every lease with its holder, expiry and waiters |
@@ -1931,6 +1931,15 @@ transaction or none of it.
   `{failed: <index of the precondition or operation>, current: <ticket>}`.
 - Closing a ticket also closes each ancestor whose descendants are now all
   closed, in the same transaction, and reports them in the result.
+- A close with `include_ready: true` also returns `ready`, the IDs ready
+  after that close. The scheduler uses them to choose a lane continuation
+  from the graph it already has, conditional on the close's result sequence.
+
+Enact uses the `all=1` projection to keep closed worker assignments visible
+for archiving and to track their commits through slow CI. Cache each graph
+projection separately by project and query. For `wait change --since SEQ`,
+use that sequence in the first feed message so a change between the previous
+read and subscription wakes the caller.
 
 Status codes: 200; 304; 400 malformed; 401 missing or unknown token; 404 no
 such ticket; 409 precondition failed or claim or lease lost; 429 with
@@ -2036,7 +2045,7 @@ tk show <id> [--comments] [--history]
 tk list [--status S] [--type T] [--parent ID] [--ancestor ID] [--label L]...
         [--assignee A] [--all] [--limit N]
 tk ready [--ancestor ID] [--label L]...
-tk graph
+tk graph [--all]
 tk create --title T [--type T] [-p N] [--parent ID] [--labels a,b]
           [--body-file F] [--acceptance A] [--design-file F] [--dep ID]... [--last]
 tk update <id> [--title T] [--status S] [-p N] [--assignee A] [--parent ID]
@@ -2055,7 +2064,7 @@ tk leases
 tk event <kind> <json>
 tk events [--kind K] [--since SEQ]
 tk wait ready [--ancestor ID] [--label L]... | ticket <id> [--status S]
-        | lease <name> | change   --timeout S
+        | lease <name> | change [--since SEQ]   --timeout S
 tk state [--set-cutover before|paused|after]
 tk export | tk import <bd-export.jsonl> [--history-dir D] | tk compare
 tk register | tk bench | tk version

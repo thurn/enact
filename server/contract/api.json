@@ -51,8 +51,8 @@
     },
     {
       "method": "GET", "path": "/graph",
-      "request": {"headers": {"If-None-Match": "seq?"}},
-      "response": {"tickets": "Ticket[] (live, omitting body, design and notes)", "edges": "Edge[]", "seq": "integer", "headers": {"ETag": "seq"}},
+      "request": {"query": {"all": "1?"}, "headers": {"If-None-Match": "seq?"}},
+      "response": {"tickets": "Ticket[] (live unless all=1, with ready, omitting body, design and notes)", "edges": "Edge[]", "seq": "integer", "headers": {"ETag": "seq"}},
       "statuses": [200, 304]
     },
     {
@@ -122,7 +122,7 @@
       "create": {"request": {"fields": "Ticket input fields", "parent": "ticket ID?", "deps": "dependency[]?", "request_key": "string?"}, "response": {"id": "new ticket ID (referenced as $<operation index>)"}, "statuses": [200, 400, 404]},
       "update": {"request": {"id": "ticket ID", "set": "Ticket input fields?", "add_labels": "string[]?", "remove_labels": "string[]?", "set_meta": "object?", "unset_meta": "string[]?"}, "response": {"id": "ticket ID"}, "statuses": [200, 400, 404]},
       "claim": {"request": {"id": "ticket ID"}, "response": {"id": "claimed ticket ID"}, "statuses": [200, 404, 409]},
-      "close": {"request": {"id": "ticket ID", "reason": "string"}, "response": {"id": "closed ticket ID", "closed": "automatically closed ancestor IDs (remove these and id from the cached live graph)"}, "statuses": [200, 404]},
+      "close": {"request": {"id": "ticket ID", "reason": "string", "include_ready": "boolean?"}, "response": {"id": "closed ticket ID", "closed": "automatically closed ancestor IDs (remove these and id from the cached live graph)", "ready": "ready ticket IDs when include_ready=true"}, "statuses": [200, 404]},
       "reopen": {"request": {"id": "ticket ID"}, "response": {"id": "reopened ticket ID"}, "statuses": [200, 404]},
       "defer": {"request": {"id": "ticket ID", "until": "timestamp"}, "response": {"id": "deferred ticket ID"}, "statuses": [200, 404]},
       "comment": {"request": {"id": "ticket ID", "text": "string"}, "response": {"id": "ticket ID"}, "statuses": [200, 404]},
@@ -146,7 +146,7 @@
       "show": "<id> [--comments] [--history]",
       "list": "[--status S] [--type T] [--parent ID] [--ancestor ID] [--label L]... [--assignee A] [--all] [--limit N]",
       "ready": "[--ancestor ID] [--label L]...",
-      "graph": "",
+      "graph": "[--all]",
       "create": "--title T [--type T] [-p N] [--parent ID] [--labels a,b] [--body-file F] [--acceptance A] [--design-file F] [--dep ID]... [--last]",
       "update": "<id> [--title T] [--status S] [-p N] [--assignee A] [--parent ID] [--body-file F] [--acceptance A] [--notes N] [--add-label L]... [--remove-label L]... [--set k=v]... [--unset k]... [--last|--no-last] [--if-version N] [--if-assignee A]",
       "claim": "<id>",
@@ -160,7 +160,7 @@
       "leases": "",
       "event": "<kind> <json>",
       "events": "[--kind K] [--since SEQ]",
-      "wait": "ready [--ancestor ID] [--label L]... | ticket <id> [--status S] | lease <name> | change --timeout S",
+      "wait": "ready [--ancestor ID] [--label L]... | ticket <id> [--status S] | lease <name> | change [--since SEQ] --timeout S",
       "state": "[--set-cutover before|paused|after]",
       "export": "",
       "import": "<bd-export.jsonl> [--history-dir D]",

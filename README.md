@@ -122,6 +122,11 @@ model = "sonnet"
 Requirements: git, Python 3.11+, Beads (`bd`) 1.2+ in its default embedded
 Dolt mode, and the `dolt` CLI (used to resolve Beads merge conflicts).
 
+For a project configured with `tk`, `[tickets] backend = "server"` opts in
+to the ticket backend. `backend` defaults to `"beads"`. When `[tickets]`
+names a `project`, Enact also switches to the server once that project's
+cutover state is `after`.
+
 ## Helper commands
 
 `python3 scripts/enact.py <command>` (`py -3` on Windows). Each prints JSON.

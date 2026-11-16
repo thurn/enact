@@ -179,12 +179,17 @@ class Store:
                 results.append({**ticket, **readiness})
         return results[:args.limit]
 
-    def graph(self):
-        tickets = self.db.execute("SELECT * FROM tickets WHERE status != 'closed' ORDER BY id")
+    def graph(self, args):
+        tickets = self.db.execute("SELECT * FROM tickets WHERE ? OR status != 'closed' ORDER BY id",
+                                  (args.all,))
         omit = {"body", "design", "notes"}
-        live = {row["id"]: {k: v for k, v in decoded(row).items() if k not in omit} for row in tickets}
-        edges = [edge for edge in self.edges() if edge["src"] in live and edge["dst"] in live]
-        return {"tickets": list(live.values()), "edges": edges, "seq": self.seq()}
+        rows = {}
+        for row in tickets:
+            ticket = decoded(row)
+            rows[ticket["id"]] = {k: v for k, v in ticket.items() if k not in omit}
+            rows[ticket["id"]]["ready"] = self.readiness(ticket)["ready"]
+        edges = [edge for edge in self.edges() if edge["src"] in rows and edge["dst"] in rows]
+        return {"tickets": list(rows.values()), "edges": edges, "seq": self.seq()}
 
     def changes(self, name, fields, old):
         seq = self.advance()
@@ -303,6 +308,10 @@ class Store:
             self.changes(name, {"assignee": self.actor, "status": "in_progress"}, ticket)
         elif action == "close":
             result["closed"] = self.close(ticket, op["reason"])
+            if op.get("include_ready"):
+                candidates = self.db.execute("SELECT * FROM tickets WHERE status = 'open' ORDER BY id")
+                result["ready"] = [row["id"] for row in candidates
+                                   if self.readiness(decoded(row))["ready"]]
         elif action == "reopen":
             self.changes(name, {"status": "open", "closed_at": None, "close_reason": None}, ticket)
         elif action == "defer":
@@ -445,15 +454,17 @@ def parse_args():
     show.add_argument("--comments", action="store_true")
     show.add_argument("--history", action="store_true")
 
-    listing = commands.add_parser("list")
-    for field in ("status", "type", "parent", "ancestor", "assignee"):
-        listing.add_argument("--" + field)
-    listing.add_argument("--label", action="append", default=[])
-    listing.add_argument("--all", action="store_true")
-    listing.add_argument("--ready", action="store_true")
-    listing.add_argument("--limit", type=int)
+    for name in ("list", "ready"):
+        listing = commands.add_parser(name)
+        for field in ("status", "type", "parent", "ancestor", "assignee"):
+            listing.add_argument("--" + field)
+        listing.add_argument("--label", action="append", default=[])
+        listing.add_argument("--all", action="store_true")
+        listing.add_argument("--ready", action="store_true", default=name == "ready")
+        listing.add_argument("--limit", type=int)
 
-    commands.add_parser("graph")
+    graph = commands.add_parser("graph")
+    graph.add_argument("--all", action="store_true")
     commands.add_parser("batch")
     lease = commands.add_parser("lease")
     lease.add_argument("op", choices=["acquire", "renew", "release"])
@@ -472,6 +483,10 @@ def parse_args():
     events.add_argument("--limit", type=int, default=-1)
     state = commands.add_parser("state")
     state.add_argument("--set-cutover", choices=["before", "paused", "after"])
+    wait = commands.add_parser("wait")
+    wait.add_argument("mode", choices=["change"])
+    wait.add_argument("--since", required=True, type=int)
+    wait.add_argument("--timeout", required=True, type=int)
     return parser.parse_args()
 
 
@@ -480,6 +495,9 @@ def main():
         args = parse_args()
     except SystemExit as error:
         return 1 if error.code else 0
+    if trace := os.environ.get("TK_STUB_TRACE"):
+        with Path(trace).open("a", encoding="utf-8") as handle:
+            handle.write(args.command + "\n")
     db_path = os.environ.get("TK_STUB_DB")
     if not db_path:
         print("Set TK_STUB_DB to a temporary SQLite file", file=sys.stderr)
@@ -497,7 +515,13 @@ def main():
                 store = Store(db, args.actor, args.project, os.environ.get("TK_STUB_MACHINE", "local"))
                 if args.command == "batch":
                     result = store.batch(json.load(sys.stdin))
-                elif args.command in {"graph", "leases"}:
+                elif args.command == "wait":
+                    if args.since == store.seq():
+                        return 6  # No transport in the SQLite stand-in.
+                    result = {"resync": True}
+                elif args.command == "ready":
+                    result = store.list(args)
+                elif args.command == "leases":
                     result = getattr(store, args.command)()
                 else:
                     result = getattr(store, args.command)(args)
