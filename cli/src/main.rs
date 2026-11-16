@@ -3,6 +3,7 @@ mod bench;
 mod client;
 mod commands;
 mod feed;
+mod migration;
 
 use args::{Command, Options};
 use clap::Parser;

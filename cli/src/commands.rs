@@ -152,6 +152,12 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
             write(client, &["state"], &json!({"cutover": cutover}))
         }
         Command::State { set_cutover: None } => read(client, &["state"], &[]),
+        Command::Import {
+            file,
+            history_dir,
+            row_budget,
+        } => crate::migration::import(client, &file, history_dir, row_budget),
+        Command::Compare { history_dir } => crate::migration::compare(client, history_dir),
         Command::Bench { .. } | Command::Export | Command::Version => {
             unreachable!("handled by main")
         }
@@ -182,8 +188,18 @@ fn write(client: &Client, path: &[&str], body: &Value) -> Result<Value> {
 }
 
 pub fn export(client: &Client) -> Result<()> {
-    let mut cursor = String::new();
     let mut output = io::stdout().lock();
+    export_pages(client, |page| {
+        output.write_all(page.as_bytes()).map_err(usage)?;
+        if !page.ends_with('\n') {
+            output.write_all(b"\n").map_err(usage)?;
+        }
+        Ok(())
+    })
+}
+
+pub fn export_pages(client: &Client, mut visit: impl FnMut(&str) -> Result<()>) -> Result<()> {
+    let mut cursor = String::new();
     loop {
         let query = if cursor.is_empty() {
             vec![]
@@ -205,10 +221,7 @@ pub fn export(client: &Client) -> Result<()> {
             return Err(usage("export cursor did not advance"));
         }
         cursor = id.to_owned();
-        output.write_all(page.as_bytes()).map_err(usage)?;
-        if !page.ends_with('\n') {
-            output.write_all(b"\n").map_err(usage)?;
-        }
+        visit(&page)?;
     }
 }
 

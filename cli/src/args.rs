@@ -104,6 +104,20 @@ pub enum Command {
     },
     /// Stream a full JSON Lines export.
     Export,
+    /// Copy a legacy Beads JSON Lines export and its audit history.
+    Import {
+        file: std::path::PathBuf,
+        #[arg(long)]
+        history_dir: Option<std::path::PathBuf>,
+        /// Override the daily import ceiling for a local rehearsal.
+        #[arg(long)]
+        row_budget: Option<u64>,
+    },
+    /// Check the legacy Beads store against the ticket server.
+    Compare {
+        #[arg(long)]
+        history_dir: Option<std::path::PathBuf>,
+    },
     /// Measure fresh-process read and write latency.
     Bench {
         #[arg(long, default_value_t = 25, value_parser = clap::value_parser!(u32).range(1..))]
