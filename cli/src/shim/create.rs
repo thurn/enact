@@ -12,8 +12,9 @@ pub(super) struct Create {
     id: Option<String>,
     #[arg(long)]
     parent: Option<String>,
-    #[arg(long)]
-    title: String,
+    #[arg(long, required_unless_present = "positional_title")]
+    title: Option<String>,
+    positional_title: Option<String>,
     #[arg(long = "type", short = 't', default_value = "task")]
     kind: String,
     #[arg(short = 'p', long, default_value_t = 2)]
@@ -22,7 +23,7 @@ pub(super) struct Create {
     description: Option<String>,
     #[arg(long)]
     body_file: Option<String>,
-    #[arg(long, value_delimiter = ',')]
+    #[arg(long, short = 'l', value_delimiter = ',')]
     labels: Vec<String>,
     #[arg(long)]
     acceptance: Option<String>,
@@ -43,6 +44,10 @@ impl Create {
         if self.id.is_some() && self.parent.is_some() {
             return Err(usage("Error: cannot specify both --id and --parent flags"));
         }
+        let title = self
+            .title
+            .or(self.positional_title)
+            .expect("title validated by parser");
         let body = match self.body_file.as_deref() {
             Some("-") => {
                 let mut text = String::new();
@@ -77,7 +82,7 @@ impl Create {
         let mut operation = json!({
             "op": "create", "parent": self.parent, "deps": deps,
             "fields": {
-                "title": self.title, "type": self.kind, "priority": self.priority, "body": body,
+                "title": title, "type": self.kind, "priority": self.priority, "body": body,
                 "labels": self.labels, "acceptance": self.acceptance.unwrap_or_default(),
                 "metadata": metadata, "status": status, "defer_until": self.defer.map(defer_until).transpose()?,
             },
@@ -96,7 +101,7 @@ impl Create {
             if self.silent {
                 println!("{id}");
             } else {
-                println!("✓ Created {id}: {}", self.title);
+                println!("✓ Created {id}: {title}");
             }
         }
         Ok(0)

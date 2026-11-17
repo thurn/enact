@@ -22,7 +22,7 @@ const worker = new Miniflare(convertV4MiniflareOptions({
   script: bundle.text,
   compatibilityDate: "2026-11-16",
   // The fixture provisions tokens locally for these projects.
-  bindings: { TICKET_REPOSITORIES: { by: "", en: "", gate: "", migration: "", snooze: "" } },
+  bindings: { TICKET_REPOSITORIES: { by: "", compat: "", en: "", gate: "", migration: "", snooze: "" } },
   durableObjects: { TICKETS: { className: "ProjectTickets", useSQLite: true } },
 }));
 console.log((await worker.ready).origin);

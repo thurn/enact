@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 use std::env;
 use std::ffi::OsString;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -42,6 +43,8 @@ enum Action {
         kind: Option<String>,
         #[arg(long)]
         label: Vec<String>,
+        #[arg(long, value_delimiter = ',')]
+        label_any: Vec<String>,
         #[arg(long)]
         assignee: Option<String>,
         #[arg(long)]
@@ -58,6 +61,10 @@ enum Action {
         title: Option<String>,
         #[arg(long, value_delimiter = ',')]
         id: Vec<String>,
+    },
+    Search(crate::args::Search),
+    Children {
+        id: String,
     },
     Ready {
         #[arg(long)]
@@ -117,6 +124,8 @@ enum Action {
     },
     Comments {
         arguments: Vec<String>,
+        #[arg(long, short = 'f')]
+        file: Option<PathBuf>,
     },
     Epic {
         #[command(subcommand)]
@@ -160,6 +169,7 @@ enum Dependency {
     Tree {
         id: String,
     },
+    Cycles,
 }
 
 #[derive(Subcommand)]
@@ -207,11 +217,13 @@ impl Action {
     fn reads_only(&self) -> bool {
         match self {
             Self::List { .. }
+            | Self::Search(_)
+            | Self::Children { .. }
             | Self::Ready { .. }
             | Self::Show { .. }
             | Self::Export { .. }
             | Self::Dep {
-                operation: Dependency::List { .. } | Dependency::Tree { .. },
+                operation: Dependency::List { .. } | Dependency::Tree { .. } | Dependency::Cycles,
             }
             | Self::Label {
                 operation: Label::List { .. },
@@ -220,7 +232,9 @@ impl Action {
                 operation: Epic::Status,
             }
             | Self::Dolt { .. } => true,
-            Self::Comments { arguments } => arguments.len() == 1 && arguments[0] != "add",
+            Self::Comments { arguments, file } => {
+                file.is_none() && arguments.len() == 1 && arguments[0] != "add"
+            }
             _ => false,
         }
     }
@@ -289,11 +303,13 @@ fn unsupported(args: &[OsString]) -> Failure {
         .map_or_else(String::new, |arg| arg.to_string_lossy().into_owned());
     let native = match command.as_str() {
         "dep" => "dep",
+        "children" => "list --parent",
         "label" | "undefer" => "update",
         "comments" => "comment",
         "epic" => "list --type epic",
         "init" | "dolt" => "state",
-        "list" | "ready" | "show" | "create" | "update" | "close" | "defer" | "reopen" => &command,
+        "list" | "ready" | "show" | "create" | "update" | "close" | "defer" | "reopen"
+        | "search" => &command,
         "export" => return retired_export(),
         _ => "--help",
     };
@@ -388,12 +404,13 @@ fn run(client: &Client, options: Options) -> Result<u8> {
             status,
             kind,
             label,
+            label_any,
             assignee,
             parent,
             limit,
             all,
             brief,
-            flat: _,
+            flat,
             title,
             id,
         } => {
@@ -412,19 +429,27 @@ fn run(client: &Client, options: Options) -> Result<u8> {
             for value in label {
                 query.push(("label", value));
             }
+            query.extend(label_any.into_iter().map(|label| ("label_any", label)));
             query.extend(id.into_iter().map(|id| ("id", id)));
             if all {
                 query.push(("all", "1".into()));
             }
-            output::listing(
+            let rows = output::listing(
                 client,
                 query,
                 limit.unwrap_or(0),
                 false,
                 options.quiet || options.json,
                 brief,
-            )?
+            )?;
+            if !flat && !options.json {
+                diagnostics::issue_tree(array(&rows));
+                return Ok(0);
+            }
+            rows
         }
+        Action::Search(search) => return output::search(client, search, options.json),
+        Action::Children { id } => return diagnostics::children(client, id, options.json),
         Action::Ready {
             label,
             exclude_type,
@@ -482,9 +507,14 @@ fn run(client: &Client, options: Options) -> Result<u8> {
             }
             json!([output::row(client, &ticket(client, &id, &[])?)])
         }
+        Action::Dep {
+            operation: Dependency::Cycles,
+        } => {
+            return diagnostics::cycles(client, options.json);
+        }
         Action::Dep { operation } => dependency(client, operation)?,
         Action::Label { operation } => label(client, operation)?,
-        Action::Comments { arguments } => {
+        Action::Comments { arguments, file } => {
             let query = [("comments", "1".into())];
             match arguments.as_slice() {
                 [command, ..] if command == "list" => {
@@ -499,7 +529,7 @@ fn run(client: &Client, options: Options) -> Result<u8> {
                     }
                     return Err(usage(message));
                 }
-                [id] if id != "add" => {
+                [id] if id != "add" && file.is_none() => {
                     let ticket = ticket(client, id, &query)?;
                     json!(
                         array(&ticket["comments"])
@@ -508,7 +538,15 @@ fn run(client: &Client, options: Options) -> Result<u8> {
                             .collect::<Vec<_>>()
                     )
                 }
-                [sub, id, text] if sub == "add" => {
+                [sub, id, rest @ ..] if sub == "add" && rest.len() <= 1 => {
+                    let text = match comment_text(rest.first(), file.as_deref()) {
+                        Ok(text) => text,
+                        Err(error) if options.json => {
+                            output::json(&json!({"error": error.message, "schema_version": 1}))?;
+                            return Ok(1);
+                        }
+                        Err(error) => return Err(error),
+                    };
                     let reply = commands::single(
                         client,
                         json!({"op": "comment", "id": id, "text": text, "legacy": true}),
@@ -564,6 +602,36 @@ fn run(client: &Client, options: Options) -> Result<u8> {
     Ok(0)
 }
 
+fn comment_text(text: Option<&String>, file: Option<&Path>) -> Result<String> {
+    let Some(file) = file else {
+        return text
+            .cloned()
+            .ok_or_else(|| usage("comment text is required"));
+    };
+    if let Some(text) = text {
+        return Err(usage(format!(
+            "cannot combine positional text {text:?} with --file"
+        )));
+    }
+    let mut text = String::new();
+    if file == Path::new("-") {
+        io::stdin().read_to_string(&mut text).map_err(usage)?;
+    } else {
+        text = std::fs::read_to_string(file).map_err(|error| {
+            let reason = match error.kind() {
+                io::ErrorKind::NotFound => "no such file or directory".into(),
+                io::ErrorKind::PermissionDenied => "permission denied".into(),
+                _ => error.to_string(),
+            };
+            usage(format!(
+                "failed to open file: open {}: {reason}",
+                file.display()
+            ))
+        })?;
+    }
+    Ok(text)
+}
+
 fn dependency(client: &Client, operation: Dependency) -> Result<Value> {
     let (id, on, kind) = match operation {
         Dependency::List {
@@ -584,6 +652,7 @@ fn dependency(client: &Client, operation: Dependency) -> Result<Value> {
             return Ok(json!(rows));
         }
         Dependency::Tree { id } => return output::tree(client, &id),
+        Dependency::Cycles => unreachable!("cycles render separately"),
         Dependency::Add { id, on, kind } => (id, on, Some(kind)),
         Dependency::Remove { id, on } => (id, on, None),
     };

@@ -1,6 +1,6 @@
 import schema from "../contract/schema.sql";
 import {resolveId, TicketBatch} from "./ticket-batch";
-import {TicketIndex, type BatchChanges} from "./ticket-index";
+import {ancestors, TicketIndex, type BatchChanges} from "./ticket-index";
 import {ApiError, bad, byId, choice, decodeTicket, integer, statuses, ticketTypes, type Edge, type Ticket, type TicketRow} from "./ticket-types";
 
 export class TicketStore {
@@ -63,7 +63,11 @@ export class TicketStore {
 
   list(project: string, filter: URLSearchParams): object[] {
     const statusValue = filter.get("status");
-    const status = statusValue === null ? null : choice(statusValue, "status", statuses);
+    const search = filter.get("search") ?? undefined;
+    const selectedStatuses = statusValue === null || (search !== undefined && statusValue === "all")
+      ? [] : (search === undefined ? [statusValue] : statusValue.split(","))
+        .map((value) => choice(value, "status", statuses));
+    const status = selectedStatuses.length === 1 ? selectedStatuses[0] : null;
     const typeValue = filter.get("type");
     const type = typeValue === null ? null : choice(typeValue, "type", ticketTypes);
     const assignee = filter.get("assignee");
@@ -72,9 +76,11 @@ export class TicketStore {
     const ancestorValue = filter.get("ancestor");
     const ancestor = ancestorValue === null ? null : resolveId(this.sql, project, ancestorValue);
     const labels = filter.getAll("label");
+    const anyLabels = filter.getAll("label_any");
     const excludedTypes = filter.getAll("exclude_type");
     const unassigned = flag(filter, "unassigned");
-    const includeClosed = flag(filter, "all") || status === "closed";
+    const includeClosed = flag(filter, "all") || selectedStatuses.includes("closed")
+      || search !== undefined && selectedStatuses.length === 0;
     const readyOnly = flag(filter, "ready");
     const beads = flag(filter, "beads");
     const epicCounts = flag(filter, "epic_counts");
@@ -88,7 +94,9 @@ export class TicketStore {
 
     const tickets = this.tickets;
     const archived = includeClosed && !readyOnly;
-    const candidates = ids.size !== 0
+    const candidates = search !== undefined
+      ? this.searchCandidates(project, search, selectedStatuses)
+      : ids.size !== 0
       ? [...ids].map((id) => tickets.lookup(id)).filter((ticket): ticket is Ticket => ticket !== null && (archived || ticket.status !== "closed"))
       : archived
         ? this.archivedCandidates(status, type, assignee, parent, ancestor)
@@ -96,13 +104,17 @@ export class TicketStore {
     const now = Date.now();
     const results: object[] = [];
     for (const ticket of candidates) {
-      if (status !== null && ticket.status !== status || type !== null && ticket.type !== type
+      if (selectedStatuses.length !== 0 && !selectedStatuses.includes(ticket.status) || type !== null && ticket.type !== type
         || assignee !== null && ticket.assignee !== assignee || parent !== null && ticket.parent !== parent
         || unassigned && ticket.assignee !== null || excludedTypes.includes(ticket.type)
-        || title !== undefined && !ticket.title.toLowerCase().includes(title)
-        || !labels.every((label) => ticket.labels.includes(label))) continue;
+        || title !== undefined && !ticket.title.toLowerCase().includes(title)) continue;
+      if (anyLabels.length === 0) {
+        if (!labels.every((label) => ticket.labels.includes(label))) continue;
+      } else if (!this.matchesLabels(ticket, labels, anyLabels, selectedStatuses)) {
+        continue;
+      }
 
-      if (ancestor !== null && (!archived || ids.size !== 0)) {
+      if (ancestor !== null && (!archived || ids.size !== 0 || search !== undefined)) {
         let current = ticket.parent;
         while (current !== null && current !== ancestor) current = tickets.parentOf(current);
         if (current === null) continue;
@@ -113,8 +125,8 @@ export class TicketStore {
         && blockers.length === 0;
       if (readyOnly && !(beads ? beadsReady : readiness.ready)) continue;
       const counts = beads ? {
-        ...this.beadsCounts(ticket.id, archived),
-        edges: [...tickets.edgesFrom(ticket.id).values()],
+        ...this.beadsCounts(ticket.id, archived || search !== undefined),
+        ...(search === undefined ? {edges: [...tickets.edgesFrom(ticket.id).values()]} : {}),
       } : {};
       const children = epicCounts ? this.sql.exec(
         "SELECT count(*) AS total_children, count(*) FILTER (WHERE status = 'closed') AS closed_children FROM tickets WHERE parent = ?",
@@ -127,11 +139,50 @@ export class TicketStore {
     return results;
   }
 
+  private matchesLabels(ticket: Ticket, all: string[], any: string[], selectedStatuses: readonly string[]): boolean {
+    const matches = (labels: string[]) => all.every((label) => labels.includes(label)) && any.some((label) => labels.includes(label));
+    if (matches(ticket.labels)) return true;
+    // Beads includes descendants of label matches while still applying
+    // filters like status to each returned ticket.
+    for (const id of ancestors(ticket.id, (id) => this.tickets.parentOf(id))) {
+      const parent = this.tickets.lookup(id);
+      if (parent && (selectedStatuses.length === 0 || selectedStatuses.includes(parent.status))
+        && matches(parent.labels)) return true;
+    }
+    return false;
+  }
+
+  private *searchCandidates(project: string, phrase: string, selectedStatuses: readonly string[]): Iterable<Ticket> {
+    if (!phrase.trim()) bad("search query is required");
+    const query = phrase.toLowerCase();
+    const prefix = `${project}-`;
+    const displayedId = phrase.startsWith("T");
+    const idPrefix = displayedId ? query.slice(1) : query.startsWith(prefix) ? query.slice(prefix.length) : query;
+    const aliases = new Set<string>();
+    if (idPrefix && !displayedId) {
+      // Prefix matching must also find aliases that point to a different ID.
+      for (const {id} of this.sql.exec<{id: string}>(
+        "SELECT id FROM aliases WHERE instr(alias, ?) = 1 OR instr(alias, ?) = 1", query, idPrefix,
+      )) aliases.add(id);
+    }
+    // Apply the Beads search order before the limit. Fetch large fields and
+    // compatibility counts only for rows that can appear in the results.
+    const where = selectedStatuses.length === 0 ? "" : `WHERE status IN (${selectedStatuses.map(() => "?").join(", ")})`;
+    for (const {id, title} of this.sql.exec<{id: string; title: string}>(
+      `SELECT id, title FROM tickets ${where} ORDER BY priority, created_at DESC, id`, ...selectedStatuses,
+    )) {
+      if (title.toLowerCase().includes(query) || id.startsWith(query) || (idPrefix && id.startsWith(idPrefix)) || aliases.has(id)) {
+        const ticket = this.tickets.lookup(id);
+        if (ticket) yield ticket;
+      }
+    }
+  }
+
   private beadsCounts(id: string, includeClosed = false) {
     return this.sql.exec(
-      `SELECT (SELECT count(*) FROM edges WHERE src = ?) AS dependency_count,
+      `SELECT (SELECT count(*) FROM edges WHERE src = ? AND kind = 'blocks') AS dependency_count,
               (SELECT count(*) FROM edges JOIN tickets ON tickets.id = edges.src
-                WHERE dst = ? AND (? OR tickets.status != 'closed')) AS dependent_count,
+                WHERE dst = ? AND kind = 'blocks' AND (? OR tickets.status != 'closed')) AS dependent_count,
               (SELECT count(*) FROM comments WHERE ticket = ?) AS comment_count`,
       id, id, Number(includeClosed), id,
     ).one();

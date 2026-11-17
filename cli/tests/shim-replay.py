@@ -269,6 +269,8 @@ def replay(tk, bd, directory, env, address, corpus):
     allocated_roots = {}
     # The first read observes cutover and saves the permanent local marker.
     ok(bd, ["list", "--id", "by-r61mr", "--json"], directory, env)
+    native_alias = ok(tk, ["search", "by-q44s.5.7", "--status", "closed", "--limit", "1", "--json"], directory, env)
+    assert [ticket["id"] for ticket in native_alias] == ["q44s.5.7"], native_alias
     retired = 0
     for call in calls:
         args = [allocated_roots.get(arg, arg) for arg in call["argv"]]
@@ -364,6 +366,61 @@ def replay(tk, bd, directory, env, address, corpus):
     print(f"{len(calls)} recorded calls, zero unexplained exit, stdout or stderr differences.")
     print(f"{retired} retired export shapes wrote no file and sent no ticket-server request after observing cutover.")
     print("Normalization rules: " + "; ".join(RULES))
+
+
+def expanded_commands(tk, bd, directory, env, address):
+    # Recorded on bd 1.3.2 in an isolated repository, including a blocking
+    # cycle seeded in Dolt because bd dep add rejects creating one.
+    fixture = json.loads((CORPUS / "expanded-commands.json").read_text(encoding="utf-8"))
+    directory.mkdir()
+    (directory / ".enact.toml").write_text(f'[tickets]\nproject = "compat"\nurl = "{address}"\n')
+    request(address, "/test-token/compat")
+    export = directory / "expanded.jsonl"
+    history = directory / "history"
+    history.mkdir()
+    with export.open("w", encoding="utf-8") as stream:
+        for row in fixture["start"]:
+            stream.write(json.dumps(row) + "\n")
+            (history / (row["id"] + ".json")).write_text(json.dumps({"source": row, "events": []}))
+    imported = ok(tk, ["--json", "import", str(export), "--history-dir", str(history)], directory, env)
+    assert imported["imported"] == len(fixture["start"]), imported
+    for state in ("paused", "after"):
+        request(address, "/compat/api/state", {"cutover": state})
+
+    expected_ids, actual_ids = {}, {}
+    cycle_added = False
+    for case in fixture["calls"]:
+        args = case["args"]
+        if case.get("with_cycle") and not cycle_added:
+            request(address, "/compat/api/batch", {"ops": [
+                {"op": "dep_add", "id": "corpus.2", "on": "corpus.1", "kind": "conditional-blocks"},
+            ]})
+            cycle_added = True
+        for name, contents in case.get("files", {}).items():
+            (directory / name).write_bytes(contents.encode("utf-8"))
+        reply = run(bd, args, directory, env)
+        assert (reply.returncode, reply.stderr) == (0, ""), reply
+        want, got = case["stdout"], reply.stdout
+        if "--json" in args:
+            got = json.loads(got)
+            generated = {}
+            if args[0] == "show":
+                generated[args[1]] = args[1]
+            if args[0] == "comments":
+                generated[args[1]] = args[1]
+            if args[0] in {"list", "search", "children"}:
+                rank_order(want)
+                rank_order(got)
+            want = normalize(want, expected_ids, generated)
+            got = normalize(got, actual_ids, generated)
+        mismatch = difference(want, got)
+        assert mismatch is None, f"{args}: {mismatch}"
+
+    native = ok(tk, ["search", "ATLAS", "--status", "closed", "--limit", "1", "--json"], directory, env)
+    assert [(row["id"], row["status"]) for row in native] == [("corpus.3", "closed")], native
+    assert [row["id"] for row in ok(tk, ["search", "compat-corpus.1.1", "--json"], directory, env)] == ["corpus.1.1"]
+    assert [row["id"] for row in ok(tk, ["search", "Tcorpus.1.1", "--json"], directory, env)] == ["corpus.1.1"]
+    print(f"{len(fixture['calls'])} expanded commands match {fixture['bd_version']}.")
 
 
 def cutover(bd, directory, env, address):
@@ -714,6 +771,7 @@ fn main() {
             workspace.mkdir()
             (workspace / ".enact.toml").write_text(f'[tickets]\nproject = "by"\nurl = "{address}"\n')
             replay(tk, bd, workspace, env, address, args.corpus)
+            expanded_commands(tk, bd, directory / "expanded", env, address)
             if not args.replay_only:
                 dated_deferrals(tk, bd, directory, env, address)
                 migration_compare(tk, fake, directory, env, address)

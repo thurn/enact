@@ -60,6 +60,50 @@ pub fn row(client: &Client, ticket: &Value) -> Value {
     Value::Object(result)
 }
 
+pub fn search(client: &Client, args: crate::args::Search, as_json: bool) -> Result<u8> {
+    let phrase = args.words.join(" ");
+    let mut query = commands::search_query(phrase.clone(), args.status, args.limit);
+    query.push(("beads", "1".into()));
+    let reply = commands::read(client, &["tickets"], &query)?;
+    let rows: Vec<_> = array(&reply)
+        .iter()
+        .map(|ticket| counted_row(client, ticket))
+        .collect();
+    if as_json {
+        json(&json!(rows))?;
+    } else if rows.is_empty() {
+        println!("No issues found matching '{phrase}'");
+    } else {
+        println!("Found {} issues matching '{phrase}':", rows.len());
+        for row in rows {
+            let assignee = row["assignee"]
+                .as_str()
+                .map_or_else(String::new, |name| format!(" @{name}"));
+            let labels = row["labels"].as_array().map_or_else(String::new, |labels| {
+                let labels: Vec<_> = labels.iter().map(string).collect();
+                format!(" [{}]", labels.join(" "))
+            });
+            println!(
+                "{} [P{}] [{}] {}{assignee}{labels} - {}",
+                string(&row["id"]),
+                row["priority"],
+                string(&row["issue_type"]),
+                string(&row["status"]),
+                string(&row["title"])
+            );
+        }
+    }
+    Ok(0)
+}
+
+fn counted_row(client: &Client, ticket: &Value) -> Value {
+    let mut row = row(client, ticket);
+    for field in ["dependency_count", "dependent_count", "comment_count"] {
+        row[field] = ticket[field].clone();
+    }
+    row
+}
+
 pub fn listing(
     client: &Client,
     query: Vec<(&str, String)>,
@@ -72,16 +116,13 @@ pub fn listing(
     let mut rows: Vec<_> = array(&reply)
         .iter()
         .map(|ticket| {
-            let mut row = row(client, ticket);
+            let mut row = counted_row(client, ticket);
             let dependencies = listed_dependencies(client, ticket);
             if !dependencies.is_empty() {
                 row["dependencies"] = json!(dependencies);
             }
             if let Some(parent) = ticket["parent"].as_str() {
                 row["parent"] = json!(legacy_id(client, parent));
-            }
-            for field in ["dependency_count", "dependent_count", "comment_count"] {
-                row[field] = ticket[field].clone();
             }
             if brief {
                 let fields = row.as_object_mut().expect("ticket row");

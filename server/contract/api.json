@@ -46,7 +46,7 @@
     },
     {
       "method": "GET", "path": "/tickets",
-      "request": {"query": {"status": "string?", "type": "string?", "parent": "ticket ID?", "ancestor": "ticket ID?", "label": "string[]?", "assignee": "string?", "ready": "1?", "all": "1?", "limit": "integer?"}},
+      "request": {"query": {"status": "string?", "type": "string?", "parent": "ticket ID?", "ancestor": "ticket ID?", "label": "string[]?", "label_any": "string[]?", "search": "string?", "assignee": "string?", "ready": "1?", "all": "1?", "limit": "integer?"}},
       "response": {"body": "Ticket[] (closed only with all=1 or status=closed)"},
       "statuses": [200, 400]
     },
@@ -147,6 +147,7 @@
     "commands": {
       "show": "<id> [--comments] [--history]",
       "list": "[--status S] [--type T] [--parent ID] [--ancestor ID] [--label L]... [--assignee A] [--all] [--limit N]",
+      "search": "<words> [--status S] [-n|--limit N]",
       "ready": "[--ancestor ID] [--label L]...",
       "graph": "[--all] [--if-none-match ETAG] (JSON includes etag on a fresh response)",
       "create": "--title T [--type T] [-p N] [--parent ID] [--labels a,b] [--body-file F] [--acceptance A] [--design-file F] [--dep ID]... [--last]",

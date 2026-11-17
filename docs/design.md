@@ -1948,6 +1948,11 @@ All routes are under `/<project>/api`. Reads need no token. Writes need
 | `GET /export?after=<id>` | JSON lines of whole tickets sorted by ID, paged |
 | `POST /state` | `{cutover, pause_id?}`; only moves forward, except `paused` to `before` |
 
+On `GET /tickets`, `search` matches a case-insensitive title phrase or an
+ID prefix, including legacy IDs. It includes closed tickets by default and
+orders results by priority, newest creation time, then ID. The repeatable
+`label_any` filter matches tickets with any of the given labels.
+
 The import body is `{tickets: [...]}`. Each element has the ticket fields
 plus its outgoing `edges`, `comments`, `history` and `aliases` arrays. Export
 uses the same flat objects, up to 200 per page and an empty page at the end.
@@ -2174,6 +2179,7 @@ in `.enact.toml`.
 tk show <id> [--comments] [--history]
 tk list [--status S] [--type T] [--parent ID] [--ancestor ID] [--label L]...
         [--assignee A] [--all] [--limit N]
+tk search <words> [--status S] [--limit N]
 tk ready [--ancestor ID] [--label L]...
 tk graph [--all] [--if-none-match ETAG]
 tk create --title T [--type T] [-p N] [--parent ID] [--labels a,b]
@@ -2226,7 +2232,12 @@ asking the server whether the first attempt landed; a `create` carries a
 client-chosen request key that the server remembers for a day, so a retry
 never creates twice.
 
-Invoked as `bd`, the binary is the shim (section 7).
+Search accepts a quoted phrase or separate words. It returns up to 50 tickets
+by default. Pass `--limit 0` to return every match.
+
+Invoked as `bd`, the binary is the shim (section 7). The shim also accepts
+`bd children <id>`, `bd list --label-any a,b`, `bd comments add <id> -f FILE`,
+`bd dep cycles`, and a positional title and `-l` for `bd create`.
 
 #### Daily backups and restore
 

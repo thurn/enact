@@ -1,4 +1,6 @@
-use crate::args::{Command, Create, Cutover, EdgeOperation, LeaseOperation, List, Ready, Update};
+use crate::args::{
+    Command, Create, Cutover, EdgeOperation, LeaseOperation, List, Ready, Search, Update,
+};
 use crate::client::{Client, Result, usage};
 use serde_json::{Map, Value, json};
 use std::io::{self, Write};
@@ -42,6 +44,15 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
             flag(&mut query, "ready", ready);
             read(client, &["tickets"], &query)
         }
+        Command::Search(Search {
+            words,
+            status,
+            limit,
+        }) => read(
+            client,
+            &["tickets"],
+            &search_query(words.join(" "), status, limit),
+        ),
         Command::Ready(filters) => {
             let mut query = ready_query(filters);
             flag(&mut query, "ready", true);
@@ -218,6 +229,15 @@ fn flag(query: &mut Query, name: &'static str, enabled: bool) {
     if enabled {
         query.push((name, "1".into()));
     }
+}
+
+pub(crate) fn search_query(phrase: String, status: Option<String>, limit: u64) -> Query {
+    let mut query = vec![("search", phrase)];
+    query.extend(status.map(|status| ("status", status)));
+    if limit != 0 {
+        query.push(("limit", limit.to_string()));
+    }
+    query
 }
 
 pub fn ready_query(filters: Ready) -> Query {

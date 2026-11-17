@@ -1,5 +1,5 @@
-use super::{array, output, string};
-use crate::client::{Client, Result};
+use super::{array, output, string, ticket};
+use crate::client::{Client, Result, usage};
 use crate::commands;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -84,6 +84,156 @@ pub fn explain(client: &Client, as_json: bool) -> Result<u8> {
         explain_text(&ready, &blocked, &cycles);
     }
     Ok(0)
+}
+
+pub fn cycles(client: &Client, as_json: bool) -> Result<u8> {
+    let graph = commands::read(client, &["graph"], &[("all", "1".into())])?;
+    let cycles = blocking_cycles(client, array(&graph["edges"]));
+    let mut issues = HashMap::new();
+    let mut rows = Vec::new();
+    for cycle in cycles {
+        let mut members = Vec::new();
+        for id in cycle {
+            let issue = match issues.entry(id) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let raw = ticket(client, entry.key(), &[])?;
+                    entry.insert(output::row(client, &raw))
+                }
+            };
+            members.push(json!({"id": issue["id"], "issue": issue}));
+        }
+        rows.push(json!({"members": members, "partial": false}));
+    }
+    if as_json {
+        output::json(&json!(rows))?;
+    } else if rows.is_empty() {
+        println!("\n✓ No dependency cycles detected\n");
+    } else {
+        println!("\n⚠ Found {} dependency cycles:\n", rows.len());
+        for (index, row) in rows.iter().enumerate() {
+            println!("{}. Cycle involving:", index + 1);
+            for member in array(&row["members"]) {
+                println!(
+                    "   - {}: {}",
+                    string(&member["id"]),
+                    string(&member["issue"]["title"])
+                );
+            }
+            println!();
+        }
+    }
+    Ok(0)
+}
+
+pub fn children(client: &Client, id: String, as_json: bool) -> Result<u8> {
+    if as_json {
+        let query = vec![("beads", "1".into()), ("all", "1".into()), ("parent", id)];
+        let children = output::listing(client, query, 0, false, true, false)?;
+        output::json(&children)?;
+        return Ok(0);
+    }
+    let parent = match ticket(client, &id, &[]) {
+        Ok(parent) => output::row(client, &parent),
+        Err(error) if error.status == Some(404) => {
+            return Err(usage(format!(
+                "Error: error checking parent issue: not found: issue {id}"
+            )));
+        }
+        Err(error) => return Err(error),
+    };
+    let children = commands::read(
+        client,
+        &["tickets"],
+        &[("all", "1".into()), ("ancestor", id.clone())],
+    )?;
+    if array(&children).is_empty() {
+        println!("Issue '{id}' has no children");
+        return Ok(0);
+    }
+    let mut rows = vec![parent];
+    rows.extend(array(&children).iter().map(|ticket| {
+        let mut row = output::row(client, ticket);
+        row["parent"] = json!(output::legacy_id(client, string(&ticket["parent"])));
+        row
+    }));
+    issue_tree(&rows);
+    Ok(0)
+}
+
+pub fn issue_tree(rows: &[Value]) {
+    if rows.is_empty() {
+        println!("No issues found.");
+        return;
+    }
+    let ids: HashSet<_> = rows.iter().map(|row| string(&row["id"])).collect();
+    let mut groups: HashMap<Option<&str>, Vec<&Value>> = HashMap::new();
+    for row in rows {
+        let parent = row["parent"].as_str().filter(|id| ids.contains(id));
+        groups.entry(parent).or_default().push(row);
+    }
+    for group in groups.values_mut() {
+        group.sort_by(|a, b| {
+            a["priority"]
+                .as_u64()
+                .cmp(&b["priority"].as_u64())
+                .then_with(|| string(&a["id"]).cmp(string(&b["id"])))
+        });
+    }
+    for root in &groups[&None] {
+        issue_branch(root, "", "", &groups);
+    }
+    let open = rows.iter().filter(|row| row["status"] == "open").count();
+    let progress = rows
+        .iter()
+        .filter(|row| row["status"] == "in_progress")
+        .count();
+    println!(
+        "\n{}\nTotal: {} issues ({open} open, {progress} in progress)\n",
+        "-".repeat(80),
+        rows.len()
+    );
+    println!("Status: ○ open  ◐ in_progress  ● blocked  ✓ closed  ❄ deferred");
+    println!("Priority: P0–P4 (label only; not a status icon)");
+}
+
+fn issue_branch(
+    row: &Value,
+    prefix: &str,
+    branch: &str,
+    groups: &HashMap<Option<&str>, Vec<&Value>>,
+) {
+    let id = string(&row["id"]);
+    let kind = string(&row["issue_type"]);
+    let type_label = if row["status"] == "closed" {
+        format!(" {kind}")
+    } else if matches!(kind, "epic" | "bug") {
+        format!(" [{kind}]")
+    } else {
+        String::new()
+    };
+    println!(
+        "{prefix}{branch}{} {id} P{}{type_label} {}",
+        status_icon(row),
+        row["priority"],
+        string(&row["title"])
+    );
+    if let Some(children) = groups.get(&Some(id)) {
+        let indent = match branch {
+            "├── " => "│   ",
+            "└── " => "    ",
+            _ => "",
+        };
+        let prefix = format!("{prefix}{indent}");
+        for (index, child) in children.iter().enumerate() {
+            let branch = if index + 1 == children.len() {
+                "└── "
+            } else {
+                "├── "
+            };
+            issue_branch(child, &prefix, branch, groups);
+        }
+    }
 }
 
 fn blocking_cycles(client: &Client, edges: &[Value]) -> Vec<Vec<String>> {

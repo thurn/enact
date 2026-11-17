@@ -1,0 +1,849 @@
+{
+  "bd_version": "bd version 1.3.2 (9b65b9e19: master@9b65b9e198ac)",
+  "start": [
+    {
+      "_type": "issue",
+      "id": "compat-corpus.3",
+      "title": "Archive Atlas",
+      "status": "closed",
+      "priority": 0,
+      "issue_type": "task",
+      "owner": "derek@fake.email",
+      "created_at": "2026-11-17T14:29:52Z",
+      "created_by": "Derek Thurn",
+      "updated_at": "2026-11-17T14:29:52Z",
+      "closed_at": "2026-11-17T14:29:52Z",
+      "close_reason": "Already fixed",
+      "labels": [
+        "lane:y"
+      ],
+      "dependencies": [
+        {
+          "issue_id": "compat-corpus.3",
+          "depends_on_id": "compat-corpus",
+          "type": "parent-child",
+          "created_at": "2026-11-17T14:29:52Z",
+          "created_by": "Derek Thurn",
+          "metadata": "{}"
+        }
+      ],
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "comment_count": 0
+    },
+    {
+      "_type": "issue",
+      "id": "compat-corpus.2",
+      "title": "Mana blue symbol Atlas",
+      "status": "open",
+      "priority": 1,
+      "issue_type": "task",
+      "owner": "derek@fake.email",
+      "created_at": "2026-11-17T14:29:51Z",
+      "created_by": "Derek Thurn",
+      "updated_at": "2026-11-17T14:29:51Z",
+      "labels": [
+        "lane:y",
+        "overlap"
+      ],
+      "dependencies": [
+        {
+          "issue_id": "compat-corpus.2",
+          "depends_on_id": "compat-corpus",
+          "type": "parent-child",
+          "created_at": "2026-11-17T14:29:51Z",
+          "created_by": "Derek Thurn",
+          "metadata": "{}"
+        },
+        {
+          "issue_id": "compat-corpus.2",
+          "depends_on_id": "compat-corpus.1",
+          "type": "related",
+          "created_at": "2026-11-17T14:29:54Z",
+          "created_by": "Derek Thurn",
+          "metadata": "{}"
+        }
+      ],
+      "dependency_count": 0,
+      "dependent_count": 1,
+      "comment_count": 0
+    },
+    {
+      "_type": "issue",
+      "id": "compat-corpus.1.1",
+      "title": "Atlas nested child",
+      "status": "open",
+      "priority": 2,
+      "issue_type": "bug",
+      "owner": "derek@fake.email",
+      "created_at": "2026-11-17T14:29:53Z",
+      "created_by": "Derek Thurn",
+      "updated_at": "2026-11-17T14:29:53Z",
+      "labels": [
+        "overlap",
+        "tier:opus"
+      ],
+      "dependencies": [
+        {
+          "issue_id": "compat-corpus.1.1",
+          "depends_on_id": "compat-corpus.1",
+          "type": "parent-child",
+          "created_at": "2026-11-17T14:29:53Z",
+          "created_by": "Derek Thurn",
+          "metadata": "{}"
+        }
+      ],
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "comment_count": 0
+    },
+    {
+      "_type": "issue",
+      "id": "compat-corpus",
+      "title": "Search fixture",
+      "status": "open",
+      "priority": 2,
+      "issue_type": "epic",
+      "owner": "derek@fake.email",
+      "created_at": "2026-11-17T14:29:50Z",
+      "created_by": "Derek Thurn",
+      "updated_at": "2026-11-17T14:29:50Z",
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "comment_count": 0
+    },
+    {
+      "_type": "issue",
+      "id": "compat-corpus.1",
+      "title": "Atlas Mana Symbol",
+      "status": "open",
+      "priority": 2,
+      "issue_type": "task",
+      "owner": "derek@fake.email",
+      "created_at": "2026-11-17T14:29:50Z",
+      "created_by": "Derek Thurn",
+      "updated_at": "2026-11-17T14:29:50Z",
+      "labels": [
+        "overlap",
+        "tier:opus"
+      ],
+      "dependencies": [
+        {
+          "issue_id": "compat-corpus.1",
+          "depends_on_id": "compat-corpus",
+          "type": "parent-child",
+          "created_at": "2026-11-17T14:29:50Z",
+          "created_by": "Derek Thurn",
+          "metadata": "{}"
+        },
+        {
+          "issue_id": "compat-corpus.1",
+          "depends_on_id": "compat-corpus.2",
+          "type": "blocks",
+          "created_at": "2026-11-17T14:29:53Z",
+          "created_by": "Derek Thurn",
+          "metadata": "{}"
+        }
+      ],
+      "dependency_count": 1,
+      "dependent_count": 0,
+      "comment_count": 0
+    }
+  ],
+  "calls": [
+    {
+      "args": [
+        "search",
+        "mana",
+        "symbol",
+        "--status",
+        "open"
+      ],
+      "stdout": "Found 1 issues matching 'mana symbol':\ncompat-corpus.1 [P2] [task] open [overlap tier:opus] - Atlas Mana Symbol\n"
+    },
+    {
+      "args": [
+        "search",
+        "mAnA",
+        "sYmBoL",
+        "--status",
+        "open",
+        "--json"
+      ],
+      "stdout": [
+        {
+          "id": "compat-corpus.1",
+          "title": "Atlas Mana Symbol",
+          "status": "open",
+          "priority": 2,
+          "issue_type": "task",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:50Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:50Z",
+          "labels": [
+            "overlap",
+            "tier:opus"
+          ],
+          "dependency_count": 1,
+          "dependent_count": 0,
+          "comment_count": 0
+        }
+      ]
+    },
+    {
+      "args": [
+        "search",
+        "atlas",
+        "--json"
+      ],
+      "stdout": [
+        {
+          "id": "compat-corpus.3",
+          "title": "Archive Atlas",
+          "status": "closed",
+          "priority": 0,
+          "issue_type": "task",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:52Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:52Z",
+          "closed_at": "2026-11-17T14:29:52Z",
+          "close_reason": "Already fixed",
+          "labels": [
+            "lane:y"
+          ],
+          "dependency_count": 0,
+          "dependent_count": 0,
+          "comment_count": 0
+        },
+        {
+          "id": "compat-corpus.2",
+          "title": "Mana blue symbol Atlas",
+          "status": "open",
+          "priority": 1,
+          "issue_type": "task",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:51Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:51Z",
+          "labels": [
+            "lane:y",
+            "overlap"
+          ],
+          "dependency_count": 0,
+          "dependent_count": 1,
+          "comment_count": 0
+        },
+        {
+          "id": "compat-corpus.1.1",
+          "title": "Atlas nested child",
+          "status": "open",
+          "priority": 2,
+          "issue_type": "bug",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:53Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:53Z",
+          "labels": [
+            "overlap",
+            "tier:opus"
+          ],
+          "dependency_count": 0,
+          "dependent_count": 0,
+          "comment_count": 0
+        },
+        {
+          "id": "compat-corpus.1",
+          "title": "Atlas Mana Symbol",
+          "status": "open",
+          "priority": 2,
+          "issue_type": "task",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:50Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:50Z",
+          "labels": [
+            "overlap",
+            "tier:opus"
+          ],
+          "dependency_count": 1,
+          "dependent_count": 0,
+          "comment_count": 0
+        }
+      ]
+    },
+    {
+      "args": [
+        "search",
+        "atlas",
+        "--status",
+        "closed",
+        "--json"
+      ],
+      "stdout": [
+        {
+          "id": "compat-corpus.3",
+          "title": "Archive Atlas",
+          "status": "closed",
+          "priority": 0,
+          "issue_type": "task",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:52Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:52Z",
+          "closed_at": "2026-11-17T14:29:52Z",
+          "close_reason": "Already fixed",
+          "labels": [
+            "lane:y"
+          ],
+          "dependency_count": 0,
+          "dependent_count": 0,
+          "comment_count": 0
+        }
+      ]
+    },
+    {
+      "args": [
+        "search",
+        "atlas",
+        "--limit",
+        "1",
+        "--json"
+      ],
+      "stdout": [
+        {
+          "id": "compat-corpus.3",
+          "title": "Archive Atlas",
+          "status": "closed",
+          "priority": 0,
+          "issue_type": "task",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:52Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:52Z",
+          "closed_at": "2026-11-17T14:29:52Z",
+          "close_reason": "Already fixed",
+          "labels": [
+            "lane:y"
+          ],
+          "dependency_count": 0,
+          "dependent_count": 0,
+          "comment_count": 0
+        }
+      ]
+    },
+    {
+      "args": [
+        "search",
+        "compat-cor",
+        "--limit",
+        "2",
+        "--json"
+      ],
+      "stdout": [
+        {
+          "id": "compat-corpus.3",
+          "title": "Archive Atlas",
+          "status": "closed",
+          "priority": 0,
+          "issue_type": "task",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:52Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:52Z",
+          "closed_at": "2026-11-17T14:29:52Z",
+          "close_reason": "Already fixed",
+          "labels": [
+            "lane:y"
+          ],
+          "dependency_count": 0,
+          "dependent_count": 0,
+          "comment_count": 0
+        },
+        {
+          "id": "compat-corpus.2",
+          "title": "Mana blue symbol Atlas",
+          "status": "open",
+          "priority": 1,
+          "issue_type": "task",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:51Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:51Z",
+          "labels": [
+            "lane:y",
+            "overlap"
+          ],
+          "dependency_count": 0,
+          "dependent_count": 1,
+          "comment_count": 0
+        }
+      ]
+    },
+    {
+      "args": [
+        "search",
+        "compat-corpus.1",
+        "--status",
+        "open",
+        "--limit",
+        "1",
+        "--json"
+      ],
+      "stdout": [
+        {
+          "id": "compat-corpus.1.1",
+          "title": "Atlas nested child",
+          "status": "open",
+          "priority": 2,
+          "issue_type": "bug",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:53Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:53Z",
+          "labels": [
+            "overlap",
+            "tier:opus"
+          ],
+          "dependency_count": 0,
+          "dependent_count": 0,
+          "comment_count": 0
+        }
+      ]
+    },
+    {
+      "args": [
+        "search",
+        "absent-title"
+      ],
+      "stdout": "No issues found matching 'absent-title'\n"
+    },
+    {
+      "args": [
+        "children",
+        "compat-corpus",
+        "--json"
+      ],
+      "stdout": [
+        {
+          "id": "compat-corpus.3",
+          "title": "Archive Atlas",
+          "status": "closed",
+          "priority": 0,
+          "issue_type": "task",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:52Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:52Z",
+          "closed_at": "2026-11-17T14:29:52Z",
+          "close_reason": "Already fixed",
+          "labels": [
+            "lane:y"
+          ],
+          "dependencies": [
+            {
+              "issue_id": "compat-corpus.3",
+              "depends_on_id": "compat-corpus",
+              "type": "parent-child",
+              "created_at": "2026-11-17T14:29:52Z",
+              "created_by": "Derek Thurn",
+              "metadata": "{}"
+            }
+          ],
+          "dependency_count": 0,
+          "dependent_count": 0,
+          "comment_count": 0,
+          "parent": "compat-corpus"
+        },
+        {
+          "id": "compat-corpus.2",
+          "title": "Mana blue symbol Atlas",
+          "status": "open",
+          "priority": 1,
+          "issue_type": "task",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:51Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:51Z",
+          "labels": [
+            "lane:y",
+            "overlap"
+          ],
+          "dependencies": [
+            {
+              "issue_id": "compat-corpus.2",
+              "depends_on_id": "compat-corpus.1",
+              "type": "related",
+              "created_at": "2026-11-17T14:29:54Z",
+              "created_by": "Derek Thurn",
+              "metadata": "{}"
+            },
+            {
+              "issue_id": "compat-corpus.2",
+              "depends_on_id": "compat-corpus",
+              "type": "parent-child",
+              "created_at": "2026-11-17T14:29:51Z",
+              "created_by": "Derek Thurn",
+              "metadata": "{}"
+            }
+          ],
+          "dependency_count": 0,
+          "dependent_count": 1,
+          "comment_count": 0,
+          "parent": "compat-corpus"
+        },
+        {
+          "id": "compat-corpus.1",
+          "title": "Atlas Mana Symbol",
+          "status": "open",
+          "priority": 2,
+          "issue_type": "task",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:50Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:50Z",
+          "labels": [
+            "overlap",
+            "tier:opus"
+          ],
+          "dependencies": [
+            {
+              "issue_id": "compat-corpus.1",
+              "depends_on_id": "compat-corpus.2",
+              "type": "blocks",
+              "created_at": "2026-11-17T14:29:53Z",
+              "created_by": "Derek Thurn",
+              "metadata": "{}"
+            },
+            {
+              "issue_id": "compat-corpus.1",
+              "depends_on_id": "compat-corpus",
+              "type": "parent-child",
+              "created_at": "2026-11-17T14:29:50Z",
+              "created_by": "Derek Thurn",
+              "metadata": "{}"
+            }
+          ],
+          "dependency_count": 1,
+          "dependent_count": 0,
+          "comment_count": 0,
+          "parent": "compat-corpus"
+        }
+      ]
+    },
+    {
+      "args": [
+        "children",
+        "compat-corpus"
+      ],
+      "stdout": "○ compat-corpus P2 [epic] Search fixture\n├── ✓ compat-corpus.3 P0 task Archive Atlas\n├── ○ compat-corpus.2 P1 Mana blue symbol Atlas\n└── ○ compat-corpus.1 P2 Atlas Mana Symbol\n    └── ○ compat-corpus.1.1 P2 [bug] Atlas nested child\n\n--------------------------------------------------------------------------------\nTotal: 5 issues (4 open, 0 in progress)\n\nStatus: ○ open  ◐ in_progress  ● blocked  ✓ closed  ❄ deferred\nPriority: P0–P4 (label only; not a status icon)\n"
+    },
+    {
+      "args": [
+        "children",
+        "compat-corpus.3",
+        "--json"
+      ],
+      "stdout": []
+    },
+    {
+      "args": [
+        "list",
+        "--label-any",
+        "tier:opus,lane:y",
+        "--status",
+        "open"
+      ],
+      "stdout": "○ compat-corpus.2 P1 Mana blue symbol Atlas\n○ compat-corpus.1 P2 Atlas Mana Symbol\n└── ○ compat-corpus.1.1 P2 [bug] Atlas nested child\n\n--------------------------------------------------------------------------------\nTotal: 3 issues (3 open, 0 in progress)\n\nStatus: ○ open  ◐ in_progress  ● blocked  ✓ closed  ❄ deferred\nPriority: P0–P4 (label only; not a status icon)\n"
+    },
+    {
+      "args": [
+        "list",
+        "--label-any",
+        "tier:opus,lane:y",
+        "--label",
+        "overlap",
+        "--status",
+        "open",
+        "--json"
+      ],
+      "stdout": [
+        {
+          "id": "compat-corpus.2",
+          "title": "Mana blue symbol Atlas",
+          "status": "open",
+          "priority": 1,
+          "issue_type": "task",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:51Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:51Z",
+          "labels": [
+            "lane:y",
+            "overlap"
+          ],
+          "dependencies": [
+            {
+              "issue_id": "compat-corpus.2",
+              "depends_on_id": "compat-corpus.1",
+              "type": "related",
+              "created_at": "2026-11-17T14:29:54Z",
+              "created_by": "Derek Thurn",
+              "metadata": "{}"
+            },
+            {
+              "issue_id": "compat-corpus.2",
+              "depends_on_id": "compat-corpus",
+              "type": "parent-child",
+              "created_at": "2026-11-17T14:29:51Z",
+              "created_by": "Derek Thurn",
+              "metadata": "{}"
+            }
+          ],
+          "dependency_count": 0,
+          "dependent_count": 1,
+          "comment_count": 0,
+          "parent": "compat-corpus"
+        },
+        {
+          "id": "compat-corpus.1.1",
+          "title": "Atlas nested child",
+          "status": "open",
+          "priority": 2,
+          "issue_type": "bug",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:53Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:53Z",
+          "labels": [
+            "overlap",
+            "tier:opus"
+          ],
+          "dependencies": [
+            {
+              "issue_id": "compat-corpus.1.1",
+              "depends_on_id": "compat-corpus.1",
+              "type": "parent-child",
+              "created_at": "2026-11-17T14:29:53Z",
+              "created_by": "Derek Thurn",
+              "metadata": "{}"
+            }
+          ],
+          "dependency_count": 0,
+          "dependent_count": 0,
+          "comment_count": 0,
+          "parent": "compat-corpus.1"
+        },
+        {
+          "id": "compat-corpus.1",
+          "title": "Atlas Mana Symbol",
+          "status": "open",
+          "priority": 2,
+          "issue_type": "task",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:50Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:50Z",
+          "labels": [
+            "overlap",
+            "tier:opus"
+          ],
+          "dependencies": [
+            {
+              "issue_id": "compat-corpus.1",
+              "depends_on_id": "compat-corpus.2",
+              "type": "blocks",
+              "created_at": "2026-11-17T14:29:53Z",
+              "created_by": "Derek Thurn",
+              "metadata": "{}"
+            },
+            {
+              "issue_id": "compat-corpus.1",
+              "depends_on_id": "compat-corpus",
+              "type": "parent-child",
+              "created_at": "2026-11-17T14:29:50Z",
+              "created_by": "Derek Thurn",
+              "metadata": "{}"
+            }
+          ],
+          "dependency_count": 1,
+          "dependent_count": 0,
+          "comment_count": 0,
+          "parent": "compat-corpus"
+        }
+      ]
+    },
+    {
+      "args": [
+        "create",
+        "A positional bug",
+        "--type",
+        "bug",
+        "-p",
+        "0",
+        "--parent",
+        "compat-corpus",
+        "-l",
+        "tier:opus,lane:y",
+        "--body-file",
+        "bug-body.txt",
+        "--acceptance",
+        "Fix the issue",
+        "--silent"
+      ],
+      "stdout": "compat-corpus.4\n",
+      "files": {
+        "bug-body.txt": "Steps to reproduce.\n"
+      }
+    },
+    {
+      "args": [
+        "show",
+        "compat-corpus.4",
+        "--json"
+      ],
+      "stdout": [
+        {
+          "id": "compat-corpus.4",
+          "title": "A positional bug",
+          "description": "Steps to reproduce.\n",
+          "acceptance_criteria": "Fix the issue",
+          "status": "open",
+          "priority": 0,
+          "issue_type": "bug",
+          "owner": "derek@fake.email",
+          "created_at": "2026-11-17T14:29:59Z",
+          "created_by": "Derek Thurn",
+          "updated_at": "2026-11-17T14:29:59Z",
+          "labels": [
+            "lane:y",
+            "tier:opus"
+          ],
+          "dependencies": [
+            {
+              "id": "compat-corpus",
+              "title": "Search fixture",
+              "status": "open",
+              "priority": 2,
+              "issue_type": "epic",
+              "owner": "derek@fake.email",
+              "created_at": "2026-11-17T14:29:50Z",
+              "created_by": "Derek Thurn",
+              "updated_at": "2026-11-17T14:29:50Z",
+              "dependency_type": "parent-child"
+            }
+          ],
+          "parent": "compat-corpus",
+          "dependent_count": 0,
+          "dependency_count": 1,
+          "comment_count": 0,
+          "revision": "-3173768748312960971"
+        }
+      ]
+    },
+    {
+      "args": [
+        "comments",
+        "add",
+        "compat-corpus.1",
+        "-f",
+        "comment.txt"
+      ],
+      "stdout": "Comment added to compat-corpus.1\n",
+      "files": {
+        "comment.txt": "  First\r\nsecond\t雪\n"
+      }
+    },
+    {
+      "args": [
+        "comments",
+        "compat-corpus.1",
+        "--json"
+      ],
+      "stdout": [
+        {
+          "id": "92c698e4-3026-5c63-9876-dde3e838ca88",
+          "issue_id": "compat-corpus.1",
+          "author": "Derek Thurn",
+          "text": "  First\r\nsecond\t雪\n",
+          "created_at": "2026-11-17T14:29:59Z"
+        }
+      ]
+    },
+    {
+      "args": [
+        "dep",
+        "cycles"
+      ],
+      "stdout": "\n✓ No dependency cycles detected\n\n"
+    },
+    {
+      "args": [
+        "dep",
+        "cycles",
+        "--json"
+      ],
+      "stdout": []
+    },
+    {
+      "args": [
+        "dep",
+        "cycles"
+      ],
+      "stdout": "\n⚠ Found 1 dependency cycles:\n\n1. Cycle involving:\n   - compat-corpus.1: Atlas Mana Symbol\n   - compat-corpus.2: Mana blue symbol Atlas\n\n",
+      "with_cycle": true
+    },
+    {
+      "args": [
+        "dep",
+        "cycles",
+        "--json"
+      ],
+      "stdout": [
+        {
+          "members": [
+            {
+              "id": "compat-corpus.1",
+              "issue": {
+                "id": "compat-corpus.1",
+                "title": "Atlas Mana Symbol",
+                "status": "open",
+                "priority": 2,
+                "issue_type": "task",
+                "owner": "derek@fake.email",
+                "created_at": "2026-11-17T14:29:50Z",
+                "created_by": "Derek Thurn",
+                "updated_at": "2026-11-17T14:29:50Z",
+                "labels": [
+                  "overlap",
+                  "tier:opus"
+                ]
+              }
+            },
+            {
+              "id": "compat-corpus.2",
+              "issue": {
+                "id": "compat-corpus.2",
+                "title": "Mana blue symbol Atlas",
+                "status": "open",
+                "priority": 1,
+                "issue_type": "task",
+                "owner": "derek@fake.email",
+                "created_at": "2026-11-17T14:29:51Z",
+                "created_by": "Derek Thurn",
+                "updated_at": "2026-11-17T14:29:51Z",
+                "labels": [
+                  "lane:y",
+                  "overlap"
+                ]
+              }
+            }
+          ],
+          "partial": false
+        }
+      ],
+      "with_cycle": true
+    }
+  ]
+}

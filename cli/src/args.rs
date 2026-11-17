@@ -33,6 +33,8 @@ pub enum Command {
         history: bool,
     },
     List(List),
+    /// Search ticket titles and ID prefixes, including closed tickets.
+    Search(Search),
     Ready(Ready),
     Graph {
         #[arg(long)]
@@ -190,6 +192,16 @@ pub struct List {
     pub ready: bool,
     #[arg(long)]
     pub limit: Option<u64>,
+}
+
+#[derive(Args)]
+pub struct Search {
+    #[arg(required = true)]
+    pub words: Vec<String>,
+    #[arg(long, short = 's')]
+    pub status: Option<String>,
+    #[arg(long, short = 'n', default_value_t = 50)]
+    pub limit: u64,
 }
 
 #[derive(Args)]
