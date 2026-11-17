@@ -336,8 +336,9 @@ impl FrozenBeads {
             .args([
                 "sql",
                 "--disable-auto-gc",
+                // `json`, not `jsonl`: dolt before 2.3 accepts only tabular, csv and json.
                 "-r",
-                "jsonl",
+                "json",
                 "-q",
                 "SELECT id, issue_id, event_type, actor, old_value, new_value, comment, \
                  DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%sZ') AS created_at FROM events",
@@ -353,7 +354,7 @@ impl FrozenBeads {
             )));
         }
         let mut histories: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-        for event in lines(Cursor::new(output.stdout))?.into_values() {
+        for event in lines(Cursor::new(json_rows(&output.stdout)?))?.into_values() {
             let id = field(&event, "issue_id")?;
             // Beads' default export excludes infrastructure and memories.
             if source.contains_key(id) {
@@ -366,6 +367,22 @@ impl FrozenBeads {
         }
         Ok(converted)
     }
+}
+
+/// The rows of `dolt sql -r json` output, `{"rows": [...]}`, one JSON object per line. Dolt
+/// prints nothing at all for a query with no rows.
+fn json_rows(output: &[u8]) -> Result<Vec<u8>> {
+    if output.iter().all(u8::is_ascii_whitespace) {
+        return Ok(Vec::new());
+    }
+    let parsed: Value = serde_json::from_slice(output)
+        .map_err(|error| usage(format!("dolt sql output: {error}")))?;
+    let mut rows = Vec::new();
+    for row in array(&parsed, "rows")? {
+        serde_json::to_writer(&mut rows, row).map_err(usage)?;
+        rows.push(b'\n');
+    }
+    Ok(rows)
 }
 
 pub struct Histories(PathBuf);
@@ -439,6 +456,16 @@ fn attach_events(mut events: Vec<Value>, snapshot: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_dolt_json_rows_and_empty_output() {
+        let output = br#"{"rows": [{"id": "e1", "issue_id": "by-a"}, {"id": "e2", "issue_id": "by-b"}]}"#;
+        let events = lines(Cursor::new(json_rows(output).ok().unwrap())).ok().unwrap();
+        assert_eq!(events.keys().collect::<Vec<_>>(), ["e1", "e2"]);
+        assert_eq!(events["e2"]["issue_id"], "by-b");
+        assert!(json_rows(b"\n").ok().unwrap().is_empty());
+        assert!(json_rows(br#"{"rows": []}"#).ok().unwrap().is_empty());
+    }
 
     #[test]
     fn converts_legacy_aliases_uuids_and_moved_children() {
