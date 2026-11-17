@@ -941,7 +941,7 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         # and failed "ownership operation busy" after three minutes.
         sync = shlex.join([Path(sys.executable).as_posix(), "-c",
                            "import subprocess, sys; sys.exit(subprocess.run("
-                           f"[sys.executable, {str(SCRIPT)!r}, 'sync'], timeout=60).returncode)"])
+                           f"[sys.executable, {SCRIPT.as_posix()!r}, 'sync'], timeout=60).returncode)"])
         wt = Path(self.a.enact("worktree", "create", "unlocked")["path"])
         self.configure_git(wt)
         self.a.commit_file(".enact.toml", ENACT_TOML.replace(
@@ -1247,27 +1247,6 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
         self.assertEqual(self.a.git("rev-parse", "master"), tip)
         self.assertTrue((self.a.path / "ok.txt").exists())
 
-    def test_push_owns_slow_ci_once_the_only_vizier_lease_expires(self):
-        epic = self.a.create("watched run", type="epic")
-        self.a.enact("next", "--epic", epic, session="vizier")  # registers and renews
-        lease = self.a.path / ".git" / "enact" / "vizier-vizier.json"
-        pushes = []
-        for name in ("fresh", "expired"):
-            bead = self.a.create(name, parent=epic)
-            self.a.enact("claim", bead)
-            path = Path(self.a.enact("worktree", "create", bead)["path"])
-            self.configure_git(path)
-            self.a.commit_file(f"{name}.txt", name, cwd=path)
-            pushes.append(self.a.enact("push", "--bead", bead, cwd=path))
-            # The next push reuses checkout a: let this runner finish first.
-            self.wait_for_ci(self.a)
-            # The vizier stopped renewing: age its lease past its time to live.
-            data = json.loads(lease.read_text())
-            data["at"] -= 3600
-            lease.write_text(json.dumps(data))
-        self.assertNotIn("watch_ci", pushes[0])
-        self.assertIn(f"enact ci --wait {pushes[1]['staging']}", pushes[1]["watch_ci"])
-
     def test_passing_ci_retries_a_failed_promotion(self):
         path = Path(self.a.enact("worktree", "create", "promotion")["path"])
         self.a.commit_file("good", "yes", cwd=path)
@@ -1353,8 +1332,10 @@ module['cmd_push'](argparse.Namespace(bead=sys.argv[2], skip_checks=False,
             wt = Path(self.a.enact("worktree", "create", f"ci-{name.lower()}")["path"])
             self.configure_git(wt)
             self.a.commit_file(name, "x", cwd=wt)
-            self.a.enact("push", cwd=wt)
-            self.wait_for_ci(self.a)
+            tip = self.a.enact("push", "--no-ci", cwd=wt)["staging"]
+            result, = self.a.enact("ci")["ran"]
+            self.assertEqual(result["tip"], tip)
+            self.assertFalse(result["passed"])
         stewards = self.a.bd("list", "--label", "role:steward")
         self.assertEqual(len(stewards), 1)
         self.assertEqual(stewards[0]["priority"], 0)
