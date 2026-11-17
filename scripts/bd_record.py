@@ -70,7 +70,7 @@ def append_record(path, record):
     # Each append is an independent gzip member. Repeated full-store exports
     # would otherwise write tens of gigabytes in a busy day.
     compressed = gzip.compress(line, compresslevel=1, mtime=0)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o600)
     try:
         # One append write per record so concurrent wrapper processes can share the file.
         os.write(fd, compressed)

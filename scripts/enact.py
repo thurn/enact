@@ -130,7 +130,7 @@ def run(
             timeout=timeout,
             **({"stdin": subprocess.DEVNULL} if input_text is None else {"input": input_text}),
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, NotADirectoryError):
         # A fresh clone has no local Beads database until `enact setup`
         # bootstraps it from the remote; a fresh machine may lack the tool.
         if not cwd.is_dir():

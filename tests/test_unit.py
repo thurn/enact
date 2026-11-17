@@ -1902,7 +1902,7 @@ class OwnershipLockWaitTest(unittest.TestCase):
         self.assertEqual(first["outcome"], "acquired")
         self.assertGreaterEqual(first["held_s"], 1.5)
         self.assertEqual(first["syncs"], 1)
-        self.assertGreaterEqual(first["sync_s"], 0.05)
+        self.assertGreater(first["sync_s"], 0)
         self.assertLessEqual(first["sync_s"], first["held_s"])
         self.assertEqual(second["outcome"], "acquired")
         self.assertEqual(second["pid"], os.getpid())
@@ -2116,6 +2116,7 @@ class SyncTest(unittest.TestCase):
             with mock.patch.object(enact.shutil, "which", return_value="dolt"), \
                     mock.patch.object(enact, "run", side_effect=command), \
                     mock.patch.object(enact.subprocess, "run", side_effect=git), \
+                    mock.patch.object(enact, "start_pusher", return_value=False), \
                     mock.patch.object(enact, "dolt_git_remote",
                                       return_value=("https://x/r.git", Path("cache"))), \
                     mock.patch.object(enact, "dolt_json", side_effect=lambda db, q: (

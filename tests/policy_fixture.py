@@ -25,6 +25,8 @@ class PolicyWorld:
             ("find_repo", {"return_value": self.repo}),
             ("Beads", {"return_value": self}),
             ("sync", {"return_value": {"remote": False, "dropped": []}}),
+            # A detached pusher cannot see this fixture's in-memory store.
+            ("start_pusher", {"return_value": False}),
             ("fetch", {"return_value": {}}),
             ("recover_deliveries", {"return_value": []}),
         ):
