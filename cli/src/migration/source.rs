@@ -191,7 +191,11 @@ fn convert_ticket(
         .iter()
         .map(|label| label.as_str().ok_or_else(|| usage("invalid label")))
         .collect::<Result<BTreeSet<_>>>()?;
-    let text = |key: &str| row[key].as_str().unwrap_or("");
+    let text = |key: &str| match &row[key] {
+        Value::Null => Ok(""),
+        Value::String(value) => Ok(value.as_str()),
+        _ => Err(usage(format!("invalid {key}, expected text"))),
+    };
     let mut metadata = match &row["metadata"] {
         Value::Null => serde_json::Map::new(),
         Value::Object(value) => value.clone(),
@@ -246,11 +250,11 @@ fn convert_ticket(
     }
     Ok(json!({
         "id": id, "aliases": [old_id], "parent": parent, "next_child": next_child,
-        "title": field(row, "title")?, "body": text("description"), "design": text("design"),
-        "acceptance": text("acceptance_criteria"), "notes": text("notes"),
+        "title": field(row, "title")?, "body": text("description")?, "design": text("design")?,
+        "acceptance": text("acceptance_criteria")?, "notes": text("notes")?,
         "type": field(row, "issue_type")?, "status": field(row, "status")?,
         "priority": row["priority"], "assignee": row["assignee"], "last": 0,
-        "labels": labels, "metadata": metadata, "created_by": text("created_by"),
+        "labels": labels, "metadata": metadata, "created_by": text("created_by")?,
         "created_at": field(row, "created_at")?, "updated_at": field(row, "updated_at")?,
         "defer_until": row["defer_until"], "closed_at": row["closed_at"], "close_reason": row["close_reason"],
         "edges": edges.into_values().collect::<Vec<_>>(), "comments": comments,
@@ -304,6 +308,8 @@ impl Histories {
             .as_array()
             .ok_or_else(|| usage("bd history did not return an array"))?
             .clone();
+        // Match Beads' newest-first audit listing even when a rehearsal
+        // already cached an unordered copy of the events.
         events.sort_by(|a, b| {
             b["created_at"]
                 .as_str()

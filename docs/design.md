@@ -2094,6 +2094,11 @@ idle connection costs nothing.
   `machine` event in the previous 10 minutes has posted `drained` (at most 5
   minutes, else it sets `before` again and stops), pulls the bead store, runs
   the final import and comparison, and sets `after`.
+- `tk compare` checks all imported fields and projects Beads' ready set
+  through readiness rule 5. Its `expected_readiness_differences` report lists
+  the raw results and live child IDs for each Beads-ready container blocked
+  solely by those children. A leaf mismatch, another blocker on a Beads-ready
+  container, or any field difference fails the comparison.
 - Before switching Beryl to `after`, move Beryl viewers off Bead Me Up, Scotty
   and stop any Scotty instance serving Beryl. Scotty polls `bd export --json`,
   and forwarding those exports would exhaust the daily SQLite read quota.

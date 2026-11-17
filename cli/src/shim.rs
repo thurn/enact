@@ -125,7 +125,7 @@ enum Action {
     Defer {
         id: String,
         #[arg(long)]
-        until: String,
+        until: Option<String>,
         #[arg(long)]
         reason: Option<String>,
     },
@@ -330,13 +330,35 @@ fn string(value: &Value) -> &str {
     value.as_str().unwrap_or_default()
 }
 
-fn update(client: &Client, id: &str, fields: Value) -> Result<Value> {
-    commands::single(
-        client,
-        json!({"op": "update", "id": id, "set": fields}),
-        vec![],
-    )?;
-    Ok(json!([output::row(client, &ticket(client, id, &[])?)]))
+fn set_deferral(
+    client: &Client,
+    id: &str,
+    mut fields: Value,
+    reason: Option<&str>,
+) -> Result<Option<Value>> {
+    for attempt in 0..=2 {
+        let before = ticket(client, id, &[])?;
+        if fields["status"] == "open" && before["status"] != "deferred" {
+            return Ok(None);
+        }
+        if let Some(reason) = reason.filter(|text| !text.is_empty()) {
+            let notes = string(&before["notes"]);
+            fields["notes"] = if notes.is_empty() {
+                json!(reason)
+            } else {
+                json!(format!("{notes}\n{reason}"))
+            };
+        }
+        // Keep a concurrent note or status edit when applying the change.
+        let condition = json!({"id": id, "version": before["version"]});
+        let operation = json!({"op": "update", "id": id, "set": fields});
+        match commands::single(client, operation, vec![condition]) {
+            Ok(_) => return Ok(Some(output::row(client, &ticket(client, id, &[])?))),
+            Err(error) if error.status == Some(409) && attempt < 2 => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("the final update attempt returns")
 }
 
 fn defer_until(until: String) -> Result<String> {
@@ -510,15 +532,22 @@ fn run(client: &Client, options: Options) -> Result<u8> {
         }
         Action::Epic { operation } => epic(client, operation)?,
         Action::Defer { id, until, reason } => {
-            let until = defer_until(until)?;
-            let mut fields = json!({"status": "deferred", "defer_until": until});
-            if let Some(reason) = reason {
-                fields["notes"] = json!(reason);
+            let mut fields = json!({"status": "deferred"});
+            if let Some(until) = until.filter(|date| !date.is_empty()) {
+                fields["defer_until"] = json!(defer_until(until)?);
             }
-            update(client, &id, fields)?
+            let row = set_deferral(client, &id, fields, reason.as_deref())?
+                .expect("defer changes the ticket");
+            rendered = Some(format!("* Deferred {}\n", string(&row["id"])));
+            json!([row])
         }
         Action::Undefer { id } => {
-            update(client, &id, json!({"status": "open", "defer_until": null}))?
+            let fields = json!({"status": "open", "defer_until": null});
+            let row = set_deferral(client, &id, fields, None)?;
+            rendered = Some(row.as_ref().map_or_else(String::new, |row| {
+                format!("* Undeferred {} (now open)\n", string(&row["id"]))
+            }));
+            json!(row.into_iter().collect::<Vec<_>>())
         }
         Action::Dolt { .. } => {
             rendered = Some("No remotes configured.\n".into());

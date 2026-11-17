@@ -413,7 +413,7 @@ def dated_deferrals(tk, bd, directory, env, address):
     epic, snoozed, indefinite = [row["id"] for row in request(address, "/snooze/api/batch", {"ops": [
         {"op": "create", "fields": {"title": "Snoozed work", "type": "epic"}},
         {"op": "create", "parent": "$0", "fields": {"title": "Shim snooze", "priority": 0, "labels": ["snooze-test"]}},
-        {"op": "create", "parent": "$0", "fields": {"title": "Indefinite", "status": "deferred", "labels": ["snooze-test"]}},
+        {"op": "create", "parent": "$0", "fields": {"title": "Indefinite", "notes": "Original", "labels": ["snooze-test"]}},
     ]})["results"]]
     imported = f"{epic}.3"
     snapshot = {
@@ -438,6 +438,11 @@ def dated_deferrals(tk, bd, directory, env, address):
 
     result, = ok(bd, ["defer", f"snooze-{snoozed}", "--until", "2099-01-01", "--json"], repo, env)
     assert result["status"] == "deferred", result
+    indefinite_alias = f"snooze-{indefinite}"
+    icebox = run(bd, ["defer", indefinite_alias, "--reason", "Waiting"], repo, env)
+    assert (icebox.returncode, icebox.stdout, icebox.stderr) == (0, f"* Deferred {indefinite_alias}\n", "")
+    saved = request(address, f"/snooze/api/tickets/{indefinite}")
+    assert (saved["status"], saved["defer_until"], saved["notes"]) == ("deferred", None, "Original\nWaiting")
     assert ready() == {}, ready()
     waiting = next_ticket()
     assert (waiting["action"], waiting["reason"]) == ("wait", "scheduled work"), waiting
@@ -452,10 +457,83 @@ def dated_deferrals(tk, bd, directory, env, address):
 
     picked = next_ticket()
     assert (picked["action"], picked["bead"]) == ("spawn", snoozed), picked
-    assert f"snooze-{indefinite}" not in ready()
-    ok(bd, ["undefer", f"snooze-{indefinite}", "--json"], repo, env)
-    assert f"snooze-{indefinite}" in ready()
+    assert indefinite_alias not in ready()
+    wake = run(bd, ["undefer", indefinite_alias], repo, env)
+    assert (wake.returncode, wake.stdout, wake.stderr) == (0, f"* Undeferred {indefinite_alias} (now open)\n", "")
+    assert indefinite_alias in ready()
     print("Imported and shim snoozes agree across bd ready, the change feed, and enact next.")
+
+
+def migration_compare(tk, fake, directory, env, address):
+    work = directory / "migration"
+    work.mkdir()
+    (work / ".enact.toml").write_text(f'[tickets]\nproject = "migration"\nurl = "{address}"\n')
+    request(address, "/test-token/migration")
+    legacy = {**env, "ENACT_REAL_BD": str(fake), "SHIM_TEST_SOURCE": str(work)}
+    export = work / "export"
+    ready = work / "ready"
+    history = work / "history-cache"
+    timestamp = "2026-11-16T08:00:00Z"
+    body = "雪\r\n‘quoted’\t" * 14_000
+
+    def issue(id, parent=None, blocker=None, **fields):
+        row = {"id": "by-" + id, "title": id, "issue_type": "task", "status": "open",
+               "priority": 2, "created_at": timestamp, "updated_at": timestamp, **fields}
+        row["dependencies"] = [
+            {"issue_id": row["id"], "depends_on_id": "by-" + target, "type": kind}
+            for target, kind in ((parent, "parent-child"), (blocker, "blocks")) if target
+        ]
+        return row
+
+    events = [{"id": "first", "created_at": timestamp, "event_type": "created"},
+              {"id": "second", "created_at": "2026-11-16T09:00:00Z", "event_type": "updated"}]
+    (work / "history").write_text(json.dumps(events))
+    comment = {"id": "source-comment", "author": "Ada", "created_at": timestamp, "text": "雪\r\ncomment"}
+    container = issue("container")
+    leaf = issue("elsewhere.3", parent="container", description=body, comments=[comment])
+    gate = issue("gate", blocker="elsewhere.3")
+    below_gate = issue("gate.1", parent="gate")
+    closed = issue("closed", parent="container", status="closed")
+    rows = [container, leaf, gate, below_gate, closed]
+    export.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    ready.write_text(json.dumps([container, leaf]))
+
+    copy = ["--json", "import", str(export), "--history-dir", str(history)]
+    paused = run(tk, [*copy, "--row-budget", "16"], work, legacy)
+    assert paused.returncode == 5, paused
+    first = json.loads(paused.stdout)
+    assert 0 < first["imported"] < len(rows), first
+    assert ok(tk, copy, work, legacy)["imported"] == len(rows) - first["imported"]
+    assert ok(tk, copy, work, legacy)["rows_written"] == 0
+    saved = request(address, "/migration/api/tickets/by-elsewhere.3?comments=1&history=1")
+    assert saved["id"] == "elsewhere.3" and saved["parent"] == "container"
+    assert saved["body"] == body and saved["comments"][0]["text"] == comment["text"]
+    assert saved["history"][0]["change"] == events[::-1]
+
+    compare = ["--json", "compare", "--history-dir", str(history)]
+    expected = [{"id": "container", "beads": True, "server": False, "live_children": ["elsewhere.3"]}]
+    assert ok(tk, compare, work, legacy) == {
+        "compared": len(rows), "differences": [], "expected_readiness_differences": expected,
+    }
+    # The old report omits a ready leaf and claims a container is ready
+    # despite an active blocker in addition to its own child.
+    ready.write_text(json.dumps([container, gate]))
+    drift = run(tk, compare, work, legacy)
+    assert drift.returncode == 1, drift
+    result = json.loads(drift.stdout)
+    assert result["expected_readiness_differences"] == expected
+    assert [(d["id"], d["fields"], d["ready"]["beads"], d["ready"]["server"])
+            for d in result["differences"]] == [
+        ("elsewhere.3", [], False, True), ("gate", [], True, False),
+    ]
+    assert {row["rule"] for row in result["differences"][1]["ready"]["blocked_by"]} == {2, 5}
+
+    ready.write_text(json.dumps([container, leaf]))
+    ok(tk, ["--json", "update", "elsewhere.3", "--title", "Changed on server"], work, legacy)
+    drift = run(tk, compare, work, legacy)
+    assert drift.returncode == 1, drift
+    assert "title" in json.loads(drift.stdout)["differences"][0]["fields"]
+    print("Migration compare accepts rule 5 only and fails on leaf, mixed blocker and field drift.")
 
 
 def main():
@@ -474,6 +552,13 @@ def main():
 use std::io::Read;
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if let Some(source) = std::env::var_os("SHIM_TEST_SOURCE") {
+        let command = args.iter().find(|arg| !arg.starts_with("--")).unwrap();
+        assert!(matches!(command.as_str(), "export" | "history" | "ready"));
+        let file = std::path::PathBuf::from(source).join(command);
+        print!("{}", std::fs::read_to_string(file).unwrap());
+        return;
+    }
     if args.last().is_some_and(|arg| arg == "--help") {
         let file = std::path::PathBuf::from(std::env::var_os("SHIM_TEST_HELP").unwrap()).join(args[..args.len()-1].join("_"));
         print!("{}", std::fs::read_to_string(file).unwrap());
@@ -522,6 +607,7 @@ fn main() {
             (workspace / ".enact.toml").write_text(f'[tickets]\nproject = "by"\nurl = "{address}"\n')
             replay(tk, bd, workspace, env, address)
             dated_deferrals(tk, bd, directory, env, address)
+            migration_compare(tk, fake, directory, env, address)
         finally:
             worker.stdin.close()
             worker.wait(timeout=45)

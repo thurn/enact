@@ -63,7 +63,7 @@ fn upload(
     let mut pending = Vec::new();
     for (id, mut ticket) in expected {
         let previous = actual.get(&id).unwrap_or(&Value::Null);
-        if difference(&ticket, previous).is_empty() {
+        if import_difference(&ticket, previous).is_empty() {
             continue;
         }
         // The allocation counter and aliases survive a replay of an older export.
@@ -119,7 +119,7 @@ fn upload(
             let current = server_snapshots(client)?;
             for ticket in tickets {
                 let id = field(ticket, "id")?;
-                if !difference(ticket, current.get(id).unwrap_or(&Value::Null)).is_empty() {
+                if !import_difference(ticket, current.get(id).unwrap_or(&Value::Null)).is_empty() {
                     return Err(usage(format!(
                         "{id}: server ticket changed during import or is newer than the input"
                     )));
@@ -227,21 +227,24 @@ fn difference<'a>(expected: &'a Value, actual: &Value) -> Vec<&'a str> {
         .as_object()
         .expect("ticket object")
         .iter()
-        .filter_map(|(key, value)| {
-            let same = match key.as_str() {
-                "next_child" => actual[key].as_u64() >= value.as_u64(),
-                "aliases" => value.as_array().is_some_and(|aliases| {
-                    aliases.iter().all(|alias| {
-                        actual[key]
-                            .as_array()
-                            .is_some_and(|present| present.contains(alias))
-                    })
-                }),
-                _ => actual[key] == *value,
-            };
-            (!same).then_some(key.as_str())
-        })
+        .filter_map(|(key, value)| (actual.get(key) != Some(value)).then_some(key.as_str()))
         .collect()
+}
+
+fn import_difference<'a>(expected: &'a Value, actual: &Value) -> Vec<&'a str> {
+    let mut fields = difference(expected, actual);
+    // An import may supplement a prior snapshot. Preserve aliases and child
+    // numbers that have already been allocated, even during reconciliation.
+    fields.retain(|field| match *field {
+        "next_child" => actual["next_child"].as_u64() < expected["next_child"].as_u64(),
+        "aliases" => !expected["aliases"].as_array().is_some_and(|aliases| {
+            actual["aliases"]
+                .as_array()
+                .is_some_and(|present| aliases.iter().all(|alias| present.contains(alias)))
+        }),
+        _ => true,
+    });
+    fields
 }
 
 fn changed_rows<'a>(
@@ -267,7 +270,7 @@ fn changed_rows<'a>(
 }
 
 fn estimate(ticket: &Value, previous: &Value) -> Result<u64> {
-    let fields = difference(ticket, previous);
+    let fields = import_difference(ticket, previous);
     // Count the ticket row and both secondary indexes conservatively. An
     // alias and an edge can also consume an index write.
     let ticket_rows = if fields
@@ -308,54 +311,114 @@ pub fn compare(client: &Client, history_dir: Option<PathBuf>) -> Result<Value> {
     let graph = client
         .get(&client.url(&["graph"], &[]), None, client.retry_for)?
         .json()?;
-    let server_ready = array(&graph, "tickets")?
-        .iter()
-        .map(|ticket| {
-            Ok((
-                field(ticket, "id")?,
-                ticket["ready"]
-                    .as_bool()
-                    .ok_or_else(|| usage("missing graph readiness"))?,
-            ))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
+    compare_snapshots(&expected, &actual, &ready, array(&graph, "tickets")?)
+}
+
+fn compare_snapshots(
+    expected: &Tickets,
+    actual: &Tickets,
+    ready: &BTreeSet<String>,
+    graph: &[Value],
+) -> Result<Value> {
+    let mut server_graph = BTreeMap::new();
+    for ticket in graph {
+        let id = field(ticket, "id")?.to_owned();
+        let is_ready = ticket["ready"]
+            .as_bool()
+            .ok_or_else(|| usage(format!("{id}: missing graph readiness")))?;
+        if server_graph
+            .insert(id.clone(), (is_ready, ticket))
+            .is_some()
+        {
+            return Err(usage(format!("server graph repeated ticket {id}")));
+        }
+    }
+
+    // Derive the expected rule 5 blockers from the source hierarchy. A
+    // reparented ticket can have a different parent from its dotted ID.
+    let mut live_children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (id, ticket) in expected {
+        if ticket["status"] != "closed"
+            && let Some(parent) = ticket["parent"].as_str()
+        {
+            live_children.entry(parent).or_default().push(id);
+        }
+    }
+
     let ids = expected
         .keys()
         .chain(actual.keys())
+        .chain(ready.iter())
+        .chain(server_graph.keys())
         .collect::<BTreeSet<_>>();
     let mut differences = Vec::new();
+    let mut expected_readiness_differences = Vec::new();
     let mut output = Vec::new();
     for id in ids {
-        let changes = match (expected.get(id), actual.get(id)) {
+        let mut changes = match (expected.get(id), actual.get(id)) {
             (Some(before), after) => difference(before, after.unwrap_or(&Value::Null)),
             (None, _) => vec!["missing from Beads"],
         };
-        let readiness = (expected
+        let server_row = server_graph.get(id);
+        if actual
             .get(id)
-            .is_some_and(|ticket| ticket["status"] == "open")
-            && actual.contains_key(id))
-        .then(|| {
-            let legacy = ready.contains(id);
-            let server = server_ready.get(id.as_str()).copied().unwrap_or(false);
-            (legacy != server).then_some((legacy, server))
-        })
-        .flatten();
-        if !changes.is_empty() || readiness.is_some() {
+            .is_some_and(|ticket| ticket["status"] != "closed")
+            != server_row.is_some()
+        {
+            changes.push("graph membership");
+        }
+        let beads = ready.contains(id);
+        let server = server_row.is_some_and(|(is_ready, _)| *is_ready);
+        let children = live_children
+            .get(id.as_str())
+            .map_or(&[][..], Vec::as_slice);
+        let projected = beads && children.is_empty();
+        // Only rule 5 may explain the difference. Any additional server
+        // blocker on a Beads-ready container still requires investigation.
+        let expected_blockers: Vec<_> = children
+            .iter()
+            .map(|child| json!({"id": child, "rule": 5}))
+            .collect();
+        let expected_difference = beads
+            && !server
+            && !children.is_empty()
+            && expected
+                .get(id)
+                .is_some_and(|ticket| ticket["status"] == "open")
+            && server_row.is_some_and(|(_, ticket)| {
+                ticket["blocked_by"].as_array() == Some(&expected_blockers)
+            });
+        if expected_difference {
+            expected_readiness_differences.push(json!({
+                "id": id, "beads": beads, "server": server, "live_children": children,
+            }));
+        }
+        let readiness_differs = (beads != server || projected != server) && !expected_difference;
+        if !changes.is_empty() || readiness_differs {
             let mut description = changes.join(", ");
-            if let Some((legacy, server)) = readiness {
+            if readiness_differs {
                 if !description.is_empty() {
                     description.push_str(", ");
                 }
-                description.push_str(&format!("ready: Beads {legacy}, server {server}"));
+                description.push_str(&format!(
+                    "ready: Beads {beads}, projected {projected}, server {server}"
+                ));
             }
             output.push(format!("{id}: {description}"));
             differences.push(json!({
                 "id": id, "fields": changes,
-                "ready": readiness.map(|(legacy, server)| json!({"beads": legacy, "server": server})),
+                "ready": readiness_differs.then(|| json!({
+                    "beads": beads, "projected": projected, "server": server,
+                    "blocked_by": server_row.and_then(|(_, ticket)| ticket.get("blocked_by")),
+                })),
             }));
         }
     }
-    let result = json!({"compared": expected.len(), "differences": differences});
+    let result = json!({
+        "compared": expected.len(),
+        "differences": differences,
+        "expected_readiness_differences": expected_readiness_differences,
+    });
     if output.is_empty() {
         Ok(result)
     } else {
