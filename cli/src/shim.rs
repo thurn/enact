@@ -2,6 +2,7 @@ mod create;
 mod diagnostics;
 mod output;
 pub(crate) mod state;
+mod update;
 
 use crate::client::{Client, Failure, Result, usage};
 use crate::commands;
@@ -98,15 +99,7 @@ enum Action {
         verbose: bool,
     },
     Create(create::Create),
-    Update {
-        id: String,
-        #[arg(long)]
-        status: Option<String>,
-        #[arg(long)]
-        assignee: Option<String>,
-        #[arg(long)]
-        set_metadata: Vec<String>,
-    },
+    Update(update::Update),
     Close {
         id: String,
         #[arg(long)]
@@ -199,7 +192,7 @@ impl Action {
     fn write_name(&self) -> &str {
         match self {
             Self::Create(_) => "create",
-            Self::Update { .. } => "update",
+            Self::Update(_) => "update",
             Self::Close { .. } => "close",
             Self::Dep { .. } => "dep",
             Self::Label { .. } => "label",
@@ -271,7 +264,7 @@ pub fn main() -> ExitCode {
 fn legacy_help(args: &[OsString]) -> bool {
     match args {
         [command, help] if help == "--help" || help == "-h" => {
-            ["comments", "create", "list", "ready", "undefer"]
+            ["comments", "create", "list", "ready", "undefer", "update"]
                 .iter()
                 .any(|name| command == *name)
         }
@@ -440,68 +433,7 @@ fn run(client: &Client, options: Options) -> Result<u8> {
         Action::Show { ids } => return output::show(client, &ids, options.json),
         Action::Export { .. } => return Err(retired_export()),
         Action::Create(create) => return create.run(client, options.json),
-        Action::Update {
-            id,
-            status,
-            assignee,
-            set_metadata,
-        } => {
-            let before = ticket(client, &id, &[])?;
-            let mut fields = json!({});
-            let mut operation = json!({"op": "update", "id": id});
-            let (mut metadata, mut unset) = (serde_json::Map::new(), Vec::new());
-            if let Some(status) = status {
-                if status == "in_progress"
-                    && before["status"] != "in_progress"
-                    && before["metadata"]["_enact_beads"]["started_at"].is_null()
-                {
-                    let mut legacy = before["metadata"]["_enact_beads"]
-                        .as_object()
-                        .cloned()
-                        .unwrap_or_default();
-                    legacy.insert(
-                        "started_at".into(),
-                        json!(
-                            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-                        ),
-                    );
-                    metadata.insert("_enact_beads".into(), json!(legacy));
-                }
-                fields["status"] = json!(status);
-            }
-            if let Some(assignee) = assignee {
-                fields["assignee"] = if assignee.is_empty() {
-                    Value::Null
-                } else {
-                    json!(assignee)
-                };
-            }
-            for assignment in set_metadata {
-                let (key, value) = assignment
-                    .split_once('=')
-                    .ok_or_else(|| usage("--set-metadata expects key=value"))?;
-                if key.is_empty() || key == "_enact_beads" {
-                    return Err(usage("invalid metadata key"));
-                }
-                if value.is_empty() {
-                    unset.push(key.to_owned());
-                } else {
-                    metadata.insert(
-                        key.to_owned(),
-                        serde_json::from_str(value).unwrap_or_else(|_| json!(value)),
-                    );
-                }
-            }
-            operation["set"] = fields;
-            operation["set_meta"] = json!(metadata);
-            operation["unset_meta"] = json!(unset);
-            commands::single(
-                client,
-                operation,
-                vec![json!({"id": id, "version": before["version"]})],
-            )?;
-            json!([output::row(client, &ticket(client, &id, &[])?)])
-        }
+        Action::Update(update) => return update.run(client, options.json, options.quiet),
         Action::Close { id, reason, force } => {
             let before = ticket(client, &id, &[])?;
             if !force

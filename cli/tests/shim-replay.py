@@ -78,7 +78,7 @@ def normalize(value, comment_ids, allocated_roots):
         result["revision"] = "<version>"
     ticket_id = result.get("issue_id", result.get("id", ""))
     if ticket_id.startswith("by-corpus") or ticket_id in allocated_roots:
-        for field in ("created_at", "updated_at", "started_at", "closed_at"):
+        for field in ("created_at", "updated_at", "started_at", "closed_at", "heartbeat_at", "lease_expires_at"):
             if field in result:
                 parse_time(result[field])
                 result[field] = "<generated time>"
@@ -116,7 +116,8 @@ def verify_ticket(native, row):
     for legacy, key in (
         ("title", "title"), ("status", "status"), ("priority", "priority"), ("issue_type", "type"),
         ("created_by", "created_by"), ("assignee", "assignee"), ("description", "body"),
-        ("acceptance_criteria", "acceptance"), ("notes", "notes"), ("close_reason", "close_reason"),
+        ("acceptance_criteria", "acceptance"), ("design", "design"), ("notes", "notes"),
+        ("close_reason", "close_reason"),
     ):
         actual = native[key] if native[key] != "" else None
         assert actual == row.get(legacy), (row["id"], key, actual, row.get(legacy))
@@ -126,7 +127,7 @@ def verify_ticket(native, row):
     assert metadata == row.get("metadata", {})
 
 
-def verify_create_or_close(address, expected, actual_id):
+def verify_persisted(address, expected, actual_id, prior_parent):
     native = request(address, f"/by/api/tickets/{actual_id}")
     verify_ticket(native, expected)
     for field in ("closed_at", "defer_until"):
@@ -137,6 +138,16 @@ def verify_create_or_close(address, expected, actual_id):
                 assert parse_time(native[field]) == parse_time(recorded), field
         else:
             assert native[field] is None, field
+    legacy = native["metadata"].get("_enact_beads", {})
+    for field in ("started_at", "heartbeat_at", "lease_expires_at"):
+        if field in expected:
+            parse_time(legacy[field])
+        else:
+            assert field not in legacy, (actual_id, field)
+    if "lease_expires_at" in expected:
+        def lease_duration(ticket):
+            return parse_time(ticket["lease_expires_at"]) - parse_time(ticket["heartbeat_at"])
+        assert lease_duration(legacy) == lease_duration(expected)
     parent = expected.get("parent")
     assert native["parent"] == (parent.removeprefix("by-") if parent else None), "parent"
     expected_edges = []
@@ -152,6 +163,8 @@ def verify_create_or_close(address, expected, actual_id):
     assert sorted(actual_edges) == sorted(expected_edges), (actual_edges, expected_edges)
     if parent:
         assert native["id"] in request(address, f"/by/api/tickets/{parent}")["children"]
+    if prior_parent and prior_parent != native["parent"]:
+        assert native["id"] not in request(address, f"/by/api/tickets/{prior_parent}")["children"]
 
 
 def verify_write(address, args, recorded):
@@ -244,11 +257,6 @@ def replay(tk, bd, directory, env, address):
     request(address, "/by/api/state", {"cutover": "after"})
 
     calls = read_gzip(CORPUS / "calls.jsonl.gz")
-    signatures = {(tuple(call["command"]), tuple(call["flags"])) for call in calls}
-    live = json.loads((CORPUS / "live-shapes.json").read_text(encoding="utf-8"))
-    missing_writes = {(tuple(shape["command"]), tuple(shape["flags"])) for shape in live
-                      if shape["command"] in (["create"], ["close"])} - signatures
-    assert not missing_writes, missing_writes
     problems = []
     expected_ids, actual_ids = {}, {}
     allocated_roots = {}
@@ -264,13 +272,22 @@ def replay(tk, bd, directory, env, address):
             retired_export(bd, args, cwd, env, address, "by")
             retired += 1
             continue
-        unchanged = ("--readonly" in args and call["command"] == ["update"]) or (
+        persisted = call.get("persisted")
+        rejected = call.get("unchanged_ticket")
+        prior_parent = None
+        if persisted and call["command"] == ["update"]:
+            prior_parent = request(address, f"/by/api/tickets/{persisted['id']}")["parent"]
+        if rejected:
+            before_ticket = request(address, f"/by/api/tickets/{rejected}?history=1")
+        unchanged = rejected or ("--readonly" in args and call["command"] == ["update"]) or (
             call["command"] in (["create"], ["close"]) and call["returncode"] != 0)
         if unchanged:
             before = request(address, "/by/api/state")["seq"]
         reply = run(bd, args, cwd, env, call["stdin"])
         if unchanged:
             assert request(address, "/by/api/state")["seq"] == before, args
+        if rejected:
+            assert request(address, f"/by/api/tickets/{rejected}?history=1") == before_ticket, args
         want = call["stdout"]
         got = reply.stdout
         if reply.returncode != call["returncode"]:
@@ -316,9 +333,10 @@ def replay(tk, bd, directory, env, address):
             mismatch = difference(want or "", got)
         if mismatch:
             problems.append(f"{args}: {mismatch}")
-        elif expected := call.get("persisted"):
+        elif persisted:
             try:
-                verify_create_or_close(address, expected, allocated_roots.get(expected["id"], expected["id"]))
+                id = persisted["id"]
+                verify_persisted(address, persisted, allocated_roots.get(id, id), prior_parent)
             except AssertionError as error:
                 problems.append(f"{args}: persisted ticket differs ({error})")
         elif call["returncode"] == 0 and "--json" in args:

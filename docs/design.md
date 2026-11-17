@@ -2358,6 +2358,11 @@ request count. The snapshot already covers the exported rows. For human
 ignores Beads' terminal padding. Readiness explanations retain the Beads
 readiness rules so they can be used to compare a rehearsal with the old store.
 
+The `bd update` shim checks legacy ownership rules against the ticket
+version it submits with the batch. It retries a confirmed version conflict
+against the newer ticket. After a lost write reply it reports the connection
+failure, since replaying an append against a new version could duplicate notes.
+
 ### Install the cutover shim
 
 Build `tk` with `cargo build --locked --release --manifest-path cli/Cargo.toml`.

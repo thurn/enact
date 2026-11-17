@@ -2624,6 +2624,9 @@ class BdRecordingTest(unittest.TestCase):
             cases = list(map(json.loads, log))
         keys = {(tuple(case["command"]), tuple(case["flags"])) for case in cases}
         self.assertEqual(len(keys), len(cases))
+        live = json.loads((corpus / "live-shapes.json").read_text(encoding="utf-8"))
+        live_keys = {(tuple(shape["command"]), tuple(shape["flags"])) for shape in live}
+        self.assertEqual(live_keys - keys, set())
         successes = {case["command"][0] for case in cases if case["returncode"] == 0}
         self.assertTrue({
             "create", "show", "list", "ready", "update", "close", "dep",
