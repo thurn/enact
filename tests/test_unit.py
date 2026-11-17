@@ -28,6 +28,40 @@ sys.modules["enact"] = enact
 spec.loader.exec_module(enact)
 
 
+class CutoverTests(unittest.TestCase):
+    def test_freeze_prevents_a_detached_dolt_writer_in_the_restore_root(self):
+        spec = importlib.util.spec_from_file_location("cutover", SCRIPT.with_name("cutover.py"))
+        cutover = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cutover)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            live = root / "live"
+            repo = enact.Repo(live, live, live, enact.Config(ticket_project="by"))
+            beads = live / ".beads"
+            dolt = beads / "embeddeddolt" / "by" / ".dolt"
+            dolt.mkdir(parents=True)
+            (beads / "metadata.json").write_text('{"dolt_database": "by"}', encoding="utf-8")
+            (dolt / "repo_state.json").write_text(json.dumps({
+                "head": "refs/heads/main",
+                "remotes": {"origin": {"url": "file:///source"}},
+            }), encoding="utf-8")
+            snapshot = root / "frozen"
+            restore_roots = []
+
+            def run_dolt(command, cwd, *, env, timeout):
+                if command[:3] == ["dolt", "backup", "restore"]:
+                    restore_root = Path(env["DOLT_ROOT_PATH"])
+                    self.assertTrue(restore_root.is_dir())
+                    self.assertEqual(env.get("DOLT_DISABLE_EVENT_FLUSH"), "1")
+                    restore_roots.append(restore_root)
+
+            with mock.patch.object(cutover, "run", side_effect=run_dolt):
+                cutover.freeze(repo, snapshot)
+
+            self.assertEqual(len(restore_roots), 1)
+            self.assertFalse(restore_roots[0].exists())
+
+
 class TicketInstallTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()

@@ -134,7 +134,9 @@ def exercise(tk, legacy, bd, directory, project, address, env, corpus, scenario)
         partial = shim.run(sys.executable, [*command, "preimport", "--row-budget", str(budget)],
                            source, operator)
         assert partial.returncode == 5, partial
-        report = json.loads(partial.stdout)["details"]
+        result = json.loads(partial.stdout)
+        report = result.get("details")
+        assert report, result
         assert 0 < report["imported"] < len(tickets), report
         assert native(tk, source, operator, "show", tickets[-1])["status"] == "closed"
         assert shim.ok(sys.executable, [*command, "preimport"], source, operator)["imported"] == len(tickets) - report["imported"]
@@ -180,7 +182,7 @@ def exercise(tk, legacy, bd, directory, project, address, env, corpus, scenario)
         result = json.loads(out)
         backend, _ = finish(pending)
         if scenario == "mismatch":
-            assert result["details"]["differences"], result
+            assert result.get("details", {}).get("differences"), result
             assert shim.request(address, state_path)["cutover"] == "before"
             assert json.loads(backend)["backend"] == "beads"
             print(f"{project}: a mismatch in the final comparison returned the project to Beads")

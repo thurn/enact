@@ -68,7 +68,9 @@ def freeze(repo: Repo, destination: Path, deadline: float | None = None) -> None
             shutil.copyfile(source, beads / name)
 
     def dolt(directory: Path, *arguments: str, env: dict[str, str] | None = None) -> None:
-        run(["dolt", *arguments], directory, env=env,
+        # Dolt's detached send-metrics process can create files in DOLT_ROOT_PATH
+        # after restore returns, while TemporaryDirectory removes that root.
+        run(["dolt", *arguments], directory, env={**(env or {}), "DOLT_DISABLE_EVENT_FLUSH": "1"},
             timeout=remaining(deadline) if deadline is not None else 300)
 
     # Beads keeps its audit events and leases in ignored Dolt tables.
