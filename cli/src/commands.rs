@@ -217,7 +217,11 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
             set_cutover: None, ..
         } => read(client, &["state"], &[]),
         Command::Restore { file, row_budget } => crate::backup::restore(client, &file, row_budget),
-        Command::Bench { .. } | Command::Export | Command::Register { .. } | Command::Version => {
+        Command::Bench { .. }
+        | Command::Export
+        | Command::Register { .. }
+        | Command::Version
+        | Command::Prime => {
             unreachable!("handled by main")
         }
     }
@@ -330,7 +334,12 @@ fn update(client: &Client, args: Update) -> Result<Value> {
     put(&mut fields, "priority", args.priority);
     put(&mut fields, "assignee", args.assignee.map(nullable));
     put(&mut fields, "parent", args.parent.map(nullable));
-    put(&mut fields, "body", file_contents(args.body_file)?);
+    put(
+        &mut fields,
+        "body",
+        file_contents(args.body_file)?.or(args.description),
+    );
+    put(&mut fields, "design", file_contents(args.design_file)?);
     put(&mut fields, "acceptance", args.acceptance);
     put(&mut fields, "notes", args.notes);
     if args.last || args.no_last {

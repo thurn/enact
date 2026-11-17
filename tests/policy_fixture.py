@@ -1,4 +1,4 @@
-"""Single-process CLI fixture for policy that does not need git or Dolt.
+"""Single-process CLI fixture for policy that does not need Git or a ticket server.
 
 The real integration suite owns persistence, synchronization, concurrent
 claims, filesystem recovery and delivery. This small store exposes only the

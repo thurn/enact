@@ -71,11 +71,10 @@ export class TicketStore {
       history: this.sql.exec<{change: string}>("SELECT * FROM history WHERE ticket = ? ORDER BY seq", id)
         .toArray().map((row) => ({...row, change: JSON.parse(row.change)})),
     } : {};
-    const beads = flag(filter, "beads") ? this.beadsCounts(id) : {};
     return {...ticket, ...(text && readableFields(ticket, text)), edges, children,
       ...this.tickets.readiness(ticket, Date.now()),
       ...(comments && {comments: text ? comments.map((comment) => ({...comment, text: text(comment.text)})) : comments}),
-      ...history, ...beads};
+      ...history};
   }
 
   list(project: string, filter: URLSearchParams): object[] {
@@ -99,9 +98,7 @@ export class TicketStore {
     const includeClosed = flag(filter, "all") || selectedStatuses.includes("closed")
       || search !== undefined && selectedStatuses.length === 0;
     const readyOnly = flag(filter, "ready");
-    const beads = flag(filter, "beads");
     const epicCounts = flag(filter, "epic_counts");
-    const explain = beads && flag(filter, "explain");
     const title = filter.get("title")?.toLowerCase();
     const ids = new Set(filter.getAll("id").map((id) => resolveId(this.sql, project, id)));
     const limitValue = filter.get("limit");
@@ -138,20 +135,12 @@ export class TicketStore {
         if (current === null) continue;
       }
       const readiness = tickets.readiness(ticket, now);
-      const blockers = beads && (readyOnly || explain) ? this.beadsBlockers(ticket) : [];
-      const beadsReady = ticket.status === "open" && (!ticket.defer_until || Date.parse(ticket.defer_until) < now)
-        && blockers.length === 0;
-      if (readyOnly && !(beads ? beadsReady : readiness.ready)) continue;
-      const counts = beads ? {
-        ...this.beadsCounts(ticket.id, archived || search !== undefined),
-        ...(search === undefined ? {edges: [...tickets.edgesFrom(ticket.id).values()]} : {}),
-      } : {};
+      if (readyOnly && !readiness.ready) continue;
       const children = epicCounts ? this.sql.exec(
         "SELECT count(*) AS total_children, count(*) FILTER (WHERE status = 'closed') AS closed_children FROM tickets WHERE parent = ?",
         ticket.id,
       ).one() : {};
-      const explanation = explain ? {beads_ready: beadsReady, beads_blockers: blockers} : {};
-      results.push({...ticket, ...(text && readableFields(ticket, text)), ...readiness, ...counts, ...children, ...explanation});
+      results.push({...ticket, ...(text && readableFields(ticket, text)), ...readiness, ...children});
       if (results.length === limit) break;
     }
     return results;
@@ -160,7 +149,7 @@ export class TicketStore {
   private matchesLabels(ticket: Ticket, all: string[], any: string[], selectedStatuses: readonly string[]): boolean {
     const matches = (labels: string[]) => all.every((label) => labels.includes(label)) && any.some((label) => labels.includes(label));
     if (matches(ticket.labels)) return true;
-    // Beads includes descendants of label matches while still applying
+    // Include descendants of label matches while still applying
     // filters like status to each returned ticket.
     for (const id of ancestors(ticket.id, (id) => this.tickets.parentOf(id))) {
       const parent = this.tickets.lookup(id);
@@ -183,8 +172,8 @@ export class TicketStore {
         "SELECT id FROM aliases WHERE instr(alias, ?) = 1 OR instr(alias, ?) = 1", query, idPrefix,
       )) aliases.add(id);
     }
-    // Apply the Beads search order before the limit. Fetch large fields and
-    // compatibility counts only for rows that can appear in the results.
+    // Apply the priority and creation order before the limit. Fetch large
+    // fields only for rows that can appear in the results.
     const where = selectedStatuses.length === 0 ? "" : `WHERE status IN (${selectedStatuses.map(() => "?").join(", ")})`;
     for (const {id, title} of this.sql.exec<{id: string; title: string}>(
       `SELECT id, title FROM tickets ${where} ORDER BY priority, created_at DESC, id`, ...selectedStatuses,
@@ -194,29 +183,6 @@ export class TicketStore {
         if (ticket) yield ticket;
       }
     }
-  }
-
-  private beadsCounts(id: string, includeClosed = false) {
-    return this.sql.exec(
-      `SELECT (SELECT count(*) FROM edges WHERE src = ? AND kind = 'blocks') AS dependency_count,
-              (SELECT count(*) FROM edges JOIN tickets ON tickets.id = edges.src
-                WHERE dst = ? AND kind = 'blocks' AND (? OR tickets.status != 'closed')) AS dependent_count,
-              (SELECT count(*) FROM comments WHERE ticket = ?) AS comment_count`,
-      id, id, Number(includeClosed), id,
-    ).one();
-  }
-
-  private beadsBlockers(ticket: Ticket): string[] {
-    // Beads reports direct active blockers first and names the immediate
-    // parent when a blocker is inherited from higher in the hierarchy.
-    for (let id: string | null = ticket.id; id !== null; id = this.tickets.parentOf(id)) {
-      const blockers = [...this.tickets.edgesFrom(id).values()]
-        .filter((edge) => ["blocks", "conditional-blocks", "waits-for"].includes(edge.kind)
-          && this.tickets.live.has(edge.dst))
-        .map((edge) => edge.dst);
-      if (blockers.length !== 0) return id === ticket.id ? blockers : [ticket.parent!];
-    }
-    return [];
   }
 
   private *archivedCandidates(

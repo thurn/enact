@@ -4,6 +4,8 @@ mod bench;
 mod client;
 mod commands;
 mod feed;
+mod guidance;
+mod human;
 mod output_ids;
 mod register;
 
@@ -20,6 +22,10 @@ fn main() -> ExitCode {
         Ok(options) => options,
         Err(error) => {
             let code = u8::from(error.use_stderr());
+            if error.use_stderr() && std::env::args_os().any(|arg| arg == "--json") {
+                let body = json!({"error": error.to_string(), "code": code});
+                let _ = writeln!(io::stdout().lock(), "{body}");
+            }
             let _ = error.print();
             return ExitCode::from(code);
         }
@@ -28,7 +34,11 @@ fn main() -> ExitCode {
     match run(options) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            if json_output && let Some(mut body) = error.body {
+            if json_output {
+                let mut body = error
+                    .body
+                    .filter(Value::is_object)
+                    .unwrap_or_else(|| json!({"error": error.message, "code": error.code}));
                 output_ids::display(&mut body);
                 let _ = writeln!(io::stdout().lock(), "{body}");
             }
@@ -39,6 +49,7 @@ fn main() -> ExitCode {
 }
 
 fn run(options: Options) -> Result<()> {
+    let detailed = matches!(&options.command, Command::Show { .. });
     let silent_create = matches!(&options.command, Command::Create(args) if args.silent);
     let dep_cycles = matches!(
         &options.command,
@@ -47,6 +58,12 @@ fn run(options: Options) -> Result<()> {
         }
     );
     let mut value = match options.command {
+        Command::Prime => {
+            if !options.json {
+                return write!(io::stdout().lock(), "{}", guidance::PRIME).map_err(usage);
+            }
+            json!({"guide": guidance::PRIME})
+        }
         Command::Version => {
             let version = env!("CARGO_PKG_VERSION");
             if !options.json {
@@ -81,6 +98,9 @@ fn run(options: Options) -> Result<()> {
     } else {
         output_ids::display(&mut value);
     }
+    if options.brief {
+        output_ids::brief(&mut value);
+    }
     if options.json {
         writeln!(output, "{value}").map_err(usage)
     } else if silent_create {
@@ -88,6 +108,8 @@ fn run(options: Options) -> Result<()> {
             .as_str()
             .ok_or_else(|| usage("create response has no ticket ID"))?;
         writeln!(output, "{id}").map_err(usage)
+    } else if detailed {
+        human::details(&mut output, &value).map_err(usage)
     } else if dep_cycles {
         human_cycles(&mut output, &value).map_err(usage)
     } else {

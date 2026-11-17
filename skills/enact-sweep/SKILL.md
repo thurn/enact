@@ -134,7 +134,7 @@ questions from here instead of asking again:
 - When a kept ticket already has a parent epic, move it into the sweep epic.
   Do not run the old epic. If moving its last open child leaves it open,
   claim it and close it with
-  `--reason "Sweep <date>: remaining beads moved to <sweep epic>"`.
+  `--reason "Sweep <date>: remaining tickets moved to <sweep epic>"`.
 - Group tickets that touch the same code into one `lane:<name>`. Label
   mechanical ones `tier:light`, or assign every ticket `tier:sonnet`,
   `tier:opus` or `tier:fable` when the user asks for models by name

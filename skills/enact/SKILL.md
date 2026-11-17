@@ -18,7 +18,7 @@ The invocation text is your input. It is one of:
 
 - a **plain ticket ID**: you are its Executor;
 - **several ticket IDs**: you are their Executor, one at a time
-  ([Several tickets](#several-beads));
+  ([Several tickets](#several-tickets));
 - an **epic ID**: you orchestrate its tickets, one subagent per ticket;
 - a **task prompt**: file one executor ticket, then you are its Executor.
 

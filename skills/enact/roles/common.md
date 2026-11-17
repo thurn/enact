@@ -122,6 +122,9 @@ later step, so explore deliberately:
 
 ## Task backend
 
+Run `tk prime` for command examples, JSON shapes and exit codes. Use
+`--brief --json` when discovering work and `show --json` for full details.
+
 Run `enact backend` from the project's checkout and use the returned `tk`
 path. Use `enact` for ownership, start, close, release, and assignment
 metadata so a stale session cannot bypass a fence.

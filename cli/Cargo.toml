@@ -19,9 +19,6 @@ getrandom = "0.4"
 url = "2"
 # Handle WebSocket framing and upgrades using Rust TLS.
 tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
-# Parse Beads date-only deferrals in the caller’s local timezone.
-chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
-
 # Hash the bearer token without passing it to an external program.
 sha2 = "0.10"
 # Stage the private token beside its destination for atomic replacement.

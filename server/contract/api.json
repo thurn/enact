@@ -143,7 +143,7 @@
     "resync": {"direction": "server to client", "response": {"resync": true}}
   },
   "cli": {
-    "global_options": ["--project", "--actor", "--json", "--retry-for <seconds>"],
+    "global_options": ["--project", "--actor", "--json", "--brief", "--retry-for <seconds>"],
     "commands": {
       "show": "<id>... [--comments] [--history]",
       "list": "[--status S] [--type T] [--parent ID] [--ancestor ID] [--label L]... [--label-any a,b] [--assignee A] [--all] [-n|--limit N]",
@@ -152,7 +152,7 @@
       "ready": "[--ancestor ID] [--label L]...",
       "graph": "[--all] [--if-none-match ETAG] (JSON includes etag on a fresh response)",
       "create": "[TITLE | --title T] [-t|--type T] [-p N] [--parent ID] [-l|--labels a,b] [--body-file F] [--description D] [--acceptance A] [--design-file F] [--deps a,b] [--last] [--silent]",
-      "update": "<id> [--title T] [--status S] [-p N] [--assignee A] [--parent ID] [--body-file F] [--acceptance A] [--notes N] [--add-label L]... [--remove-label L]... [--set-metadata k=v]... [--unset-metadata k]... [--claim] [--last|--no-last] [--if-version N] [--if-assignee A]",
+      "update": "<id> [--title T] [--status S] [-p N] [--assignee A] [--parent ID] [--body-file F | --description D] [--design-file F] [--acceptance A] [--notes N] [--add-label L]... [--remove-label L]... [--set-metadata k=v]... [--unset-metadata k]... [--claim] [--last|--no-last] [--if-version N] [--if-assignee A]",
       "claim": "<id>",
       "close": "<id> --reason R",
       "reopen": "<id>",
@@ -170,6 +170,7 @@
       "restore": "<tickets.jsonl> [--row-budget N]",
       "register": "",
       "bench": "",
+      "prime": "offline agent guide; --json returns {guide: string}",
       "version": ""
     },
     "exit_codes": {

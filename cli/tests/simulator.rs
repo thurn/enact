@@ -218,6 +218,80 @@ fn commands_use_the_worker_protocol() {
         "body":"body on disk\n","design":"body on disk\n","acceptance":"passes","last":1})
     );
 
+    let output = sim.output(
+        &[
+            "--project",
+            "details",
+            "show",
+            "Tk7mq",
+            "--comments",
+            "--history",
+        ],
+        None,
+    );
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    for required in [
+        "Description:\nFirst line\nSecond line",
+        "Reproduced and fixed",
+        "Use the existing helper",
+        "Keep imported aliases",
+        "Taaaa",
+        "Tbbbb",
+        "Tk7mq.1",
+        "Handoff: next steps",
+        "History:",
+    ] {
+        assert!(text.contains(required), "{required:?} missing from {text}");
+    }
+    let summary = sim.ok(&[
+        "--project",
+        "details",
+        "show",
+        "Tk7mq",
+        "--comments",
+        "--history",
+        "--brief",
+    ]);
+    assert_eq!(summary["id"], "Tk7mq");
+    assert_eq!(summary["title"], "Full ticket");
+    assert_eq!(summary["version"], 7);
+    assert_eq!(summary["metadata"]["notes"], "Keep user metadata");
+    assert_eq!(summary["blocked_by"][0]["id"], "Tbbbb");
+    assert!(summary.get("body").is_none());
+    assert!(summary.get("comments").is_none());
+    assert!(summary.get("history").is_none());
+    assert_eq!(summary["edges"][0]["dst"], "Tbbbb");
+
+    let output = sim.command(&["update", "Tk7mq", "--body-file", "../absent.txt"], None);
+    assert!(
+        decode(&[], &output, 1)["error"]
+            .as_str()
+            .unwrap()
+            .contains("absent.txt")
+    );
+    let changed = sim.ok(&[
+        "update",
+        "Tk7mq",
+        "--description",
+        "Revised body",
+        "--design-file",
+        "../body.txt",
+    ]);
+    assert_eq!(
+        changed["trace"]["body"]["ops"][0]["set"],
+        json!({"body":"Revised body", "design":"body on disk\n"})
+    );
+    let output = sim.command(
+        &["comments", "add", "Tk7mq", "--body-file", "-"],
+        Some(json!("comment from stdin")),
+    );
+    let changed = decode(&[], &output, 0);
+    assert_eq!(
+        changed["trace"]["body"]["ops"][0]["text"],
+        "\"comment from stdin\""
+    );
+
     let update = sim.ok(&[
         "update",
         "k7mq",

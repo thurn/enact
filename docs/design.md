@@ -1850,7 +1850,8 @@ state transitions to verify ticket parity before activating each project.
 
 ### 9. The `tk` command line
 
-Global options: `--project`, `--actor`, `--json`, `--retry-for <seconds>`
+Global options: `--project`, `--actor`, `--json`, `--brief`,
+`--retry-for <seconds>`
 (default 120). The server's address and the project come from `[tickets]`
 in `.enact.toml`.
 
@@ -1866,7 +1867,8 @@ tk create [TITLE | --title T] [-t|--type T] [-p N] [--parent ID] [-l|--labels a,
           [--body-file F] [--description D] [--acceptance A] [--design-file F]
           [--deps a,b] [--last] [--silent]
 tk update <id> [--title T] [--status S] [-p N] [--assignee A] [--parent ID]
-          [--body-file F] [--acceptance A] [--notes N] [--add-label L]...
+          [--body-file F | --description D] [--design-file F]
+          [--acceptance A] [--notes N] [--add-label L]...
           [--remove-label L]... [--set-metadata k=v]... [--unset-metadata k]...
           [--claim] [--last|--no-last] [--if-version N] [--if-assignee A]
 tk claim <id>
@@ -1888,11 +1890,16 @@ tk wait ready [--ancestor ID] [--label L]... | ticket <id> [--status S]
 tk state [--set-cutover before|paused|after [--pause-id ID]]
 tk export
 tk restore <tickets.jsonl> [--row-budget N]
-tk register | tk bench | tk version
+tk register | tk bench | tk version | tk prime
 ```
 
-Without `--json` a command prints a short human-readable form; with it, the
-server's JSON. Exit codes: 0 done; 1 bad usage, not found or a malformed
+Without `--json`, lists print a short human-readable form and `show` prints
+the ticket's complete fields. With `--json`, commands print the server's JSON.
+Local failures also print a JSON object with `error` and `code` under `--json`;
+server error objects retain their fields. Diagnostics go to stderr. Help
+always prints text. `--brief` omits body, acceptance, design, notes, comments,
+history and lease payloads; exports always stay complete.
+ Exit codes: 0 done; 1 bad usage, not found or a malformed
 request; 3 a precondition failed or a claim or lease belongs to someone else
 (the code Enact already uses for a lost race); 4 the server could not be
 reached within `--retry-for`; 5 a daily limit was hit and did not clear
@@ -1910,6 +1917,54 @@ only the canonical ID when called without `--json`.
 
 Search accepts a quoted phrase or separate words. It returns up to 50 tickets
 by default. Pass `--limit 0` to return every match.
+
+#### Cutover and agent accessibility audit (2026-11-17)
+
+Both enrolled projects (`by` and `en`) reported cutover state `after`. Neither
+main checkout had a `.beads` store, a `.dolt` directory or an active tracker
+Git hook. `bd` was absent from PATH. The audit compared the CLI with the
+[upstream generated bd reference][bd-reference] and its
+[agent guidance implementation][bd-prime], rather than reinstalling the
+retired tracker or writing to it.
+
+| Capability             | `tk` behavior and validation                                                                                                                                                       |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Command discovery      | Every command, subcommand and argument has help. A recursive parser test checks coverage and renders help without enrollment.                                                      |
+| Agent context          | `tk prime` is an offline, bounded workflow guide with examples, JSON contracts, exit codes and concurrency advice. `--json` returns a `guide` string.                              |
+| Structured output      | Global `--json` works before or after commands. Local parser/configuration errors produce JSON with exit 1; HTTP conflicts retain their server data and exit 3. Help remains text. |
+| Readable details       | `show` includes body, acceptance, design, notes, metadata, dependencies and requested comments/history. Lists stay compact.                                                        |
+| Context size           | `--brief` removes long text and nested comments/history/payloads without changing ticket selection, IDs, blockers or versions. Full exports ignore it.                             |
+| Non-interactive writes | Body, design and comment files accept `-` for stdin. Description text and body files are mutually exclusive. No editor or pager is launched.                                       |
+| Core task workflow     | Isolated Worker tests cover create, show, list, search, children, update, claim, close/reopen, defer, comments, labels, metadata, dependencies, export, leases and waits.          |
+| Concurrent agents      | Claims are atomic. Updates can require a version or assignee. Batches are atomic; version conflicts return exit 3. Creates use request keys during retries.                        |
+
+This is task-workflow parity, not a promise that every `bd` command or flag
+is accepted. The intentional differences are discoverable in `tk prime`:
+
+- Writes publish immediately, so there is no `sync`, daemon or local database
+  command. Enrollment and machine installation belong to `enact setup`.
+- Search matches titles and ID prefixes, not arbitrary body text. It includes
+  closed tickets and defaults to 50 results. `list` excludes closed tickets
+  and has no default limit. Both use `--limit 0` for every result.
+- `ready` uses Enact's ancestor, sibling, deferral and dependency rules. The
+  unused `beads` query mode and its separate readiness calculation were
+  removed; callers share the native calculation.
+- `update` and `close` each accept one ID. `show` accepts several; use an
+  atomic `batch` for multi-ticket writes. A single-ID JSON `show` is an object,
+  while multi-ID `show` is an array. Write replies wrap `results` and `seq`.
+- Dates are timestamps or ISO dates (UTC midnight), not natural-language date
+  expressions. Use an update batch with `defer_until: null` to clear a date.
+
+The audit removed the unused integration-test `Machine` helper that invoked
+`bd`, retired ignore rules and an unused date-parsing dependency from the
+former adapter. Beryl's ticket callers and efficiency collection use the
+managed native client. Old IDs, comment IDs, `_enact_beads` metadata, old
+`/beads/` links and the efficiency store's historical table/field names remain
+as data compatibility. They do not launch or install the retired tracker.
+Removing them would lose historical joins or break existing ticket links.
+
+[bd-reference]: https://github.com/steveyegge/beads/blob/main/docs/CLI_REFERENCE.md
+[bd-prime]: https://github.com/steveyegge/beads/blob/main/cmd/bd/prime.go
 
 #### Daily backups and restore
 

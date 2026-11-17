@@ -25,6 +25,6 @@ slow = """
 [worktree]
 root = ".worktrees"
 
-# Mechanical beads labeled `tier:light` run on a cheaper model.
+# Mechanical tickets labeled `tier:light` run on a cheaper model.
 [tiers.light.claude]
 model = "sonnet"

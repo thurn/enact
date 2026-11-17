@@ -126,7 +126,7 @@ root = ".worktrees"   # inside the checkout; gitignored
 # check_trees = 3   # run each push's fast check in reused check-1..check-3 trees
 [roles.warden.claude]
 effort = "max"
-[tiers.light.claude]  # beads labeled tier:light (mechanical work)
+[tiers.light.claude]  # tickets labeled tier:light (mechanical work)
 model = "sonnet"
 # tier:fable, tier:opus and tier:sonnet are built in for Claude: no entry
 ```
@@ -144,6 +144,13 @@ Ticket writes publish immediately. Use `enact claim`, `start`, `meta`,
 `release` and `close` for assignment and ownership. The CLI and dashboard
 show IDs like `Tq44s.7`. Bare IDs and migrated IDs remain valid aliases.
 See the [task commands](skills/enact/roles/common.md#task-backend).
+
+Run `tk prime` for agent workflow, JSON response shapes and exit codes. Every
+command has `--help`; `--brief --json` keeps long ticket text out of discovery
+results. The [CLI audit][cli-audit] records supported workflows and deliberate
+differences from the retired client.
+
+[cli-audit]: docs/design.md#cutover-and-agent-accessibility-audit-2026-11-17
 
 ### Local ticket verification
 

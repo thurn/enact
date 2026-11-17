@@ -126,8 +126,7 @@ def run(
             **({"stdin": subprocess.DEVNULL} if input_text is None else {"input": input_text}),
         )
     except (FileNotFoundError, NotADirectoryError):
-        # A fresh clone has no local Tickets database until `enact setup`
-        # bootstraps it from the remote; a fresh machine may lack the tool.
+        # A fresh machine may lack a required command before setup.
         if not cwd.is_dir():
             raise Fail(f"{cwd} does not exist") from None
         raise Fail(f"{cmd[0]} is not installed or not on PATH; "

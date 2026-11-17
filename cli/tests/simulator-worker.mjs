@@ -44,6 +44,12 @@ export default {
       return Response.json({ tickets: [], edges: [], seq }, { headers: { ETag: validator } });
     }
     if (route === "tickets" && target) {
+      if (project === "details") return Response.json({id: "k7mq", title: "Full ticket", status: "open",
+        priority: 1, type: "bug", body: "First line\nSecond line", acceptance: "Reproduced and fixed",
+        design: "Use the existing helper", notes: "Keep imported aliases", metadata: {owner: "test", notes: "Keep user metadata"},
+        parent: "aaaa", labels: ["role:executor"], ready: false, blocked_by: [{id: "bbbb", rule: 1}],
+        edges: [{src: "k7mq", dst: "bbbb", kind: "blocks"}], children: ["k7mq.1"], version: 7,
+        comments: [{author: "reviewer", text: "Handoff: next steps"}], history: [{seq: 7, change: {priority: 1}}]});
       if (target === "missing") return Response.json({ error: "unknown ticket" }, { status: 404 });
       return Response.json({ id: "k7mq", title: "Simulator ticket", status: closedProjects.has(project) ? "closed" : "open", trace });
     }

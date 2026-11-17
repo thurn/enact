@@ -1,5 +1,32 @@
 use serde_json::Value;
 
+/// Remove large free-form fields without changing the IDs or selection of results.
+pub fn brief(value: &mut Value) {
+    match value {
+        Value::Array(values) => values.iter_mut().for_each(brief),
+        Value::Object(fields) => {
+            for key in [
+                "body",
+                "acceptance",
+                "design",
+                "notes",
+                "comments",
+                "history",
+                "payload",
+                "waiters",
+            ] {
+                fields.remove(key);
+            }
+            for key in ["tickets", "results", "ticket"] {
+                if let Some(value) = fields.get_mut(key) {
+                    brief(value);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn display(value: &mut Value) {
     rewrite(value, display_id);
 }

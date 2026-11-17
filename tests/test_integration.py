@@ -1,4 +1,4 @@
-"""Slow black-box tests: enact.py against real git, bd and Dolt.
+"""Slow black-box tests: enact.py against real Git and isolated tk stores.
 
 Each test builds a bare "origin" plus clones that stand in for separate
 machines, then drives the CLI exactly as agents do.
@@ -360,70 +360,6 @@ class WorktreeSweepTest(unittest.TestCase):
             enact("ci")
             self.assertFalse((trees / "ci-0123456789ab").exists())
             self.assertTrue((trees / "dirty").exists())
-
-
-class Machine:
-    """One clone of the project, with its own host and session identity."""
-
-    def __init__(self, path: Path, host: str, session: str):
-        self.path, self.host, self.session = path, host, session
-
-    def env(self, session=None):
-        return {
-            "ENACT_HOST": self.host,
-            "ENACT_PROVIDER": "claude",
-            "ENACT_SESSION": session or self.session,
-            "CLAUDE_CODE_SESSION_ID": "",
-            "CLAUDE_CODE_HOST_SESSION_ID": "",
-            "CODEX_THREAD_ID": "",
-            "BD_NON_INTERACTIVE": "1",
-            # Never fast-forward the real Enact checkout from a test.
-            "ENACT_NO_SELF_UPDATE": "1",
-            # No background pusher outlives a test; one test opts back in.
-            "ENACT_SYNC_NOW": "1",
-        }
-
-    def enact(self, *args, code=0, cwd=None, session=None, env=None):
-        proc = subprocess.run(
-            [sys.executable, str(SCRIPT), *args],
-            cwd=cwd or self.path,
-            text=True,
-            capture_output=True,
-            env={**os.environ, **self.env(session), **(env or {})},
-        )
-        if proc.returncode != code:
-            raise AssertionError(
-                f"enact {' '.join(args)} exited {proc.returncode}, wanted {code}:\n"
-                f"{proc.stdout}\n{proc.stderr}"
-            )
-        return json.loads(proc.stdout)
-
-    def bd(self, *args, actor=None):
-        cmd = ["bd"] + (["--actor", actor] if actor else []) + list(args) + ["--json"]
-        out = sh(cmd, self.path, env=self.env())
-        return json.loads(out) if out else None
-
-    def create(self, title, **kw):
-        args = ["create", "--title", title]
-        for key, value in kw.items():
-            args += [f"--{key.replace('_', '-')}", str(value)]
-        return self.bd(*args)["id"]
-
-    def show(self, bead):
-        data = self.bd("show", bead)
-        return data[0] if isinstance(data, list) else data
-
-    def git(self, *args, cwd=None):
-        return sh(["git", *args], cwd or self.path)
-
-    def commit_file(self, name, text, cwd=None, message=None):
-        where = Path(cwd or self.path)
-        (where / name).write_text(text)
-        self.git("add", name, cwd=where)
-        self.git("commit", "-q", "-m", message or f"add {name}", cwd=where)
-
-
-
 
 
 

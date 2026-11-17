@@ -699,7 +699,7 @@ test("cutover arms imported snoozes and the alarm reopens them exactly once", as
   expect(alarm).toBe(Math.min(midnight, Date.parse(until) + 1));
   const graph = await request("/graph");
   const tag = graph.headers.get("ETag")!;
-  expect(await list("?ready=1&beads=1")).toEqual([]);
+  expect(await list("?ready=1")).toEqual([]);
 
   const socket = await connectFeed(request);
   try {
@@ -712,7 +712,7 @@ test("cutover arms imported snoozes and the alarm reopens them exactly once", as
     const wake = nextMessage(socket);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect(await wake).toMatchObject({seq: seq + 1, tickets: ["imported"], cutover: "after"});
-    expect(await list("?ready=1&beads=1")).toMatchObject([{id: "imported", status: "open"}]);
+    expect(await list("?ready=1")).toMatchObject([{id: "imported", status: "open"}]);
     const current = await checked<{seq: number; tickets: ShownTicket[]}>(request(
       "/graph", {headers: {"If-None-Match": tag}},
     ));
