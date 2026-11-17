@@ -58,7 +58,7 @@ pub enum Command {
     /// Search ticket titles and ID prefixes, including closed tickets.
     Search(Search),
     /// List tickets eligible to start under Enact readiness rules.
-    Ready(Ready),
+    Ready(ReadyList),
     /// Read tickets, dependency edges and a sequence cursor as one snapshot.
     Graph {
         /// Return {"unchanged":true} if this graph ETag still matches.
@@ -214,6 +214,15 @@ pub struct Ready {
     /// Require every label; repeat or separate with commas.
     #[arg(long, short = 'l', value_delimiter = ',')]
     pub label: Vec<String>,
+}
+
+#[derive(Args)]
+pub struct ReadyList {
+    #[command(flatten)]
+    pub filters: Ready,
+    /// Maximum results; 0 or omitted returns every match.
+    #[arg(long, short = 'n')]
+    pub limit: Option<u64>,
 }
 
 #[derive(Args)]

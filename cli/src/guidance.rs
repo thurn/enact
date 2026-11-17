@@ -5,7 +5,7 @@ programmatic output; diagnostics go to stderr. No sync command is needed.
 Run `tk COMMAND --help` or `tk help COMMAND` for flags and defaults.
 
 Start and finish work:
-  tk ready --brief --json
+  tk ready --limit 10 --brief --json
   tk show Tabcd --comments --json
   tk claim Tabcd --actor session-name --json
   tk update Tabcd --notes 'Investigation result' --json
@@ -32,7 +32,8 @@ Browse and wait:
   tk wait ticket Tabcd --status closed --timeout 60 --json
 List excludes closed tickets by default; children and search include them.
 Search matches titles and ID prefixes, not body text. List has no default
-limit; search defaults to 50. Both accept --limit 0 for every match.
+limit; ready also has no default limit. Search defaults to 50. All three accept
+--limit 0 for every match. Limit discovery reads before loading full details.
 Ready uses Enact rules, including ancestor blockers, last siblings and deferral.
 Use --brief to omit long text, comments, history and lease payloads from results;
 export always stays complete. Use tk wait instead of polling. Clear an assignee

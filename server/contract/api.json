@@ -149,7 +149,7 @@
       "list": "[--status S] [--type T] [--parent ID] [--ancestor ID] [--label L]... [--label-any a,b] [--assignee A] [--all] [-n|--limit N]",
       "children": "<id>",
       "search": "<words> [--status S] [-n|--limit N]",
-      "ready": "[--ancestor ID] [--label L]...",
+      "ready": "[--ancestor ID] [--label L]... [-n|--limit N]",
       "graph": "[--all] [--if-none-match ETAG] (JSON includes etag on a fresh response)",
       "create": "[TITLE | --title T] [-t|--type T] [-p N] [--parent ID] [-l|--labels a,b] [--body-file F] [--description D] [--acceptance A] [--design-file F] [--deps a,b] [--last] [--silent]",
       "update": "<id> [--title T] [--status S] [-p N] [--assignee A] [--parent ID] [--body-file F | --description D] [--design-file F] [--acceptance A] [--notes N] [--add-label L]... [--remove-label L]... [--set-metadata k=v]... [--unset-metadata k]... [--claim] [--last|--no-last] [--if-version N] [--if-assignee A]",

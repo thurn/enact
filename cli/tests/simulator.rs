@@ -176,6 +176,14 @@ fn commands_use_the_worker_protocol() {
         sim.ok(&["ready", "--label", "one"])[0]["trace"]["args"],
         json!([["label", "one"], ["ready", "1"], ["readable", "1"]])
     );
+    assert_eq!(
+        sim.ok(&["ready", "--limit", "10"])[0]["trace"]["args"],
+        json!([["limit", "10"], ["ready", "1"], ["readable", "1"]])
+    );
+    assert_eq!(
+        sim.ok(&["ready", "--limit", "0"])[0]["trace"]["args"],
+        json!([["ready", "1"], ["readable", "1"]])
+    );
     let graph = sim.ok(&["graph"]);
     assert!(graph["edges"].is_array());
     assert_eq!(

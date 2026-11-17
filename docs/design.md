@@ -1861,7 +1861,7 @@ tk list [--status S] [--type T] [--parent ID] [--ancestor ID] [--label L]...
         [--label-any a,b] [--assignee A] [--all] [-n|--limit N]
 tk children <id>
 tk search <words> [--status S] [-n|--limit N]
-tk ready [--ancestor ID] [--label L]...
+tk ready [--ancestor ID] [--label L]... [-n|--limit N]
 tk graph [--all] [--if-none-match ETAG]
 tk create [TITLE | --title T] [-t|--type T] [-p N] [--parent ID] [-l|--labels a,b]
           [--body-file F] [--description D] [--acceptance A] [--design-file F]
@@ -1916,7 +1916,9 @@ array. `dep cycles` returns arrays of ticket IDs. `create --silent` prints
 only the canonical ID when called without `--json`.
 
 Search accepts a quoted phrase or separate words. It returns up to 50 tickets
-by default. Pass `--limit 0` to return every match.
+by default. List and ready return every match unless given a limit. Pass
+`--limit 0` to return every match for any of these commands. The agent guide
+starts with `tk ready --limit 10 --brief --json` to bound discovery output.
 
 #### Cutover and agent accessibility audit (2026-11-17)
 

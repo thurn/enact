@@ -1,6 +1,6 @@
 use crate::args::{
     Command, CommentOperation, Create, Cutover, Edge, EdgeOperation, LeaseOperation, List, Ready,
-    Search, Update,
+    ReadyList, Search, Update,
 };
 use crate::client::{Client, Result, usage};
 use serde_json::{Map, Value, json};
@@ -75,8 +75,9 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
             flag(&mut query, "readable", true);
             read(client, &["tickets"], &query)
         }
-        Command::Ready(filters) => {
+        Command::Ready(ReadyList { filters, limit }) => {
             let mut query = ready_query(filters);
+            query.extend(limit.filter(|&n| n != 0).map(|n| ("limit", n.to_string())));
             flag(&mut query, "ready", true);
             flag(&mut query, "readable", true);
             read(client, &["tickets"], &query)
