@@ -11,17 +11,21 @@ import tempfile
 import time
 import unittest
 from urllib.request import Request, urlopen
-from uuid import uuid4
 
 from tests.test_integration import SCRIPT, sh
 
 
 @unittest.skipUnless(os.environ.get("ENACT_TEST_TK"), "requires the built tk binary")
 class TicketCoordinationTest(unittest.TestCase):
+    @staticmethod
+    def project_key(test_name):
+        return "coord-" + test_name.removeprefix("test_").replace("_", "-")
+
     @classmethod
     def setUpClass(cls):
         launcher = SCRIPT.parent.parent / "cli" / "tests" / "simulator.mjs"
-        worker = subprocess.Popen(["node", str(launcher), "--coordination"], text=True,
+        projects = [cls.project_key(name) for name in unittest.defaultTestLoader.getTestCaseNames(cls)]
+        worker = subprocess.Popen(["node", str(launcher), "--coordination", "restore", *projects], text=True,
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         cls.addClassCleanup(worker.stdout.close)
         cls.addClassCleanup(cls.stop_worker, worker)
@@ -42,7 +46,7 @@ class TicketCoordinationTest(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
-        self.project = "coord-" + uuid4().hex
+        self.project = self.project_key(self._testMethodName)
         self.origin = self.root / "origin.git"
         self.hosts = ("host-a", "host-b")
         self.tokens = {host: f"coordination-{host}" for host in self.hosts}
@@ -146,7 +150,7 @@ sys.exit(enact.main(sys.argv[2:]))
         path = self.root / "tickets.jsonl"
         path.write_text("\n".join(updated) + "\n", encoding="utf-8")
         original = self.project
-        self.project = "restore-" + uuid4().hex
+        self.project = "restore"
         self.addCleanup(setattr, self, "project", original)
         self.fixture("seed", {hashlib.sha256(self.tokens[a].encode()).hexdigest(): a})
         target = ["--project", self.project]

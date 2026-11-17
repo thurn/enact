@@ -1,4 +1,4 @@
-import {env, exports} from "cloudflare:workers";
+import {env} from "cloudflare:workers";
 import {evictDurableObject, runDurableObjectAlarm, runInDurableObject} from "cloudflare:test";
 import {expect, test} from "vitest";
 import type {Ticket} from "./ticket-types";
@@ -10,9 +10,9 @@ async function fixture(project: string) {
   const hash = [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   const sql = <T>(action: (sql: SqlStorage) => T) => runInDurableObject(stub, ({store}) => action(store.sql));
   await sql((db) => { db.exec("INSERT INTO meta VALUES ('token_hashes', ?)", JSON.stringify({[hash]: "test-machine"})); });
-  const get = (path: string) => exports.default.fetch(`https://example.com/${project}/api${path}`);
+  const get = (path: string) => stub.fetch(`https://example.com/${project}/api${path}`);
   const post = (path: string, body: unknown, authorization = `Bearer ${token}`) =>
-    exports.default.fetch(`https://example.com/${project}/api${path}`, {
+    stub.fetch(`https://example.com/${project}/api${path}`, {
       method: "POST", headers: {Authorization: authorization, "X-Actor": "worker"}, body: JSON.stringify(body),
     });
   const json = async <T>(response: Promise<Response>, status = 200): Promise<T> => {

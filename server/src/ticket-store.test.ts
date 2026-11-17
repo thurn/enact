@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import {env, exports} from "cloudflare:workers";
+import {env} from "cloudflare:workers";
 import {evictDurableObject, runDurableObjectAlarm, runInDurableObject} from "cloudflare:test";
 import {expect, test} from "vitest";
 import {ChangeFeed} from "./change-feed";
@@ -25,7 +25,7 @@ async function fixture(project: string) {
   await runInDurableObject(stub, ({store}) => {
     store.sql.exec("INSERT INTO meta VALUES ('token_hashes', ?)", JSON.stringify([hash]));
   });
-  const request = (path: string, init?: RequestInit) => exports.default.fetch(`https://example.com/${project}/api${path}`, init);
+  const request = (path: string, init?: RequestInit) => stub.fetch(`https://example.com/${project}/api${path}`, init);
   const write = (path: string, body: object, actor = "worker") => request(path, {
     method: "POST",
     headers: {Authorization: `Bearer ${bearer}`, "X-Actor": actor},

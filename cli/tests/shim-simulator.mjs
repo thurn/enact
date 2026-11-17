@@ -9,6 +9,8 @@ writeFileSync(config, JSON.stringify({
   name: "shim-replay",
   main: entry,
   compatibility_date: "2026-11-16",
+  // The fixture provisions tokens locally for these projects.
+  vars: { TICKET_REPOSITORIES: { by: "", en: "", gate: "", migration: "", snooze: "" } },
   durable_objects: { bindings: [{ name: "TICKETS", class_name: "ProjectTickets" }] },
   migrations: [{ tag: "v1", new_sqlite_classes: ["ProjectTickets"] }],
   rules: [{ type: "Text", globs: ["**/*.sql"], fallthrough: true }],

@@ -264,7 +264,10 @@ export default {
     }
     const project = apiPath(pathname)?.[1]
       ?? ((request.method === "GET" || request.method === "HEAD") ? dashboardRoute(pathname)?.project : undefined);
-    if (project) return env.TICKETS.getByName(project).fetch(request);
-    return env.ASSETS.fetch(request);
+    if (!project) return env.ASSETS.fetch(request);
+    if (!Object.hasOwn(env.TICKET_REPOSITORIES ?? {}, project)) {
+      return Response.json({error: "Unknown route"}, {status: 404});
+    }
+    return env.TICKETS.getByName(project).fetch(request);
   },
 } satisfies ExportedHandler<Cloudflare.Env>;
