@@ -180,6 +180,40 @@ preparing a fleet cutover. Older prompts can keep invoking `bd` through
 `PATH` throughout the transition. New prompts use `enact backend` to
 choose the active CLI.
 
+Run the migration from the enrolled project's checkout. Start with Beryl
+(`by`), then repeat for Enact (`en`). The commands below use the Enact
+checkout's `scripts/cutover.py`. Install the dependencies for local replay
+with `npm ci` and `npm run pretest` in Enact's `server/` directory.
+
+1. Run `python3 /path/to/enact/scripts/cutover.py preimport` while Beads is
+   authoritative. It backs up the local Dolt working set, pulls the remote
+   into that private copy, and imports closed tickets first. On exit 5,
+   rerun as the UTC write budget becomes available. Each run imports only
+   differences and reports its progress.
+2. Prepare a Beryl compatibility corpus with `start.jsonl.gz` and
+   `calls.jsonl.gz` from the same recording window. Use it for both
+   projects. See [recording Beads calls](docs/design.md#recording-beads-calls-for-the-ticket-cutover-2026-11-16).
+   The cutover runs the replay locally with Wrangler and requires a corpus
+   recorded within three days. Post a `tk event machine '{"enrolled":true}'`
+   from each enrolled machine shortly before starting. For Beryl, move viewers
+   to the ticket dashboard and stop the Scotty export pollers.
+3. Run `python3 /path/to/enact/scripts/cutover.py start --archive NEW_DIRECTORY
+   --replay-corpus CORPUS --machine HOST1 --machine HOST2 --machine HOST3`.
+   For Beryl, add `--scotty-stopped`. Idle peers can run `tk drain` from
+   their enrolled checkout during the pause. Normal shim or Enact commands
+   also drain on first observing the pause. The command gives the fleet and
+   final checks up to five minutes, then returns the project to Beads if
+   it cannot switch. If the operator process is interrupted and leaves a
+   pause active, run `cutover.py abort --archive DIRECTORY` with the same
+   archive. The archive identifies that specific pause.
+4. After a successful switch, keep the archive and verify the shim, Enact
+   and dashboard against the ticket server. One hour after the pause began,
+   run `cutover.py reconcile --archive DIRECTORY`. It pulls Dolt again
+   and imports only changes since the archived comparison. A conflict
+   names the affected tickets and leaves the late snapshot in the archive
+   for reconciliation. Keep legacy source data for the rollout retention
+   window.
+
 ## Helper commands
 
 `python3 scripts/enact.py <command>` (`py -3` on Windows). Each prints JSON.

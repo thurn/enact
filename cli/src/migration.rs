@@ -24,10 +24,11 @@ pub fn import(
     frozen_beads: Option<PathBuf>,
     history_dir: Option<PathBuf>,
     row_budget: Option<u64>,
+    since_frozen_beads: Option<PathBuf>,
+    fence: Value,
 ) -> Result<Value> {
-    let expected = if let Some(root) = frozen_beads {
-        let frozen = FrozenBeads::open(&root, &client.project)?;
-        frozen.snapshots(&frozen.export()?)?
+    let mut expected = if let Some(root) = frozen_beads {
+        frozen_snapshots(client, &root)?
     } else {
         let file = file
             .as_deref()
@@ -35,8 +36,32 @@ pub fn import(
         let source = read_file(file)?;
         cached_snapshots(&source, history_dir, &client.project)?
     };
+    if let Some(baseline) = since_frozen_beads {
+        if state_snapshot(client)?["cutover"] != "after" {
+            return Err(usage("legacy reconciliation requires completed cutover"));
+        }
+        let baseline = frozen_snapshots(client, &baseline)?;
+        let removed: Vec<_> = baseline
+            .keys()
+            .filter(|id| !expected.contains_key(*id))
+            .collect();
+        if !removed.is_empty() {
+            return Err(usage(format!(
+                "Legacy tickets missing during reconciliation: {removed:?}"
+            )));
+        }
+        // Compare against the archive instead of updated_at: a write made
+        // before the pause may arrive after it, and audit-only edits can
+        // leave updated_at unchanged.
+        expected.retain(|id, ticket| baseline.get(id) != Some(ticket));
+    }
     let actual = server_snapshots(client)?;
-    upload(client, expected, &actual, row_budget)
+    upload(client, expected, &actual, row_budget, &fence)
+}
+
+fn frozen_snapshots(client: &Client, root: &Path) -> Result<Tickets> {
+    let frozen = FrozenBeads::open(root, &client.project)?;
+    frozen.snapshots(&frozen.export()?)
 }
 
 pub fn restore(client: &Client, file: &Path, row_budget: Option<u64>) -> Result<Value> {
@@ -57,7 +82,7 @@ pub fn restore(client: &Client, file: &Path, row_budget: Option<u64>) -> Result<
             )));
         }
     }
-    upload(client, expected, &actual, row_budget)
+    upload(client, expected, &actual, row_budget, &json!({}))
 }
 
 fn read_file(file: &Path) -> Result<Tickets> {
@@ -70,6 +95,7 @@ fn upload(
     expected: Tickets,
     actual: &Tickets,
     row_budget: Option<u64>,
+    fence: &Value,
 ) -> Result<Value> {
     let mut pending = Vec::new();
     for (id, mut ticket) in expected {
@@ -116,7 +142,9 @@ fn upload(
             .iter()
             .map(|(ticket, _)| ticket)
             .collect();
-        let body = json!({"tickets": tickets, "daily_row_ceiling": ceiling});
+        let mut body = fence.clone();
+        body["tickets"] = json!(tickets);
+        body["daily_row_ceiling"] = json!(ceiling);
         let reply = match client.post(&client.url(&["import"], &[]), &body, true) {
             Ok(reply) => reply.json()?,
             Err(error) if error.code == 5 => break,

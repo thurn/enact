@@ -155,21 +155,52 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
         Command::Wait(args) => crate::feed::wait(client, args),
         Command::State {
             set_cutover: Some(cutover),
+            pause_id,
         } => {
             let cutover = match cutover {
                 Cutover::Before => "before",
                 Cutover::Paused => "paused",
                 Cutover::After => "after",
             };
-            write(client, &["state"], &json!({"cutover": cutover}))
+            let mut body = json!({"cutover": cutover});
+            if let Some(id) = pause_id {
+                body["pause_id"] = json!(id);
+            }
+            client
+                .post(
+                    &client.url(&["state"], &[]),
+                    &body,
+                    body.get("pause_id").is_some(),
+                )?
+                .json()
         }
-        Command::State { set_cutover: None } => read(client, &["state"], &[]),
+        Command::State {
+            set_cutover: None, ..
+        } => read(client, &["state"], &[]),
+        Command::Drain => crate::shim::state::drain(client),
         Command::Import {
             file,
             frozen_beads,
             history_dir,
             row_budget,
-        } => crate::migration::import(client, file, frozen_beads, history_dir, row_budget),
+            since_frozen_beads,
+            pause_id,
+            before_cutover,
+        } => crate::migration::import(
+            client,
+            file,
+            frozen_beads,
+            history_dir,
+            row_budget,
+            since_frozen_beads,
+            if let Some(id) = pause_id {
+                json!({"pause_id": id})
+            } else if before_cutover {
+                json!({"before_cutover": true})
+            } else {
+                json!({})
+            },
+        ),
         Command::Restore { file, row_budget } => {
             crate::migration::restore(client, &file, row_budget)
         }

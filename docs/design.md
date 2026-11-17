@@ -1927,7 +1927,7 @@ All routes are under `/<project>/api`. Reads need no token. Writes need
 
 | Route | Does |
 | --- | --- |
-| `GET /state` | `{cutover, cutover_at, seq, day, requests, rows_written, limits}` |
+| `GET /state` | `{cutover, cutover_at, cutover_id, seq, day, requests, rows_written, limits}` |
 | `GET /tickets/<id>?comments=1&history=1` | One ticket with its edges in both directions, children, `ready` and `blocked_by` |
 | `GET /tickets?status=&type=&parent=&ancestor=&label=&assignee=&ready=1&all=1&limit=` | A list; closed tickets only with `all=1` or `status=closed` |
 | `GET /graph?all=1` | Live tickets by default, or all tickets with `all=1`. Includes `ready`, edges within the selected graph, and `seq`. Omits `body`, `design` and `notes`. Matching the projection's `ETag` returns 304. |
@@ -1939,7 +1939,7 @@ All routes are under `/<project>/api`. Reads need no token. Writes need
 | `GET /feed` | WebSocket (section 6) |
 | `POST /import` | Up to 200 tickets with edges, comments and history; idempotent |
 | `GET /export?after=<id>` | JSON lines of whole tickets sorted by ID, paged |
-| `POST /state` | `{cutover}`; only moves forward, except `paused` to `before` |
+| `POST /state` | `{cutover, pause_id?}`; only moves forward, except `paused` to `before` |
 
 The import body is `{tickets: [...]}`. Each element has the ticket fields
 plus its outgoing `edges`, `comments`, `history` and `aliases` arrays. Export
@@ -2109,6 +2109,10 @@ idle connection costs nothing.
   detect an audit-only change such as adding and removing a label. Set `after`
   only after both commands succeed. If either fails, set `before` again and
   investigate.
+- The operator command `scripts/cutover.py start` uses a managed pause ID to
+  fence the final import and state transition. A stale or concurrent operator
+  cannot change that pause. The shim includes the ID in drain events, and the
+  archive keeps the exact isolated Dolt checkout used at the switch.
 - `tk compare` checks all imported fields and projects Beads' ready set
   through readiness rule 5. Its `expected_readiness_differences` report lists
   the raw results and live child IDs for each Beads-ready container blocked
@@ -2129,6 +2133,9 @@ idle connection costs nothing.
   edit, including a comment or dependency change, or if the journal no
   longer proves coverage back to cutover. The cutover operator retains the
   legacy export for reconciliation when a batch conflicts.
+  `scripts/cutover.py reconcile` compares source snapshots against the
+  archive, so changes published after the pause are detected even when they
+  were written earlier or leave no change in the issue export.
 
 ### 8. Tokens
 
@@ -2174,9 +2181,11 @@ tk event <kind> <json>
 tk events [--kind K] [--since SEQ]
 tk wait ready [--ancestor ID] [--label L]... | ticket <id> [--status S]
         | lease <name> | change [--since SEQ]   --timeout S
-tk state [--set-cutover before|paused|after]
+tk state [--set-cutover before|paused|after [--pause-id ID]]
+tk drain
 tk export
 tk import (<bd-export.jsonl> [--history-dir D] | --frozen-beads CHECKOUT) [--row-budget N]
+          [--before-cutover | --pause-id ID | --since-frozen-beads CHECKOUT]
 tk restore <tickets.jsonl> [--row-budget N]
 tk compare [--history-dir D | --frozen-beads CHECKOUT]
 tk register | tk bench | tk version

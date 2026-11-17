@@ -30,6 +30,7 @@ pub fn usage(error: impl Display) -> Failure {
     Failure::new(1, error)
 }
 
+#[derive(Clone)]
 pub struct Client {
     base: Url,
     agent: ureq::Agent,

@@ -105,7 +105,12 @@ pub enum Command {
     State {
         #[arg(long)]
         set_cutover: Option<Cutover>,
+        /// Identify a managed pause. Subsequent transitions must name the same pause.
+        #[arg(long, requires = "set_cutover")]
+        pause_id: Option<String>,
     },
+    /// Publish this machine's in-flight Beads writes during a cutover pause.
+    Drain,
     /// Stream a full JSON Lines export.
     Export,
     /// Copy a legacy Beads JSON Lines export and its audit history.
@@ -120,6 +125,15 @@ pub enum Command {
         /// Override the daily import ceiling for a local rehearsal.
         #[arg(long)]
         row_budget: Option<u64>,
+        /// Import only legacy changes since this archive, after cutover.
+        #[arg(long, requires = "frozen_beads")]
+        since_frozen_beads: Option<std::path::PathBuf>,
+        /// Fence the final import to the active managed pause.
+        #[arg(long, requires = "frozen_beads", conflicts_with = "since_frozen_beads")]
+        pause_id: Option<String>,
+        /// Fence a staged import to the period when Beads is authoritative.
+        #[arg(long, conflicts_with_all = ["pause_id", "since_frozen_beads"])]
+        before_cutover: bool,
     },
     /// Restore a ticket backup into a fresh project, or resume its restore.
     Restore {

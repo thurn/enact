@@ -115,6 +115,7 @@ def run(
     check: bool = True,
     env: dict[str, str] | None = None,
     input_text: str | None = None,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     full_env = {**os.environ, **(env or {})}
     try:
@@ -126,6 +127,7 @@ def run(
             encoding="utf-8",
             errors="replace",
             capture_output=True,
+            timeout=timeout,
             **({"stdin": subprocess.DEVNULL} if input_text is None else {"input": input_text}),
         )
     except FileNotFoundError:
@@ -506,7 +508,8 @@ def ticket_binary() -> Path:
 
 
 def ticket_process(repo: Repo, *args: str, actor: str | None = None,
-                   input_text: str | None = None) -> subprocess.CompletedProcess[str]:
+                   input_text: str | None = None, timeout: float | None = None
+                   ) -> subprocess.CompletedProcess[str]:
     cmd = [str(ticket_binary()), "--json"]
     if repo.config.ticket_project:
         cmd += ["--project", repo.config.ticket_project]
@@ -514,7 +517,10 @@ def ticket_process(repo: Repo, *args: str, actor: str | None = None,
         cmd += ["--actor", actor]
     # tk reads the same worktree configuration that find_repo selected.
     cwd = repo.top if (repo.top / ".enact.toml").is_file() else repo.main
-    return run([*cmd, *args], cwd, check=False, input_text=input_text)
+    env = None
+    if args == ("drain",):
+        env = {"ENACT_SHIM_HELPER": str(Path(__file__).resolve()), "ENACT_SHIM_PYTHON": sys.executable}
+    return run([*cmd, *args], cwd, check=False, input_text=input_text, env=env, timeout=timeout)
 
 
 def register_ticket_client(repo: Repo) -> None:
@@ -531,8 +537,10 @@ def ticket_cutover(top: Path, project: str) -> str:
     # An outage on a machine that has not observed cutover yet is ambiguous.
     # Do not fall back to the frozen Beads store.
     state = ticket_reply(ticket_process(repo, "--retry-for", "2", "state"))
-    draining = sys.argv[1:2] == ["sync"] and bool(os.environ.get("ENACT_SYNC_NOW"))
-    while state["cutover"] == "paused" and not draining:
+    while state["cutover"] == "paused" and not cutover_draining():
+        state = ticket_reply(ticket_process(repo, "drain"))
+        if state["cutover"] != "paused":
+            break
         wait = ticket_process(repo, "wait", "change", "--since", str(state["seq"]),
                               "--timeout", "120")
         if wait.returncode != 6:
@@ -541,6 +549,11 @@ def ticket_cutover(top: Path, project: str) -> str:
     if state["cutover"] == "after":
         write_json(marker, project)
     return state["cutover"]
+
+
+def cutover_draining() -> bool:
+    return (sys.argv[1:2] == ["sync"] and bool(os.environ.get("ENACT_SHIM_DRAINING"))
+            and bool(os.environ.get("ENACT_SYNC_NOW")))
 
 
 def uses_ticket_server(repo: Repo) -> bool:
@@ -1047,6 +1060,24 @@ def first_in_line(queue: Path, mine: Path) -> bool:
 
 @contextlib.contextmanager
 def ownership_lock(repo: Repo, wait: float = OWNERSHIP_WAIT):
+    path = repo.state / "ownership.lock"
+    if path in _ownership_locks:
+        yield
+        return
+    while not uses_ticket_server(repo):
+        with legacy_ownership_lock(repo, wait):
+            # A command that saw "before" can queue behind this machine's
+            # drain. Recheck under the lock before admitting a legacy write.
+            if not repo.config.ticket_project or cutover_draining() or \
+                    ticket_reply(ticket_process(repo, "--retry-for", "2", "state"))["cutover"] == "before":
+                yield
+                return
+        ticket_cutover.cache_clear()
+    yield
+
+
+@contextlib.contextmanager
+def legacy_ownership_lock(repo: Repo, wait: float):
     """Take the clone's ownership lock, waiting up to `wait` seconds.
 
     Callers that already passed a fast check use `OWNERSHIP_WAIT_CHECKED`. A holder record
@@ -1061,13 +1092,7 @@ def ownership_lock(repo: Repo, wait: float = OWNERSHIP_WAIT):
     still waiting. Older helpers that skip the queue can still take the lock
     between two queued waiters.
     """
-    if uses_ticket_server(repo):
-        yield
-        return
     path = repo.state / "ownership.lock"
-    if path in _ownership_locks:
-        yield
-        return
     began = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     start = time.monotonic()
     command = " ".join(sys.argv[:4])
@@ -1330,6 +1355,8 @@ def deferred_sync(repo: Repo) -> dict[str, Any]:
         try:
             time.sleep(DEFERRED_SYNC_DELAY)
             with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED):
+                if uses_ticket_server(repo):
+                    break
                 if pending.exists():
                     sync(repo, force=True, publish=True)
                     synced += 1
@@ -4314,6 +4341,8 @@ def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], progress: QueueP
         if not lease.server and refresh_delivery_backend(repo):
             raise LeaseLost()
         with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED):
+            if not lease.server and uses_ticket_server(repo):
+                raise LeaseLost()
             graph: list[dict[str, Any]] = []
             if any(e["bead"] for e in picked):
                 sync(repo)
@@ -4510,9 +4539,9 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
                 raise Fail("fast checks failed; fix them and run `enact push` again", code=2)
             checked = head
         commits = repo.git("rev-list", "--reverse", f"{before}..{head}").split()
-        if refresh_delivery_backend(repo) and args.bead:
-            args.bead = canonical_ticket_id(repo, args.bead)
         with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED if checked else OWNERSHIP_WAIT):
+            if uses_ticket_server(repo) and args.bead:
+                args.bead = canonical_ticket_id(repo, args.bead)
             graph = Beads(repo).all() if args.bead else []
             bead = next((b for b in graph if b["id"] == args.bead), {})
             if args.bead and not bead:

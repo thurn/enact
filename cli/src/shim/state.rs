@@ -12,6 +12,16 @@ use std::{env, io};
 
 const CACHE_FOR: Duration = Duration::from_secs(5);
 
+pub(crate) fn drain(client: &Client) -> Result<Value> {
+    // Use the same gate as bd, including the lock that fences direct writers.
+    let gate = Gate::open(client.clone())?;
+    let snapshot = gate.snapshot(false, false)?;
+    if snapshot["cutover"] == "paused" {
+        gate.drain(&snapshot, &env::current_dir().map_err(usage)?)?;
+    }
+    gate.snapshot(false, false)
+}
+
 pub(super) fn dispatch(
     args: &[OsString],
     reads: bool,
@@ -46,7 +56,7 @@ pub(super) fn dispatch(
         } else {
             Some(gate.lock("writers.lock", false)?)
         };
-        let snapshot = gate.snapshot(reads)?;
+        let snapshot = gate.snapshot(reads, true)?;
         match snapshot["cutover"].as_str() {
             Some("before") => return real(args),
             Some("after") => {
@@ -123,7 +133,7 @@ impl Gate {
         Ok(lock)
     }
 
-    fn snapshot(&self, cached: bool) -> Result<Value> {
+    fn snapshot(&self, cached: bool, allow_legacy_fallback: bool) -> Result<Value> {
         let permanent = self.directory.join("after");
         if cached && permanent.is_file() {
             return Ok(json!({"cutover": "after"}));
@@ -171,9 +181,10 @@ impl Gate {
                 state
             }
             result
-                if prior
-                    .as_ref()
-                    .is_some_and(|state| state["cutover"] == "paused") =>
+                if !allow_legacy_fallback
+                    || prior
+                        .as_ref()
+                        .is_some_and(|state| state["cutover"] == "paused") =>
             {
                 return Err(result
                     .err()
@@ -208,12 +219,17 @@ impl Gate {
         let at = snapshot["cutover_at"]
             .as_str()
             .ok_or_else(|| usage("pause has no timestamp"))?;
+        let id = &snapshot["cutover_id"];
+        let pause = format!("{at}/{id}");
         let marker = self.directory.join("drained");
-        if fs::read_to_string(&marker).is_ok_and(|saved| saved == at) {
+        if fs::read_to_string(&marker).is_ok_and(|saved| saved == pause) {
             return Ok(());
         }
-        let current = self.snapshot(false)?;
-        if current["cutover"] != "paused" || current["cutover_at"] != at {
+        let current = self.snapshot(false, false)?;
+        if current["cutover"] != "paused"
+            || current["cutover_at"] != at
+            || current["cutover_id"] != *id
+        {
             return Ok(());
         }
         let helper = env::var_os("ENACT_SHIM_HELPER")
@@ -240,18 +256,18 @@ impl Gate {
         if result["remote"] != true || result["deferred"] == true {
             return Err(usage("enact sync did not publish the legacy store"));
         }
-        let state = self.snapshot(false)?;
-        if state["cutover"] != "paused" || state["cutover_at"] != at {
+        let state = self.snapshot(false, false)?;
+        if state["cutover"] != "paused" || state["cutover_at"] != at || state["cutover_id"] != *id {
             return Ok(());
         }
         self.client
             .post(
                 &self.client.url(&["events"], &[]),
-                &json!({"kind": "machine", "data": {"drained": true, "cutover_at": at}}),
+                &json!({"kind": "machine", "data": {"drained": true, "cutover_at": at, "cutover_id": id}}),
                 false,
             )?
             .json()?;
-        self.persist(&marker, at)?;
+        self.persist(&marker, &pause)?;
         drop(lock);
         Ok(())
     }

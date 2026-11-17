@@ -110,6 +110,28 @@ test("events use the authenticated identity, support filtered cursors, and expir
   expect(await runInDurableObject(stub, (_object, state) => state.storage.getAlarm())).not.toBeNull();
 });
 
+test("managed cutover fences stale operators, native writes and staged imports", async () => {
+  const {post, json} = await fixture("managed-cutover");
+  const set = (cutover: string, pause_id?: string) => post("/state", {cutover, pause_id});
+  const staged = {tickets: [imported("staged")], before_cutover: true};
+  await json(post("/import", staged));
+  await json(set("paused", "old"));
+  expect((await set("paused", "other")).status).toBe(409);
+  expect((await post("/import", staged)).status).toBe(409);
+  expect((await post("/import", {tickets: []})).status).toBe(409);
+  expect((await post("/batch", {ops: [{op: "comment", id: "staged", text: "Early"}]})).status).toBe(409);
+  expect(await json(set("before", "old"))).toMatchObject({cutover: "before", cutover_id: null});
+  expect(await json(set("paused", "new"))).toMatchObject({cutover_id: "new"});
+  expect((await set("before", "old")).status).toBe(409);
+  expect((await set("after")).status).toBe(409);
+  const final = {tickets: [imported("final")]};
+  expect((await post("/import", {...final, pause_id: "old"})).status).toBe(409);
+  expect(await json(post("/import", {...final, pause_id: "new"}))).toMatchObject({imported: 1});
+  expect(await json(set("after", "new"))).toMatchObject({cutover: "after", cutover_id: "new"});
+  expect((await post("/import", {...final, pause_id: "new"})).status).toBe(409);
+  expect((await post("/import", staged)).status).toBe(409);
+});
+
 test("counts committed rows, rejects quota-breaking batches atomically, and resets by UTC day", async () => {
   const {get, post, json, sql} = await fixture("daily-quota");
   const batch = (title: string) => post("/batch", {ops: [{op: "create", fields: {title}, request_key: title}]});

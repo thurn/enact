@@ -1,4 +1,5 @@
 """Replay the checked-in Beads transcript against the real local Worker."""
+import argparse
 from contextlib import contextmanager
 import datetime as dt
 import gzip
@@ -52,11 +53,11 @@ def ok(binary, args, directory, env):
     return json.loads(reply.stdout)
 
 
-def request(address, path, payload=None):
-    headers = {"Authorization": f"Bearer {TOKEN}", "X-Actor": "shim-test"}
+def request(address, path, payload=None, *, token=TOKEN):
+    headers = {"Authorization": f"Bearer {token}", "X-Actor": "shim-test"}
     data = None if payload is None else json.dumps(payload).encode()
     if path.startswith("/test-token/"):
-        data = TOKEN.encode()
+        data = token.encode()
     with urllib.request.urlopen(urllib.request.Request(address + path, data, headers), timeout=20) as response:
         text = response.read()
         return json.loads(text) if text else None
@@ -233,8 +234,8 @@ def retired_export(bd, args, cwd, env, address, project):
     assert request(address, endpoint)["requests"] == requests_before + 1, args
 
 
-def replay(tk, bd, directory, env, address):
-    rows = read_gzip(CORPUS / "start.jsonl.gz")
+def replay(tk, bd, directory, env, address, corpus):
+    rows = read_gzip(corpus / "start.jsonl.gz")
     # A ticket due after the recording was snoozed for every captured call.
     # Keep that relationship independent of the day CI runs this replay.
     snoozes = {row["id"]: row["defer_until"] for row in rows
@@ -258,7 +259,7 @@ def replay(tk, bd, directory, env, address):
     request(address, "/by/api/state", {"cutover": "paused"})
     request(address, "/by/api/state", {"cutover": "after"})
 
-    calls = read_gzip(CORPUS / "calls.jsonl.gz")
+    calls = read_gzip(corpus / "calls.jsonl.gz")
     problems = []
     expected_ids, actual_ids = {}, {}
     allocated_roots = {}
@@ -267,9 +268,14 @@ def replay(tk, bd, directory, env, address):
     retired = 0
     for call in calls:
         args = [allocated_roots.get(arg, arg) for arg in call["argv"]]
-        cwd = directory / call["cwd"]
+        cwd = (directory / call["cwd"]).resolve()
+        assert cwd.is_relative_to(directory.parent.resolve()), call["cwd"]
+        cwd.mkdir(parents=True, exist_ok=True)
         for name, contents in call.get("files", {}).items():
-            (cwd / name).write_bytes(contents.encode("utf-8"))
+            path = (cwd / name).resolve()
+            assert path.is_relative_to(cwd), name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(contents.encode("utf-8"))
         if call["command"] == ["export"]:
             retired_export(bd, args, cwd, env, address, "by")
             retired += 1
@@ -619,7 +625,13 @@ def migration_audit(tk, directory, env):
 
 
 def main():
-    tk = Path(sys.argv[1]).resolve()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("tk", type=Path)
+    parser.add_argument("--audit", action="store_true")
+    parser.add_argument("--corpus", type=Path, default=CORPUS)
+    parser.add_argument("--replay-only", action="store_true")
+    args = parser.parse_args()
+    tk = args.tk.resolve()
     with tempfile.TemporaryDirectory() as scratch:
         directory = Path(scratch)
         env = {**os.environ, "HOME": scratch, "APPDATA": scratch,
@@ -631,7 +643,7 @@ def main():
         for key in tuple(env):
             if key.upper().startswith("BEADS_"):
                 env.pop(key)
-        if sys.argv[2:] == ["--audit"]:
+        if args.audit:
             migration_audit(tk, directory, env)
             return
 
@@ -639,7 +651,7 @@ def main():
         fake = directory / f"legacy{tk.suffix}"
         help_output = directory / "help"
         help_output.mkdir()
-        for case in read_gzip(CORPUS / "calls.jsonl.gz"):
+        for case in read_gzip(args.corpus / "calls.jsonl.gz"):
             if case["argv"][-1:] == ["--help"] and case["command"] != ["export"]:
                 (help_output / "_".join(case["argv"][:-1])).write_text(case["stdout"], encoding="utf-8")
         source = directory / "legacy.rs"
@@ -685,14 +697,16 @@ fn main() {
             for project in ("by", "gate"):
                 request(address, f"/test-token/{project}")
             (directory / ".enact.toml").write_text(f'[tickets]\nproject = "by"\nurl = "{address}"\n')
-            cutover(bd, directory, env, address)
+            if not args.replay_only:
+                cutover(bd, directory, env, address)
             (directory / ".enact.toml").unlink()
             workspace = directory / "workspace"
             workspace.mkdir()
             (workspace / ".enact.toml").write_text(f'[tickets]\nproject = "by"\nurl = "{address}"\n')
-            replay(tk, bd, workspace, env, address)
-            dated_deferrals(tk, bd, directory, env, address)
-            migration_compare(tk, fake, directory, env, address)
+            replay(tk, bd, workspace, env, address, args.corpus)
+            if not args.replay_only:
+                dated_deferrals(tk, bd, directory, env, address)
+                migration_compare(tk, fake, directory, env, address)
 
 
 if __name__ == "__main__":

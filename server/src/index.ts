@@ -68,6 +68,10 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
   private write(project: string, path: string, lease: string | undefined, identity: Identity, body: unknown, now: number, usage: ProjectUsage) {
     usage.check(0);
     if (path === "/batch") {
+      const {cutover, cutover_id} = cutoverState(this.store.sql);
+      if (cutover === "paused" && cutover_id !== null) {
+        throw new ApiError(409, {error: "Ticket writes are paused for cutover"});
+      }
       const previous = this.store.tickets.seq;
       let change: FeedChange | undefined;
       let committed: BatchChanges | undefined;
@@ -122,7 +126,17 @@ export class ProjectTickets extends DurableObject<Cloudflare.Env> {
   private mutate(project: string, path: string, lease: string | undefined, identity: Identity, body: unknown, write: ProjectWrite):
     {body: object; status?: number} | undefined {
     if (path === "/import") {
-      const nativeEdits = cutoverState(this.store.sql).cutover === "after"
+      const {cutover, cutover_id} = cutoverState(this.store.sql);
+      const input = object(body, "import");
+      const id = input.pause_id ?? null;
+      if (input.before_cutover === true && cutover !== "before") {
+        throw new ApiError(409, {error: "Staged import requires Beads to be authoritative"});
+      }
+      if ((id !== null || (cutover === "paused" && cutover_id !== null))
+          && (cutover !== "paused" || id !== cutover_id)) {
+        throw new ApiError(409, {error: "The managed cutover pause has changed"});
+      }
+      const nativeEdits = cutover === "after"
         ? this.feed.nativeEditsSince(Number(this.store.meta("cutover_seq")), write.seq)
         : undefined;
       return {body: importTickets(write, project, body, nativeEdits)};

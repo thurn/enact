@@ -1,4 +1,4 @@
-import {bad, choice, integer, name, object} from "./ticket-types";
+import {ApiError, bad, choice, integer, name, object} from "./ticket-types";
 import type {Identity} from "./token-auth";
 
 export const dayMilliseconds = 86_400_000;
@@ -59,10 +59,13 @@ function queryInteger(query: URLSearchParams, field: string, fallback: number): 
   return integer(Number(value), field);
 }
 
-export function cutoverState(sql: SqlStorage): {cutover: Cutover; cutover_at: string | null} {
-  const rows = sql.exec<{key: string; value: string}>("SELECT * FROM meta WHERE key IN ('cutover', 'cutover_at')");
+export function cutoverState(sql: SqlStorage) {
+  const rows = sql.exec<{key: string; value: string}>(
+    "SELECT * FROM meta WHERE key IN ('cutover', 'cutover_at', 'cutover_id')",
+  );
   const meta = Object.fromEntries([...rows].map(({key, value}) => [key, value]));
-  return {cutover: (meta.cutover ?? "before") as Cutover, cutover_at: meta.cutover_at ?? null};
+  return {cutover: (meta.cutover ?? "before") as Cutover, cutover_at: meta.cutover_at ?? null,
+    cutover_id: meta.cutover_id ?? null};
 }
 
 export class ProjectWrite {
@@ -98,16 +101,24 @@ export class ProjectWrite {
   }
 
   cutover(body: unknown): void {
-    const wanted = choice(object(body, "state").cutover, "cutover", cutoverStates);
-    const {cutover} = cutoverState(this.sql);
+    const input = object(body, "state");
+    const wanted = choice(input.cutover, "cutover", cutoverStates);
+    const id = input.pause_id === undefined ? null : name(input.pause_id, "pause_id");
+    const {cutover, cutover_id: active} = cutoverState(this.sql);
+    if (cutover !== "before" && id !== active) {
+      throw new ApiError(409, {error: "The managed cutover pause has changed"});
+    }
     if (cutover === wanted) return;
     if (cutover === "after" || (cutover === "before" && wanted !== "paused")) {
       bad(`Cannot move cutover from ${cutover} to ${wanted}`);
     }
     this.meta("cutover", wanted);
     // Retain the start of the pause for the final reconciliation pull.
-    if (wanted === "paused") this.meta("cutover_at", new Date(this.now).toISOString());
-    if (wanted === "before") this.write("DELETE FROM meta WHERE key = 'cutover_at'");
+    if (wanted === "paused") {
+      this.meta("cutover_at", new Date(this.now).toISOString());
+      if (id !== null) this.meta("cutover_id", id);
+    }
+    if (wanted === "before") this.write("DELETE FROM meta WHERE key IN ('cutover_at', 'cutover_id')");
     const seq = this.advance();
     if (wanted === "after") this.meta("cutover_seq", String(seq));
   }

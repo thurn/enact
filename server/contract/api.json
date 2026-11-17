@@ -35,7 +35,7 @@
   "routes": [
     {
       "method": "GET", "path": "/state", "request": {},
-      "response": {"cutover": "before|paused|after", "cutover_at": "timestamp|null", "seq": "integer", "day": "date", "requests": "integer", "rows_written": "integer", "limits": "object"},
+      "response": {"cutover": "before|paused|after", "cutover_at": "timestamp|null", "cutover_id": "string|null", "seq": "integer", "day": "date", "requests": "integer", "rows_written": "integer", "limits": "object"},
       "statuses": [200]
     },
     {
@@ -94,7 +94,7 @@
     },
     {
       "method": "POST", "path": "/import",
-      "request": {"body": {"tickets": "up to 200 flat Whole ticket objects", "daily_row_ceiling": "optional maximum daily rows including existing usage"}},
+      "request": {"body": {"tickets": "up to 200 flat Whole ticket objects", "daily_row_ceiling": "optional maximum daily rows including existing usage", "pause_id": "optional ID of the active managed pause", "before_cutover": "optional bool requiring before"}},
       "response": {"seq": "integer", "imported": "number of changed tickets", "rows_written": "SQLite writes for data and shared sequence", "conflict": "{error, conflicts: ticket IDs}"},
       "statuses": [200, 400, 401, 409, 429]
     },
@@ -106,9 +106,9 @@
     },
     {
       "method": "POST", "path": "/state",
-      "request": {"body": {"cutover": "before|paused|after"}},
-      "response": {"cutover": "before|paused|after", "cutover_at": "timestamp|null", "seq": "integer", "day": "date", "requests": "integer", "rows_written": "integer", "limits": "object"},
-      "statuses": [200, 400, 401, 429]
+      "request": {"body": {"cutover": "before|paused|after", "pause_id": "optional ID for a managed pause and its subsequent transitions"}},
+      "response": {"cutover": "before|paused|after", "cutover_at": "timestamp|null", "cutover_id": "string|null", "seq": "integer", "day": "date", "requests": "integer", "rows_written": "integer", "limits": "object"},
+      "statuses": [200, 400, 401, 409, 429]
     }
   ],
   "batch": {
@@ -163,9 +163,10 @@
       "event": "<kind> <json>",
       "events": "[--kind K] [--since SEQ]",
       "wait": "ready [--ancestor ID] [--label L]... | ticket <id> [--status S] | lease <name> | change [--since SEQ] --timeout S",
-      "state": "[--set-cutover before|paused|after]",
+      "state": "[--set-cutover before|paused|after [--pause-id ID]]",
+      "drain": "",
       "export": "",
-      "import": "(<bd-export.jsonl> [--history-dir D] | --frozen-beads CHECKOUT) [--row-budget N]",
+      "import": "(<bd-export.jsonl> [--history-dir D] | --frozen-beads CHECKOUT) [--row-budget N] [--before-cutover | --pause-id ID | --since-frozen-beads CHECKOUT]",
       "restore": "<tickets.jsonl> [--row-budget N]",
       "compare": "[--history-dir D | --frozen-beads CHECKOUT]",
       "register": "",
