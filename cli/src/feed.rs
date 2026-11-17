@@ -93,7 +93,8 @@ impl Target {
             WaitMode::Ticket { id, status } => Self::Ticket {
                 path: client.url(&["tickets", &id], &[]),
                 id: id
-                    .strip_prefix(&format!("{}-", client.project))
+                    .strip_prefix('T')
+                    .or_else(|| id.strip_prefix(&format!("{}-", client.project)))
                     .unwrap_or(&id)
                     .to_owned(),
                 status,

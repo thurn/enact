@@ -33,7 +33,7 @@ async function seed() {
         ('q44s.7', 'q44s', 'Render milestone', 'milestone', 'open', '[]', '',
          '2026-11-16T19:30:00Z', '2026-11-16T19:30:00Z', 'Derek', 4992),
         ('q44s.7.24', 'q44s.7', 'Render live tickets <safely>', 'task', 'in_progress', '["lane:ui"]',
-         'Read by-q44s and q44s.7 for **context**.', '2026-11-16T19:30:00Z', '2026-11-16T19:30:00Z', 'Derek', 4992),
+         'Read by-q44s, q44s.7, and Terro for **context**.', '2026-11-16T19:30:00Z', '2026-11-16T19:30:00Z', 'Derek', 4992),
         ('q44s.7.24.1', 'q44s.7.24', 'Render detail rows', 'task', 'open', '[]', '',
          '2026-11-16T19:30:00Z', '2026-11-16T19:30:00Z', 'Derek', 4992),
         ('erro', NULL, 'Simulator failure', 'bug', 'blocked', '["role:steward"]', '',
@@ -71,6 +71,7 @@ test("renders project pages from 5,000 tickets and revalidates them", async () =
   }
   expect(homeBody).toContain("Slow CI failures");
   expect(homeBody).toContain('href="/by/tickets/q44s.7.24"');
+  expect(homeBody).toContain('class="c-mono">Tq44s</');
   expect(homeBody).toContain("4792/4795");
 
   const detail = await request("/tickets/q44s.7.24");
@@ -78,9 +79,13 @@ test("renders project pages from 5,000 tickets and revalidates them", async () =
   const detailBody = await detail.text();
   for (const value of ["Description", "Comments", "Changelog", "Subtasks", "Blocked by", "Blocking", "Assignee", "Epic",
     "In progress", "Render live tickets &lt;safely&gt;", "session ff7437", "Validate the old path", "Simulator failure",
-    '<strong>context</strong>', 'href="/by/tickets/q44s"', 'href="/by/tickets/path"', "renamed it", "created this"]) {
+    '<strong>context</strong>', 'href="/by/tickets/q44s"', 'href="/by/tickets/path"', "renamed it", "created this",
+    'class="c-mono">Tq44s.7.24</', 'href="/by/tickets/q44s.7">Tq44s.7</',
+    'class="c-row-id c-mono c-hide-narrow">Tq44s.7.24.1</']) {
     expect(detailBody).toContain(value);
   }
+
+  expect(detailBody).toMatch(/href="\/by\/tickets\/erro"[^>]*><span class="c-mono">Terro<\/span><\/a>/);
 
   const homeTag = home.headers.get("etag")!;
   const detailTag = detail.headers.get("etag")!;
@@ -103,7 +108,7 @@ test("renders project pages from 5,000 tickets and revalidates them", async () =
   expect(changed.status).toBe(200);
   expect(await changed.text()).toContain("Renamed failure");
 
-  for (const path of ["/beads/by-q44s.7.24", "/beads/by-q44s.7.24.html", "/tickets/by-q44s.7.24", "/tickets/old", "/tickets/q44s.7.24/"]) {
+  for (const path of ["/beads/by-q44s.7.24", "/beads/by-q44s.7.24.html", "/tickets/by-q44s.7.24", "/tickets/old", "/tickets/q44s.7.24/", "/tickets/Tq44s.7.24"]) {
     const redirect = await request(path + "?from=bookmark", {redirect: "manual"});
     expect(redirect.status).toBe(308);
     expect(redirect.headers.get("location")).toBe("https://example.com/by/tickets/q44s.7.24?from=bookmark");
@@ -138,7 +143,7 @@ test("home fragments show current project status independently of the ticket boa
     const at = new Date().toISOString();
     sql.exec(`
       INSERT INTO events VALUES
-        (1, ?, 'session', 'mac', 'Casey', '{"session":"Casey","ticket":"live","action":"start"}'),
+        (1, ?, 'session', 'mac', 'Casey', '{"session":"Casey","ticket":"Tlive","action":"start"}'),
         (2, ?, 'session', 'mac', 'Pat', '{"session":"Pat","ticket":"old","action":"start"}'),
         (3, ?, 'session', 'mac', 'Pat', '{"session":"Pat","ticket":"old","action":"archive"}'),
         (4, ?, 'ci', 'Mac runner', 'ci', '{"os":"macos","passed":false,"tip":"obsolete"}'),
@@ -156,7 +161,7 @@ test("home fragments show current project status independently of the ticket boa
   expect(status.headers.get("x-cirrus-sequence")).toBe("6");
   const html = await status.text();
   for (const value of [
-    "Casey", 'href="/by/tickets/live"', "Windows", "Failed", "01234567", "macOS", "Passed", "abcdef12",
+    "Casey", 'href="/by/tickets/live">Tlive</a>', "Windows", "Failed", "01234567", "macOS", "Passed", "abcdef12",
     "Merge holder", "Queued merger", "Writes paused", "UTC day", "Requests", "Rows written", "/100000",
   ]) expect(html).toContain(value);
   expect(html).not.toMatch(/>Pat<|obsolete|<main|<script/);

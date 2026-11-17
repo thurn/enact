@@ -79,23 +79,33 @@ fn run(options: Options) -> Result<()> {
 }
 
 fn human(output: &mut impl Write, value: &Value) -> io::Result<()> {
-    if let Some(tickets) = value["tickets"].as_array().or_else(|| value.as_array()) {
+    if let Some(tickets) = value["tickets"].as_array() {
         for ticket in tickets {
-            human(output, ticket)?;
+            if let Some(id) = ticket.as_str() {
+                writeln!(output, "T{id}")?;
+            } else {
+                human(output, ticket)?;
+            }
+        }
+        return Ok(());
+    }
+    if let Some(items) = value.as_array() {
+        for item in items {
+            human(output, item)?;
         }
         return Ok(());
     }
     if let (Some(id), Some(title)) = (value["id"].as_str(), value["title"].as_str()) {
         return writeln!(
             output,
-            "{id}  {}  {title}",
+            "T{id}  {}  {title}",
             value["status"].as_str().unwrap_or("")
         );
     }
     if let Some(results) = value["results"].as_array() {
         for result in results {
             match result["id"].as_str() {
-                Some(id) => writeln!(output, "{id}")?,
+                Some(id) => writeln!(output, "T{id}")?,
                 None => writeln!(output, "{result}")?,
             }
         }

@@ -37,6 +37,10 @@ export function childrenProgress(count: Progress | undefined): string {
   return c.progress(closed, total, `${closed} closed, ${working} in progress, ${total - closed - working} to do`);
 }
 
+export function displayTicketId(id: string): string {
+  return `T${id}`;
+}
+
 export function ticketUrl(root: string, id: string): string {
   return root + "tickets/" + encodeURIComponent(id);
 }
@@ -49,5 +53,5 @@ export function brand(root: string): string {
 }
 
 export function ticketHeading(ticket: Card): string {
-  return `<div class="c-card-top">${c.mono(ticket.id)}${priorityChip(ticket.priority)}</div>`;
+  return `<div class="c-card-top">${c.mono(displayTicketId(ticket.id))}${priorityChip(ticket.priority)}</div>`;
 }

@@ -54,13 +54,17 @@ impl Simulator {
     }
 
     fn command(&self, args: &[&str], input: Option<Value>) -> Output {
+        self.output(&[&["--json"], args].concat(), input)
+    }
+
+    fn output(&self, args: &[&str], input: Option<Value>) -> Output {
         let mut process = Command::new(env!("CARGO_BIN_EXE_tk"));
         let base = self.directory.path();
         process
             .current_dir(base.join("repo/subdirectory"))
             .env("HOME", base.join("home"))
             .env("APPDATA", base.join("appdata"))
-            .args(["--retry-for", "0", "--actor", "test actor", "--json"])
+            .args(["--retry-for", "0", "--actor", "test actor"])
             .args(args);
         if let Some(input) = input {
             let mut child = process
@@ -100,6 +104,31 @@ fn decode(args: &[&str], output: &Output, code: i32) -> Value {
 #[test]
 fn commands_use_the_worker_protocol() {
     let sim = Simulator::start();
+    for (args, expected) in [
+        (&["show", "Tk7mq"][..], "Tk7mq  open  Simulator ticket"),
+        (&["create", "--title", "Readable output"], "Tk7mq"),
+        (
+            &[
+                "--project",
+                "display",
+                "wait",
+                "ticket",
+                "Tk7mq",
+                "--since",
+                "2",
+                "--timeout",
+                "5",
+            ],
+            "Tk7mq",
+        ),
+    ] {
+        let output = sim.output(args, None);
+        assert!(output.status.success(), "{args:?}: {:?}", output.stderr);
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim_end(),
+            expected
+        );
+    }
     assert_eq!(
         sim.ok(&["show", "by-k7mq", "--comments", "--history"])["trace"],
         json!({"project":"by","route":"tickets","target":"by-k7mq",

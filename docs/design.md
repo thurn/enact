@@ -1918,9 +1918,13 @@ CREATE INDEX aliases_id ON aliases(id);
   parent's `next_child` in the same transaction. Depth is not limited.
   A ticket keeps its ID when an update changes its parent. Readiness uses
   the stored parent.
-- Every lookup strips a leading `<project>-` and then consults `aliases`. The
-  importer sets each parent's `next_child` to one past its highest child.
-  Imported roots keep whatever characters they have.
+- Canonical IDs use lowercase letters and digits, with hyphens allowed in
+  imported roots and dots before child numbers. The dashboard and human
+  `tk` output add a leading uppercase `T`. A lookup with that prefix uses
+  the suffix as the canonical ID. Other lookups strip a leading
+  `<project>-` and consult `aliases`. API and `tk --json` responses use
+  canonical IDs. The importer sets each parent's `next_child` to one past
+  its highest child.
 
 ### 3. HTTP API
 

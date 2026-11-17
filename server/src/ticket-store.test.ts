@@ -94,6 +94,9 @@ test("creates nested IDs, resolves aliases, and lists using every filter", async
   expect(shown).not.toHaveProperty("history");
   expect((await show("lookup-legacy")).id).toBe(bug);
   expect((await show(`lookup-${bug}`)).id).toBe(bug);
+  expect((await show(`T${bug}`)).id).toBe(bug);
+  expect((await request(`/tickets/T${bug.toUpperCase()}`)).status).toBe(404);
+  expect((await list(`?parent=T${milestone}`)).map(({id}) => id)).toEqual([bug]);
   expect((await list()).map(({id}) => id)).toEqual([epic, milestone, bug]);
   expect((await list("?ancestor=lookup-old")).map(({id}) => id)).toEqual([milestone, bug]);
   expect((await list("?all=1&ancestor=lookup-old")).map(({id}) => id)).toEqual([milestone, bug, archived]);
@@ -116,7 +119,9 @@ test("creates nested IDs, resolves aliases, and lists using every filter", async
   const unchanged = await request("/graph", {headers: {"If-None-Match": etag!}});
   expect(unchanged.status).toBe(304);
   expect(await unchanged.text()).toBe("");
-  await batch([{op: "update", id: bug, set: {title: "Changed"}}]);
+  const updated = await batch([{op: "update", id: `T${bug}`, set: {title: "Changed"}}], [{id: `T${bug}`, version: (await show(bug)).version}]);
+  expect(updated.results[0].id).toBe(bug);
+  expect((await show(bug)).title).toBe("Changed");
   expect((await request("/graph", {headers: {"If-None-Match": etag!}})).status).toBe(200);
 });
 

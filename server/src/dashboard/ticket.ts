@@ -1,11 +1,12 @@
 import * as c from "../cirrus/components";
 import {render} from "../cirrus/markdown";
-import {brand, childrenProgress, person, priorityChip, priorityNames, statusDot, ticketHeading, ticketUrl} from "./common";
+import {brand, childrenProgress, displayTicketId, person, priorityChip, priorityNames, statusDot, ticketHeading, ticketUrl} from "./common";
 import {byAttention, mentions, type Card, type ticketData} from "./data";
 import {timeline} from "./history";
 
 export function ticketPage(root: string, project: string, data: ReturnType<typeof ticketData>, seq: string): c.PageOptions {
   const {ticket, children, chain, comments, history, groups, counts} = data;
+  const displayId = displayTicketId(ticket.id);
   const progress = new Map(counts.map((count) => [count.id, count]));
   const references = new Map(data.references.map((card) => [card.id, card]));
   const links = new Map(data.links);
@@ -38,7 +39,7 @@ export function ticketPage(root: string, project: string, data: ReturnType<typeo
     main.push(c.section(heading, html, count, anchor));
   }
 
-  const eyebrow = c.mono(ticket.id) + (ticket.type === "epic" ? c.chip("Epic", "violet") : "") + statusDot(ticket.status);
+  const eyebrow = c.mono(displayId) + (ticket.type === "epic" ? c.chip("Epic", "violet") : "") + statusDot(ticket.status);
   for (const [heading, text] of [
     ["Close reason", ticket.status === "closed" ? ticket.close_reason : ""],
     ["Description", ticket.body], ["Acceptance criteria", ticket.acceptance],
@@ -49,7 +50,7 @@ export function ticketPage(root: string, project: string, data: ReturnType<typeo
 
   function row(card: Card): string {
     const label = statusDot(card.status, false)
-      + `<span class="c-row-id c-mono c-hide-narrow">${c.esc(card.id)}</span>`
+      + `<span class="c-row-id c-mono c-hide-narrow">${c.esc(displayTicketId(card.id))}</span>`
       + `<span class="c-row-text">${c.esc(card.title)}</span>`;
     return c.row(label, childrenProgress(progress.get(card.id)) + priorityChip(card.priority), ticketUrl(root, card.id));
   }
@@ -93,13 +94,13 @@ export function ticketPage(root: string, project: string, data: ReturnType<typeo
   if (ticket.closed_at) properties.push(["Closed", c.time(ticket.closed_at)]);
 
   const layout = c.layout(main.join(""), c.meta(properties));
-  const crumbs = chain.filter((id) => references.has(id)).map((id) => [id, ticketUrl(root, id)] as const);
+  const crumbs = chain.filter((id) => references.has(id)).map((id) => [displayTicketId(id), ticketUrl(root, id)] as const);
   return {
     feed: {seq, tickets: [ticket.id, ...data.watched]},
-    title: `${ticket.title} · ${ticket.id}`,
+    title: `${ticket.title} · ${displayId}`,
     body: c.title(ticket.title, eyebrow) + (entries.length >= 3 ? c.withToc(c.toc(entries), layout) : layout)
       + [...templates.values()].join(""),
     root, assetRoot: "/", brand: brand(root), description: ticket.title,
-    crumbs: [["Tickets", root], ...crumbs, [ticket.id, null]],
+    crumbs: [["Tickets", root], ...crumbs, [displayId, null]],
   };
 }

@@ -69,6 +69,8 @@ function entries(fields: Partial<Ticket>): [string, SqlStorageValue][] {
 }
 
 export function resolveId(sql: SqlStorage, project: string, name: string): string {
+  // The uppercase prefix denotes a canonical ticket ID.
+  if (name.startsWith("T")) return name.slice(1);
   const stripped = name.startsWith(`${project}-`) ? name.slice(project.length + 1) : name;
   return sql.exec<{id: string}>(
     "SELECT id FROM aliases WHERE alias = ? OR alias = ? ORDER BY alias = ? DESC LIMIT 1",

@@ -28,11 +28,14 @@ try {
   await writeFile(join(scratch, ...tokenDirectory, "token"), token + "\n");
   await writeFile(join(scratch, ".enact.toml"), `[tickets]\nproject = "by"\nurl = "${origin}"\n`);
   const run = promisify(execFile);
-  async function tk(...args) {
-    const {stdout} = await run(tkPath, ["--retry-for", "0", "--actor", "Dashboard test", "--json", ...args], {
+  async function tkOutput(...args) {
+    const {stdout} = await run(tkPath, ["--retry-for", "0", "--actor", "Dashboard test", ...args], {
       cwd: scratch, env: {...process.env, HOME: join(scratch, "home"), APPDATA: join(scratch, "appdata")},
     });
-    return JSON.parse(stdout);
+    return stdout.trim();
+  }
+  async function tk(...args) {
+    return JSON.parse(await tkOutput("--json", ...args));
   }
   async function api(path, data, actor = "Dashboard test") {
     return fetch(origin + "/by/api/" + path, {
@@ -45,7 +48,11 @@ try {
   await writeFile(body, Array.from({length: 60}, (_, n) => `Reading position, paragraph ${n}.`).join("\n\n"));
   const {results: [{id}]} = await tk("create", "--title", "Live dashboard fixture", "--body-file", body);
   for (let n = 0; n < 18; n++) await tk("create", "--title", `Scroll fixture ${n}`);
-  await tk("event", "session", JSON.stringify({session: "Casey", ticket: id, action: "start"}));
+  assert.match(id, /^[a-z][a-z0-9]{3}$/);
+  const displayId = `T${id}`;
+  assert.equal(await tkOutput("show", displayId), `${displayId}  open  Live dashboard fixture`);
+  assert.equal((await tk("show", displayId)).id, id);
+  await tk("event", "session", JSON.stringify({session: "Casey", ticket: displayId, action: "start"}));
   await tk("event", "ci", JSON.stringify({os: "macos", passed: false}));
   await tk("event", "ci", JSON.stringify({os: "windows", passed: false}));
   await tk("event", "ci", JSON.stringify({os: "macos", passed: true, tip: "abcdef1234567890"}));
@@ -130,6 +137,10 @@ try {
     for (const colorScheme of ["light", "dark"]) {
       const view = await browser.newContext({viewport: {width, height: 720}, colorScheme, reducedMotion: "reduce"});
       const page = await open("/by/", view);
+      await page.locator(".c-card").filter({hasText: displayId}).getByText(displayId, {exact: true}).waitFor();
+      const ticket = await open("/by/tickets/" + id, view);
+      await ticket.locator(".c-eyebrow").getByText(displayId, {exact: true}).waitFor();
+      assert.ok(await ticket.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       const panel = page.locator("#project-status");
       await panel.getByText("Waiting session", {exact: true}).waitFor();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));

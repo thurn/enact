@@ -138,9 +138,11 @@ Dolt mode and the `dolt` CLI to resolve Beads merge conflicts.
 
 Run `enact backend` in the project. On `beads`, use `bd` and publish
 direct edits with `enact sync`. On `server`, use the returned `tk` path.
-Ticket writes are immediate, and migrated prefixed IDs still resolve to
-unprefixed ticket IDs. Use `enact claim`, `start`, `meta`, `release` and
-`close` for ownership and assignment on both backends.
+Ticket writes are immediate. The ticket dashboard and readable `tk` output
+show IDs like `Tq44s` and `Tq44s.7`. Pass these IDs, bare IDs, or legacy Beads
+IDs to `tk`. Scripts using `--json` receive the bare IDs. Use `enact claim`,
+`start`, `meta`, `release` and `close` for ownership and assignment on both
+backends.
 
 New server-backed plans file milestone audits directly under the milestone
 with `tk create --last`. The server manages readiness and parent closure.

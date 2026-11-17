@@ -20,10 +20,10 @@ export function byAttention(left: Card, right: Card): number {
 }
 
 export function mentions(project: string, text: string, replace: (id: string) => string): string {
-  return text.replace(/\b[a-z0-9-]+(?:\.[0-9]+)*\b/g, (word) => {
-    // Bare roots can be ordinary words. Link canonical roots only in explicit
-    // relationships. Dotted IDs and legacy prefixed IDs also link in prose.
-    return word.startsWith(project + "-") || /^[a-z0-9]+\.[0-9]/.test(word) ? replace(word) : word;
+  return text.replace(/\bT?[a-z0-9-]+(?:\.[0-9]+)*\b/g, (word) => {
+    // Bare roots can be ordinary words. In prose, link explicit prefixes and dotted IDs.
+    return word.startsWith("T") || word.startsWith(project + "-") || /^[a-z0-9]+\.[0-9]/.test(word)
+      ? replace(word) : word;
   });
 }
 

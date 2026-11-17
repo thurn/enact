@@ -1,7 +1,7 @@
 import * as c from "../cirrus/components";
 import {cutoverState, events, leases} from "../project-state";
 import type {ProjectUsage} from "../project-usage";
-import {person, ticketUrl} from "./common";
+import {displayTicketId, person, ticketUrl} from "./common";
 
 type Event = ReturnType<typeof events>[number];
 type Usage = ReturnType<ProjectUsage["state"]>;
@@ -23,7 +23,8 @@ function activeSessions(root: string, sql: SqlStorage, entries: Event[]) {
     const action = field(event, "action") ?? field(event, "state") ?? field(event, "status");
     const ticket = field(event, "ticket") ?? field(event, "bead");
     if (!ticket || (action && !["spawn", "start", "started", "active", "running", "in_progress", "claimed"].includes(action))) continue;
-    const id = ticket.startsWith(project + "-") ? ticket.slice(project.length + 1) : ticket;
+    const id = ticket.startsWith("T") ? ticket.slice(1)
+      : ticket.startsWith(project + "-") ? ticket.slice(project.length + 1) : ticket;
     active.push({session, machine: event.machine, id});
   }
   const tickets = sql.exec<{id: string; title: string; status: string}>(`
@@ -33,7 +34,7 @@ function activeSessions(root: string, sql: SqlStorage, entries: Event[]) {
   const sessions = active.flatMap(({session, machine, id}) => {
     const work = summaries.get(id);
     if (work?.status === "closed") return [];
-    const label = c.link(ticketUrl(root, id), c.esc(work?.title ?? id));
+    const label = c.link(ticketUrl(root, id), c.esc(work?.title ?? displayTicketId(id)));
     return c.row(person(session) + c.muted(" · ") + label, c.esc(machine));
   });
   return sessions.length ? c.rows(sessions) : c.empty("No active sessions reported.");
