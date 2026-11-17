@@ -3,7 +3,7 @@
 Enact is a minimal agent orchestration framework for **large, unattended
 project execution** from a desktop agent app (Claude Desktop, Codex
 Desktop). You hand `/enact-plan` a bead, a plan document or a task prompt;
-it files the work in [Beads](https://github.com/gastownhall/beads) or the
+it files the work in the
 Enact ticket server and runs each task in a fresh top-level session across
 machines and model providers. Code goes through a shared Git remote.
 
@@ -105,7 +105,7 @@ against the configured Git remote. The first enrollment creates a machine
 token. Enrollment in other projects registers the same token's hash in
 each project's remote.
 
-Then run `/enact-setup` in each project. It writes `.enact.toml`:
+Configure `.enact.toml` before running `/enact-setup` in each project:
 
 ```toml
 master_branch = "master"
@@ -130,128 +130,31 @@ model = "sonnet"
 # tier:fable, tier:opus and tier:sonnet are built in for Claude: no entry
 ```
 
-Requirements: Git and Python 3.11+. Install Cargo to build the managed
-`tk` client. The Beads backend also uses `bd` 1.2+ in its default embedded
-Dolt mode and the `dolt` CLI to resolve Beads merge conflicts.
+Requirements are Git, Python 3.11+, and Cargo for the managed `tk` client.
 
-### Working with tasks
+### Working with tickets
 
-Run `enact backend` in the project. On `beads`, use `bd` and publish
-direct edits with `enact sync`. On `server`, use the returned `tk` path.
-Ticket writes are immediate. The ticket dashboard and readable `tk` output
-show IDs like `Tq44s` and `Tq44s.7`. Pass these IDs, bare IDs, or legacy Beads
-IDs to `tk`. Dashboard links, `tk --json`, and `tk export` use the same `T`
-prefix. Dashboard descriptions and `tk` reads show resolved ticket references
-with the same prefix. Exports preserve the original prose for a faithful
-restore. Use `enact claim`, `start`, `meta`, `release` and `close` for ownership
-and assignment on both backends.
+Configure `[tickets].project` and `[tickets].url` in the main checkout's
+`.enact.toml`. Use the Worker root URL. Linked worktrees inherit the project
+and URL and keep their own check commands. Run `enact setup` from each project
+to register this machine. Run `enact backend` for the managed `tk` path.
 
-New server-backed plans file milestone audits directly under the milestone
-with `tk create --last`. The server manages readiness and parent closure.
-Beads plans use review gate epics, and imported gates retain their edges.
-See the [task command reference](skills/enact/roles/common.md#task-backend).
+Ticket writes publish immediately. Use `enact claim`, `start`, `meta`,
+`release` and `close` for assignment and ownership. The CLI and dashboard
+show IDs like `Tq44s.7`. Bare IDs and migrated IDs remain valid aliases.
+See the [task commands](skills/enact/roles/common.md#task-backend).
 
 ### Local ticket verification
 
 Use Node 22.12+, Cargo and Python 3.11+ from an Enact checkout. The Worker
-and CLI tests start local simulators with isolated state. They require no
-Cloudflare login.
+and CLI tests use isolated simulators and require no Cloudflare login.
 
 ```sh
 npm --prefix server ci
 npm --prefix server test
-cargo test --locked --manifest-path cli/Cargo.toml
+cargo test --locked --manifest-path cli/Cargo.toml -- --include-ignored
 python3 -m unittest -q tests.test_unit
 ```
-
-With real `bd` and `dolt` on `PATH`, run the tests normally included in
-slow CI. These exercise frozen Dolt audit history, both project cutovers,
-and Enact coordination and backup/restore with temporary Git remotes.
-
-```sh
-cargo test --locked --manifest-path cli/Cargo.toml -- --ignored
-```
-
-### Ticket enrollment and cutover
-
-Beads is authoritative for live Beryl and Enact. Both repositories ship
-the Worker coordinates as commented configuration. With no active
-`[tickets]` table, Enact uses Beads and the optional `bd` shim passes
-through to the original executable.
-
-Beryl epic `by-vaexw` tracks production activation. Native Windows
-verification (`by-r61mr.38`) gates Worker deployment and fleet enrollment
-(`by-r61mr.22`). The operator stages Beryl's import (`by-r61mr.24`), then
-switches Beryl (`by-r61mr.25`) and Enact (`by-r61mr.26`) separately.
-The legacy publisher and data stay available through the rollout and
-retention period. Their removal is tracked in `by-r61mr.29` and
-`by-r61mr.31`.
-
-For an enrolled project, configure
-`[tickets].project` and `[tickets].url` in the main checkout’s
-`.enact.toml`. Use the Worker root URL. All linked worktrees read this same
-`[tickets]` table, including worktrees created before enrollment. Other
-Enact settings, including check commands, come from the current worktree
-when it has an `.enact.toml`.
-
-Use `install` to obtain the managed `tk` path and pass it to
-`scripts/install_bd_shim.py TK REAL_BD ENTRY`. Pass the actual Beads
-executable and the absolute path of a `bd` entry (or `bd.exe` on Windows)
-in a directory ahead of it on `PATH`. The installer saves the original
-beside the shim as `bd-real`. Use `ENACT_SHIM_HELPER` and `ENACT_SHIM_PYTHON`
-if the shim should run a different Enact helper or Python interpreter
-during the pause.
-
-Run `setup` from each enrolled project on each machine with the shim on
-`PATH`. Setup posts an authenticated `machine` event after it succeeds.
-Use a stable, distinct `ENACT_HOST` per machine if the hostname is
-unsuitable. Machine tokens are kept outside the checkout. `tk register`
-rotates the shared local token, so run `tk register --ensure` again in the
-other enrolled projects after a rotation. If a new registration reaches the
-Worker during its one-minute GitHub lookup cooldown, rerun setup after the
-cooldown expires.
-
-With the default backend, the shim and Enact both use the project's
-cutover state. They use Beads in `before`, wait during `paused`, and use
-tickets in `after`. `[tickets] backend = "server"` directs the Enact
-helper to use the ticket API immediately. Leave that override unset when
-preparing a fleet cutover. Older prompts can keep invoking `bd` through
-`PATH` throughout the transition. New prompts use `enact backend` to
-choose the active CLI.
-
-Run the migration from the enrolled project's checkout. Start with Beryl
-(`by`), then repeat for Enact (`en`). The commands below use the Enact
-checkout's `scripts/cutover.py`. Install the dependencies for local replay
-with `npm ci` and `npm run pretest` in Enact's `server/` directory.
-
-1. Run `python3 /path/to/enact/scripts/cutover.py preimport` while Beads is
-   authoritative. It backs up the local Dolt working set, pulls the remote
-   into that private copy, and imports closed tickets first. On exit 5,
-   rerun as the UTC write budget becomes available. Each run imports only
-   differences and reports its progress.
-2. Prepare a Beryl compatibility corpus with `start.jsonl.gz` and
-   `calls.jsonl.gz` from the same recording window. Use it for both
-   projects. See [recording Beads calls](docs/design.md#recording-beads-calls-for-the-ticket-cutover-2026-11-16).
-   The cutover runs the replay locally with Miniflare and requires a corpus
-   recorded within three days. Post a `tk event machine '{"enrolled":true}'`
-   from each enrolled machine shortly before starting. For Beryl, move viewers
-   to the ticket dashboard and stop the Scotty export pollers.
-3. Run `python3 /path/to/enact/scripts/cutover.py start --archive NEW_DIRECTORY
-   --replay-corpus CORPUS --machine HOST1 --machine HOST2 --machine HOST3`.
-   For Beryl, add `--scotty-stopped`. Idle peers can run `tk drain` from
-   their enrolled checkout during the pause. Normal shim or Enact commands
-   also drain on first observing the pause. The command gives the fleet and
-   final checks up to five minutes, then returns the project to Beads if
-   it cannot switch. If the operator process is interrupted and leaves a
-   pause active, run `cutover.py abort --archive DIRECTORY` with the same
-   archive. The archive identifies that specific pause.
-4. After a successful switch, keep the archive and verify the shim, Enact
-   and dashboard against the ticket server. One hour after the pause began,
-   run `cutover.py reconcile --archive DIRECTORY`. It pulls Dolt again
-   and imports only changes since the archived comparison. A conflict
-   names the affected tickets and leaves the late snapshot in the archive
-   for reconciliation. Keep legacy source data for the rollout retention
-   window.
 
 ## Helper commands
 
@@ -263,12 +166,11 @@ with `npm ci` and `npm run pretest` in Enact's `server/` directory.
 | `start BEAD` | Session takes over its reserved bead |
 | `worktree create\|remove NAME` | Worktree from `origin/staging` (hookable) |
 | `worktree prune` | Delete dead worktrees (slow CI does this on each run) |
-| `push [--bead B]` | Rebase, merge diverged master, fast checks, push to staging, start CI |
+| `push [--ticket B]` | Rebase, merge diverged master, fast checks, push to staging, start CI |
 | `close BEAD --reason R [--continue]` | Close the task and any finished epics. With `--continue`, claim the next task in the lane |
 | `brief BEAD` | One-read working context: bead, epics, dependency handoffs, lane |
-| `claim BEAD`, `meta BEAD k=v`, `release BEAD` | Ownership and assignment bookkeeping on either backend |
-| `backend` | Report `beads` or `server`, with the managed `tk` path on `server` |
-| `sync` | Commit, merge and push Beads, with remote values winning conflicts. Ticket writes need no sync |
+| `claim BEAD`, `meta BEAD k=v`, `release BEAD` | Ownership and assignment bookkeeping |
+| `backend` | Report the managed `tk` path |
 | `ci [--detach\|--status\|--wait SHA]` | Coalescing slow-CI runner; watch one delivery |
 | `justiciar status\|request\|acquire\|release\|break` | Per-machine emergency lock or lease |
 | `status` | This machine's runs, workers, CI and deliveries |

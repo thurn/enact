@@ -55,7 +55,7 @@ The slow-CI runner filed your bead. It records:
    out of the slow suite, with a reason) and file a bead to fix and
    restore it.
 5. Run the slow check command yourself in your worktree and make sure it
-   passes before you push. Then run `enact push --bead <bead>`, which also
+   passes before you push. Then run `enact push --ticket <bead>`, which also
    starts a new slow-CI run.
 
 ## Close

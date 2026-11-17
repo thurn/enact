@@ -2094,67 +2094,13 @@ idle connection costs nothing.
 - `tk wait` and the dashboard are the only clients. The dashboard fetches
   the HTML fragments for the tickets named and swaps them in.
 
-### 7. Cutover state and the shim
+### 7. Authority and recovery
 
-- The main checkout's `[tickets]` table enrolls the entire Git checkout
-  family. Enact, `tk`, and the shim read it from linked worktrees even when
-  those branches were checked out before enrollment.
-- The shim caches `GET /state` in a file for 5 seconds for calls that only
-  read. A call that writes always fetches it first.
-- `before`: run the real `bd`. The shim can still call it during an outage
-  before it has observed a pause or a switch. The enrolled Enact helper
-  requires a successful state lookup until it has recorded `after`.
-- `paused`: on first seeing it, publish the machine's bead store (`enact
-  sync` with `ENACT_SYNC_NOW`) and post a `machine` event `{drained: true}`;
-  then wait on the feed for the state to change.
-- `after`: answer from the server. The transition from `paused` preserves
-  `cutover_at` from the start of the pause. Returning to `before` clears it.
-- The cutover session sets `paused`, waits until every machine that posted a
-  `machine` event in the previous 10 minutes has posted `drained` (at most 5
-  minutes, else it sets `before` again and stops) and pulls the bead store.
-  After the final pull, make an isolated copy of the project's `.beads`
-  directory under a temporary checkout. Copy the embedded Dolt files, including
-  `.dolt`, without links back to the live store. An issue export alone lacks
-  audit events. From the configured project checkout, run both commands with
-  the same copy, using project `by` for Beryl and `en` for Enact.
-
-  ```sh
-  tk import --frozen-beads "$frozen_checkout"
-  tk compare --frozen-beads "$frozen_checkout"
-  ```
-
-  Each command runs read-only Beads queries on the copy and reads its Dolt
-  `events` table directly. The history cache used during staged imports cannot
-  detect an audit-only change such as adding and removing a label. Set `after`
-  only after both commands succeed. If either fails, set `before` again and
-  investigate.
-- The operator command `scripts/cutover.py start` uses a managed pause ID to
-  fence the final import and state transition. A stale or concurrent operator
-  cannot change that pause. The shim includes the ID in drain events, and the
-  archive keeps the exact isolated Dolt checkout used at the switch.
-- `tk compare` checks all imported fields and projects Beads' ready set
-  through readiness rule 5. Its `expected_readiness_differences` report lists
-  the raw results and live child IDs for each Beads-ready container blocked
-  solely by those children. A leaf mismatch, another blocker on a Beads-ready
-  container, or any field difference fails the comparison.
-- Before switching Beryl to `after`, move Beryl viewers off Bead Me Up, Scotty
-  and stop any Scotty instance serving Beryl. Scotty polls `bd export --json`,
-  and forwarding those exports would exhaust the daily SQLite read quota.
-  Use the live ticket dashboard. The shim rejects legacy exports in `after`,
-  including requests to write the export to a file. Once the shim has observed
-  `after` for the project, it rejects every recorded export form locally with
-  exit 1, empty stdout, and migration guidance on stderr. Native `tk export`
-  serves the scheduled backup.
-- One hour later it pulls the bead store's remote once more and imports any
-  bead changed after `cutover_at`, to catch a write that was in flight on a
-  machine that was asleep during the pause. The server rejects that import
-  batch with the conflicting ticket IDs if a snapshot would replace a native
-  edit, including a comment or dependency change, or if the journal no
-  longer proves coverage back to cutover. The cutover operator retains the
-  legacy export for reconciliation when a batch conflicts.
-  `scripts/cutover.py reconcile` compares source snapshots against the
-  archive, so changes published after the pause are detected even when they
-  were written earlier or leave no change in the issue export.
+The Worker is authoritative for production tickets. Enact uses the native
+client for every tracker operation. A service outage preserves the queued
+operation or returns an error. Daily native exports can be restored with
+`tk restore` in a fresh project. The archived migration used authenticated
+state transitions to verify ticket parity before activating each project.
 
 ### 8. Tokens
 
@@ -2208,12 +2154,8 @@ tk events [--kind K] [--since SEQ]
 tk wait ready [--ancestor ID] [--label L]... | ticket <id> [--status S]
         | lease <name> | change [--since SEQ]   --timeout S
 tk state [--set-cutover before|paused|after [--pause-id ID]]
-tk drain
 tk export
-tk import (<bd-export.jsonl> [--history-dir D] | --frozen-beads CHECKOUT) [--row-budget N]
-          [--before-cutover | --pause-id ID | --since-frozen-beads CHECKOUT]
 tk restore <tickets.jsonl> [--row-budget N]
-tk compare [--history-dir D | --frozen-beads CHECKOUT]
 tk register | tk bench | tk version
 ```
 
@@ -2246,7 +2188,6 @@ only the canonical ID when called without `--json`.
 Search accepts a quoted phrase or separate words. It returns up to 50 tickets
 by default. Pass `--limit 0` to return every match.
 
-Invoked as `bd`, the binary is the shim (section 7). The shim also accepts
 `bd children <id>`, `bd list --label-any a,b`, `bd comments add <id> -f FILE`,
 `bd dep cycles`, and a positional title and `-l` for `bd create`.
 
@@ -2342,131 +2283,6 @@ Durable Object storage. Production activation is tracked in Beryl epic
 `by-vaexw`. The [operator steps](../README.md#ticket-enrollment-and-cutover)
 describe the deployment and enrollment gates.
 
-## Recording Beads calls for the ticket cutover (2026-11-16)
-
-`scripts/bd_record.py` forwards the command to the pinned real Beads binary.
-Each participating clone gets a private `bd-record` directory in its
-`<git-common-dir>/enact` state. The recorder appends one gzip member per JSON
-line, so concurrent callers share a log and repeated full-store exports take
-less disk space. It streams redirected I/O and records bytes as UTF-8 with
-surrogate escapes for invalid bytes. A terminal stream is inherited and
-recorded as `null` to preserve color and prompts. A merged pipe is recorded as
-one stdout stream. If the recorder cannot write the log, the caller still
-receives the real command's exit status.
-
-To install on a Mac where the effective `bd` entry is a Homebrew symlink, run
-this in the clone to record. Set `recorder` to the Enact script's absolute path
-and `python` to the absolute path of Python 3.11 or newer. The self-contained
-launcher survives worktree removal. Replacing it atomically also reaches shells
-that already have its path cached.
-
-```sh
-set -e
-umask 077
-clone="$(git rev-parse --show-toplevel)"
-state="$(git rev-parse --path-format=absolute --git-common-dir)/enact/bd-record"
-store="$HOME/.local/share/enact/bd-record"
-entry="$(command -v bd)"
-target="$(readlink "$entry")"
-case "$target" in /*) real="$target" ;; *) real="$(dirname "$entry")/$target" ;; esac
-test -n "$target" && test -x "$real"
-mkdir -p "$state" "$store"
-test ! -e "$state/start.jsonl"
-printf '%s\n' "$target" > "$store/original-link"
-launcher="$(mktemp "$(dirname "$entry")/.bd-record.XXXXXX")"
-"$python" - "$recorder" "$real" "$launcher" <<'PYINSTALL'
-from pathlib import Path
-import sys
-
-recorder, real, launcher = sys.argv[1:]
-script = Path(recorder).read_text(encoding="utf-8").split("\n", 1)[1]
-script = script.replace("PINNED_BINARY = None", f"PINNED_BINARY = {real!r}", 1)
-Path(launcher).write_text(f"#!{sys.executable} -S\n" + script, encoding="utf-8")
-PYINSTALL
-chmod 755 "$launcher"
-"$real" export > "$state/start.jsonl"
-test -s "$state/start.jsonl"
-date -u '+%Y-%m-%dT%H:%M:%SZ' > "$state/start-time"
-test "$(readlink "$entry")" = "$target"
-mv -f "$launcher" "$entry"
-```
-
-Run this block in a separate shell so a failed check aborts the installation.
-`bd list --json` should produce the same stdout, stderr and exit
-status as `"$real" list --json` on an unchanged store, and an entry should
-appear in `"$state/calls.jsonl.gz"`. To remove the wrapper, verify that
-`"$entry"` is still the launcher above. Restore the original Homebrew symlink
-by creating it alongside the launcher and then renaming it over the launcher.
-
-```sh
-restore="$(mktemp -d "$(dirname "$entry")/.bd-restore.XXXXXX")"
-ln -s "$(cat "$store/original-link")" "$restore/bd"
-mv -f "$restore/bd" "$entry"
-rmdir "$restore"
-```
-
-Beryl's live recording started on 2026-11-16 at 18:25:06 UTC. The first
-minutes are in the uncompressed `calls.jsonl`. Pass both files to the reducer
-and optionally use a half-open interval in Unix nanoseconds to select a sample.
-
-```sh
-python3 scripts/bd_corpus.py --real-bd "$real" \
-  --source live "$clone" "$state/calls.jsonl" \
-  --source live "$clone" "$state/calls.jsonl.gz" \
-  /tmp/bd-live.jsonl.gz
-```
-
-The reducer groups by command path and flag names, including repeated flags.
-It uses the recording version's help to identify which flags take a value and
-prefers successful examples when a shape appears more than once.
-`tests/corpus/live-shapes.json` records the resulting command paths and flags.
-The checked-in snapshot is the real `bd export` at the start. The replay cases
-come from real Beads 1.3.4 in an isolated Git clone seeded by that export.
-Replay them in file order against a fresh import. The tests use child IDs
-allocated from a fixture epic and include cases for stdin and invalid
-invocations. To incorporate live calls, reproduce their state and file inputs
-against an isolated import. The export cases compare each legacy form with the
-after-cutover refusal and check both the output paths and the simulator's
-request count. The snapshot already covers the exported rows. For human
-`bd show`, the shim prints the ticket's sections as plain text and the replay
-ignores Beads' terminal padding. Readiness explanations retain the Beads
-readiness rules so they can be used to compare a rehearsal with the old store.
-
-The `bd update` shim checks legacy ownership rules against the ticket
-version it submits with the batch. It retries a confirmed version conflict
-against the newer ticket. After a lost write reply it reports the connection
-failure, since replaying an append against a new version could duplicate notes.
-
-### Install the cutover shim
-
-Build `tk` with `cargo build --locked --release --manifest-path cli/Cargo.toml`.
-Run the installer when the capture is complete:
-
-```sh
-python3 scripts/install_bd_shim.py "$tk_binary" "$real_beads" "$bd_entry"
-```
-
-Pass the actual Beads executable as the second argument. On the recording Mac,
-resolve the link saved in `$HOME/.local/share/enact/bd-record/original-link`
-relative to the recorder's directory. On Windows use the corresponding
-`.exe` paths. The installer copies the real executable beside the `bd` entry
-as `bd-real`, then atomically publishes the shim at the requested path. An
-existing recorder's logs remain available to the reducer.
-
-The shim shares its five-second read cache and local drain marker across
-worktrees configured for the same server and project. A write reads the
-server state first. After the machine observes `after`, an outage cannot
-send it back to Beads. During a pause, the shim publishes the legacy store
-with Enact, acknowledges that pause, then waits on the WebSocket. It uses
-`~/enact/scripts/enact.py` and `python3` by default. Set
-`ENACT_SHIM_HELPER` and `ENACT_SHIM_PYTHON` for other installations.
-
-Native ticket closes complete eligible ancestors in the same transaction.
-A close through the shim preserves Beads' explicit `bd epic close-eligible`
-step. The shim also uses Beads' ready ordering and list counts. The
-replay test prints its output normalization rules and uses the production
-Worker in the local simulator.
-
 ## Ticket server coordination (2026-11-16)
 
 The ticket backend holds the `staging` lease for the whole merge-queue
@@ -2486,18 +2302,6 @@ in the same batch. A sequence precondition makes concurrent CI failures on
 the same OS converge on one open Steward ticket. Passing CI advertises
 promotion after the Git push, so a feed waiter can fetch and check master.
 The local runner still tracks its PID, log and pending promotion receipt.
-
-## Task commands in Enact prompts during cutover (2026-11-16)
-
-New prompts select the CLI with `enact backend` and share the command
-reference in `skills/enact/roles/common.md`. That keeps the role flow and
-ownership fences in the helper while new task edits use the active store.
-Older prompts keep their `bd` commands through the shim. The prompts
-preserve Beads sync and review gates on the Beads backend. On the server,
-they use immediate writes, native IDs and server readiness for new
-milestone audits. Sweep excludes both indefinitely deferred tickets and
-open tickets that are snoozed until a future date.
-
 
 ## Runs never wait for time to pass (2026-11-16)
 

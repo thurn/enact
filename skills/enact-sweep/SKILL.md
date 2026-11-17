@@ -42,7 +42,7 @@ levels). Run every command from the project's main checkout. Follow
 2. Unless **dry**, do the vizier's pre-flight checks now, while the user is
    here: project setup and permission mode (enact-plan Phase 1, steps 2
    and 3). Stop on a failure before you close anything.
-3. Run `enact backend`. On Beads, run `enact sync` before listing work.
+3. Run `enact backend`.
 
 ## 2. Find stale beads
 
@@ -51,8 +51,7 @@ assignee, and no live run owns it. Age alone does not make a bead stale. A
 bead filed an hour ago under a dead run is stale; a week-old bead queued in
 a live run is not.
 
-1. List candidates with `tk list --status open --json` on the server or
-   `bd list --status open --limit 0 --json` on Beads. Keep unassigned work
+1. List candidates with `tk list --status open --json` and keep unassigned work
    and apply **older than N days** to `updated_at` if given.
 2. Find the live runs: `enact status` lists this host's runs in
    `active_runs`. A run counts as live when its `control.state` is
@@ -111,7 +110,7 @@ here, retitle `✅ Bead sweep` and end.
 1. **done / obsolete**: Claim with `enact claim <id>`, then run
    `enact close <id> --reason "Sweep <date>: <verdict>. <evidence>"`.
    On exit 3, leave the task to its current owner. Finished parent epics
-   close through the server or Enact's Beads close flow.
+   close through the ticket server.
 2. **keep**: when the triage found the context packet wrong, add the
    corrections in a comment beginning with `Sweep <date>:` so the worker
    does not rediscover them.
@@ -119,9 +118,7 @@ here, retitle `✅ Bead sweep` and end.
    one question at a time with your recommendation, the way enact-plan's
    stoppage audit does. A resolved bead becomes **keep**, with the answer
    added as a comment. Park unresolved work with
-   `tk update ID --status deferred --if-assignee "" --json` on the server
-   or `bd defer ID` on Beads. List it in the final report.
-4. On Beads, run `enact sync` to publish direct edits.
+   `tk update ID --status deferred --if-assignee "" --json`. List it in the final report.
 
 ## 5. Run the rest
 

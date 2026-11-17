@@ -90,7 +90,7 @@ later step, so explore deliberately:
   means you are taking over someone's work: follow `recovery.md` first.
   Never edit the main checkout.
 - Follow `AGENTS.md` for conventions, commit style and test commands.
-- `enact push --bead <bead>` (run inside the worktree) rebases onto
+- `enact push --ticket <bead>` (run inside the worktree) rebases onto
   `origin/staging`, merges a diverged `master`, runs the fast checks, pushes,
   records the commits on your bead, starts slow CI and deletes the worktree.
   If push succeeds but bookkeeping fails, retry it: its receipt repairs
@@ -122,37 +122,24 @@ later step, so explore deliberately:
 
 ## Task backend
 
-Run `enact backend` from the project's checkout. For `backend: server`,
-use the returned executable path wherever these instructions say `tk`.
-For `backend: beads`, use `bd` on PATH. Use the same `enact` commands on
-both backends for ownership, start, close, release and assignment metadata
-so a stale session cannot bypass a fence.
+Run `enact backend` from the project's checkout and use the returned `tk`
+path. Use `enact` for ownership, start, close, release, and assignment
+metadata so a stale session cannot bypass a fence.
 
-| Task | Ticket server | Beads |
-| --- | --- | --- |
-| Read | `tk show ID --json` | `bd show ID --json` |
-| List open work | `tk list --ancestor EPIC --json` | `bd list --parent EPIC --limit 0 --json` (recurse through child epics) |
-| Create | `tk create --title "..." --body-file FILE --json` | `bd create --title "..." --description "..." --json` |
-| Comment | `tk comments add ID "..." --json` | `bd comments add ID "..." --json` |
-| Move or detach | `tk update ID --parent EPIC --json` (empty string to detach) | `bd update ID --parent EPIC --json` (empty string to detach) |
-| Add or remove a label | `tk update ID --add-label LABEL --json` or `--remove-label LABEL` | `bd label add ID LABEL --json` or `bd label remove ID LABEL --json` |
-| Add or remove an edge | `tk dep add ID ON --json` or `tk dep remove ID ON --json` | `bd dep add ID ON --json` or `bd dep remove ID ON --json` |
+| Task | Command |
+| --- | --- |
+| Read | `tk show ID --json` |
+| List open work | `tk list --ancestor EPIC --json` |
+| Create | `tk create --title "..." --body-file FILE --json` |
+| Comment | `tk comments add ID "..." --json` |
+| Move or detach | `tk update ID --parent EPIC --json` (empty to detach) |
+| Labels | `tk update ID --add-label LABEL --json` or `--remove-label LABEL` |
+| Dependencies | `tk dep add ID ON --json` or `tk dep remove ID ON --json` |
 
-Both create commands accept `--acceptance`, `--type`, `--priority`,
-`--parent` and `--labels`. Native create returns the new ID in
-`results[0].id`. Native IDs are unprefixed. Migrated prefixed IDs still
-work as aliases. Use the returned ID and `parent` field for graph work.
-Reparenting can make the ID's dotted path differ from its parent.
-Native `show` returns an object with `type` and `edges` in both
-directions (`src` depends on `dst`). Beads' JSON uses `issue_type`, and
-`bd dep list ID --direction=up --json` lists dependents.
-
-Ticket writes publish immediately. On Beads, run `enact sync` after direct
-`bd` writes. If it reports dropped local values, reapply the change only
-if it still makes sense on the current graph. Older prompts can use the
-compatibility shim throughout the transition.
-
-Record decisions, surprises and deviations as comments on your bead.
+Ticket writes publish immediately. `tk create --json` returns the new ID
+in `results[0].id`. Read `parent` for graph work because reparenting can
+make an ID's dotted path differ from its parent. In `edges`, `src` depends
+on `dst`. Record decisions and handoffs on the ticket.
 
 ## Lanes
 
@@ -193,7 +180,7 @@ with a measurement you can take now (existing logs, a replay, a benchmark).
 If real later observation is still worth having, file it as an
 **observation bead**: no `--parent`, label `enact:observe`, the exact
 query and threshold in the acceptance, and deferred to the date the data
-will exist (`bd create --defer <date>`, or `tk defer <id> --until <date>`
+will exist (`tk defer <id> --until <date>`
 on the server). It wakes as ordinary open work outside any run, for a sweep
 or a later run to pick up.
 

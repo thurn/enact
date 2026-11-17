@@ -25,7 +25,7 @@ staging. Read `common.md` first; this file adds what is specific to you.
      before pushing.
 5. If your bead has the label `review:inline` and the run is not light
    (`common.md`), get an [inline review](#inline-review) before pushing.
-6. Deliver with `enact push --bead <bead>`, then follow up and close as
+6. Deliver with `enact push --ticket <bead>`, then follow up and close as
    described in `common.md`.
 
 ## Inline review

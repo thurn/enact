@@ -7,7 +7,7 @@ have no bead to start: skip its "Start" section and do the following instead.
 ## Take the lock
 
 1. `enact justiciar acquire --reason "<the reason from your prompt>"`. It
-   moves this machine's lease on the ticket server or Git lock on Beads
+   moves this machine's lease on the ticket server
    from "requested" to "active" under your session ID. Each machine has its
    own Justiciar. Coordinate through incident beads when changing shared
    state.
@@ -51,8 +51,7 @@ To end the emergency you may:
 
 You decide and act. Never present options to a human or wait for one. Prefer
 the tool's own supported recovery over hand-editing its state. Before any
-destructive step, take a backup you can restore. Save a `tk export` on the
-ticket backend or copy `.beads` on Beads, and record any affected Git SHAs.
+destructive step, take a backup you can restore. Save a `tk export`, and record any affected Git SHAs.
 
 ## Deadlocks
 
@@ -79,7 +78,7 @@ ask whether the requirement is real:
   project's. Pin the bead to that host and record why. Use `enact meta`
   on a bead you own. For unassigned work, use
   `tk update ID --set-metadata enact_host=HOST --if-assignee "" --json`
-  on the server or `bd update ID --set-metadata enact_host=HOST --json` on Beads.
+  for an unassigned ticket.
 - **Work only another machine can do or check** (its OS, a device, its
   local logs): pin the bead to that host.
 - **Access or a decision only the user has**: no pin.
@@ -110,8 +109,7 @@ Ordinary test failures and implementation difficulty are not blockers.
 
 ## Finish
 
-1. Verify the emergency is over. Check the task store with `tk ready --json`
-   on the server or `enact sync` on Beads. Verify `enact push` from a
+1. Verify the emergency is over. Check the task store with `tk ready --json`. Verify `enact push` from a
    scratch worktree and that the run can make progress.
 2. Record what happened, what you changed, any bypasses and follow-up work
    on the incident bead. File follow-up beads for proper fixes.

@@ -72,8 +72,6 @@ large task, a lost claim): the user reads run state from the emoji alone.
 1. `git -C "$ENACT" pull --ff-only` (ignore failure when offline).
 2. Require `.enact.toml` and a `staging` branch on the remote. Follow
    [Task backend](roles/common.md#task-backend) to select the active CLI.
-   Require `.beads/` on the Beads backend. If setup is missing, tell the
-   user to run `/enact-setup` and stop.
 3. Read `AGENTS.md` (its Enact section may restrict roles or set review
    policy; the invocation overrides it) and `.enact.toml`.
 4. Classify the input with `show <input> --json` on the active CLI.
@@ -179,9 +177,8 @@ Then go to [Slow CI](#slow-ci).
 Every bead in the epic runs in a subagent. You only pick, claim, title,
 launch and check. Loop:
 
-1. Check `enact backend`. On the server use the returned `tk` path to run
-   `tk ready --ancestor <epic> --json`. On the beads backend use
-   `bd ready --parent <epic> --limit 0 --json`. Drop epics, assigned beads,
+1. Check `enact backend`. Use the returned `tk` path to run
+   `tk ready --ancestor <epic> --json`. Drop epics, assigned tickets,
    beads whose `enact_host` or `enact_provider` names another machine or provider,
    and beads whose `lane:` label is shared by another open, assigned bead
    (that lane's subagent will reach them). Hold legacy

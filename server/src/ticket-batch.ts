@@ -409,8 +409,7 @@ export class TicketBatch {
           bad("include_ready must be a boolean");
         }
         if (ticket.status !== "closed") this.save(ticket, {status: "closed", closed_at: this.at, close_reason: reason});
-        // Beads closes eligible epics through its explicit epic command.
-        const closed = op.legacy === true ? [] : this.closeAncestors(id, reason);
+        const closed = this.closeAncestors(id, reason);
         return op.include_ready ? {id, closed, ready: this.readyTickets()} : {id, closed};
       }
       case "reopen":
@@ -420,18 +419,15 @@ export class TicketBatch {
         this.save(ticket, {status: "open", defer_until: timestamp(op.until, "until"), closed_at: null, close_reason: null});
         break;
       case "comment": {
-        const legacyId = op.legacy === true ? crypto.randomUUID() : null;
-        const inserted = this.sql.exec<LegacyComment>(`
-          INSERT INTO comments (ticket, n, author, at, text, legacy_id)
-          SELECT ?, COALESCE(MAX(n), 0) + 1, ?, ?, ?, ? FROM comments WHERE ticket = ?
-          RETURNING *
-        `, id, this.actor, this.at, string(op.text, "text"), legacyId, id);
-        const comment = inserted.one();
+        const inserted = this.sql.exec(`
+          INSERT INTO comments (ticket, n, author, at, text)
+          SELECT ?, COALESCE(MAX(n), 0) + 1, ?, ?, ? FROM comments WHERE ticket = ?
+        `, id, this.actor, this.at, string(op.text, "text"), id);
         this.rowsWritten += inserted.rowsWritten;
         this.seq++;
         this.changed.add(id);
         this.relatedChanges.add(id);
-        return legacyId === null ? {id} : {id, comment};
+        return {id};
       }
       case "dep_add":
       case "dep_remove":

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enact helper: git and Beads plumbing for the Enact orchestration framework.
+"""Enact helper: git and Tickets plumbing for the Enact orchestration framework.
 
 Stdlib only, Python 3.11+, macOS, Linux and Windows. Every subcommand prints
 exactly one JSON object on stdout; progress and diagnostics go to stderr.
@@ -14,7 +14,6 @@ import argparse
 import contextlib
 import datetime as dt
 import errno
-import functools
 import hashlib
 import json
 import math
@@ -38,7 +37,6 @@ from collections.abc import Callable, Collection, Iterator
 from typing import Any, BinaryIO, TypeVar
 
 
-
 def stable_checkout(root: Path) -> Path:
     """The Enact checkout live sessions run from, even when `root` is one of
     its delivery worktrees, which `enact push` deletes."""
@@ -50,10 +48,7 @@ ENACT_ROOT = Path(__file__).resolve().parent.parent
 # delivering worktree is gone, so they point at the stable checkout.
 ROLES_DIR = stable_checkout(ENACT_ROOT) / "skills" / "enact" / "roles"
 JUSTICIAR_PREFIX = "refs/enact/justiciars/"  # one lock per machine
-LEGACY_JUSTICIAR_REF = "refs/enact/justiciar"  # the old fleet-wide lock
-STAGING_LOCK_REF = "refs/enact/staging-lock"
 STAGING_LOCK_SECONDS = 180
-STAGING_RENEW_SECONDS = 60
 SERVER_STAGING_RENEW_SECONDS = 50
 EMOJI = {
     "vizier": "🔮",
@@ -131,11 +126,10 @@ def run(
             **({"stdin": subprocess.DEVNULL} if input_text is None else {"input": input_text}),
         )
     except (FileNotFoundError, NotADirectoryError):
-        # A fresh clone has no local Beads database until `enact setup`
+        # A fresh clone has no local Tickets database until `enact setup`
         # bootstraps it from the remote; a fresh machine may lack the tool.
         if not cwd.is_dir():
-            raise Fail(f"{cwd} does not exist; on a fresh clone, run "
-                       "`enact setup` to bootstrap the Beads database") from None
+            raise Fail(f"{cwd} does not exist") from None
         raise Fail(f"{cmd[0]} is not installed or not on PATH; "
                    "see the README's requirements") from None
     if check and proc.returncode != 0:
@@ -298,7 +292,6 @@ class Config:
     push_check_trees: int = 0
     roles: dict[str, Any] = field(default_factory=dict)
     tiers: dict[str, Any] = field(default_factory=dict)
-    ticket_backend: str = "beads"
     ticket_project: str | None = None
     ticket_url: str | None = None
 
@@ -310,9 +303,8 @@ class Config:
         push = data.get("push", {})
         ticket_data = data if ticket_text is None else tomllib.loads(ticket_text)
         tickets = ticket_data.get("tickets", {})
-        backend = tickets.get("backend", "beads")
-        if backend not in ("beads", "server"):
-            raise Fail("[tickets] backend must be 'beads' or 'server'")
+        if not isinstance(tickets, dict):
+            raise Fail("expected a [tickets] table")
         return Config(
             remote=data.get("remote", "origin"),
             staging=data.get("staging_branch", "staging"),
@@ -332,7 +324,6 @@ class Config:
             push_check_trees=max(int(push.get("check_trees") or 0), 0),
             roles=data.get("roles", {}),
             tiers=data.get("tiers", {}),
-            ticket_backend=backend,
             ticket_project=tickets.get("project"),
             ticket_url=tickets.get("url"),
         )
@@ -423,7 +414,7 @@ def find_repo(cwd: Path | None = None) -> Repo:
 
 
 # ---------------------------------------------------------------------------
-# Ticket client and Beads
+# Ticket client and Tickets
 
 
 def ticket_cache_dir() -> Path:
@@ -518,69 +509,26 @@ def ticket_binary() -> Path:
         raise Fail(f"Cannot install tk: {error}") from error
 
 
+def require_ticket_config(repo: Repo) -> None:
+    if not repo.config.ticket_project or not repo.config.ticket_url:
+        raise Fail(f"{repo.main / '.enact.toml'} requires [tickets].project and [tickets].url")
+
+
 def ticket_process(repo: Repo, *args: str, actor: str | None = None,
                    input_text: str | None = None, timeout: float | None = None
                    ) -> subprocess.CompletedProcess[str]:
-    cmd = [str(ticket_binary()), "--json"]
-    if repo.config.ticket_project:
-        cmd += ["--project", repo.config.ticket_project]
+    require_ticket_config(repo)
+    cmd = [str(ticket_binary()), "--json", "--project", repo.config.ticket_project]
     if actor := actor or session_actor():
         cmd += ["--actor", actor]
     # tk resolves enrollment for the whole checkout family. Use main if the
     # worktree has no config or was removed during delivery.
     cwd = repo.top if (repo.top / ".enact.toml").is_file() else repo.main
-    env = None
-    if args == ("drain",):
-        env = {"ENACT_SHIM_HELPER": str(Path(__file__).resolve()), "ENACT_SHIM_PYTHON": sys.executable}
-    return run([*cmd, *args], cwd, check=False, input_text=input_text, env=env, timeout=timeout)
+    return run([*cmd, *args], cwd, check=False, input_text=input_text, timeout=timeout)
 
 
 def register_ticket_client(repo: Repo) -> None:
     ticket_reply(ticket_process(repo, "register", "--ensure"))
-
-
-@functools.lru_cache
-def ticket_cutover(top: Path, project: str) -> str:
-    repo = find_repo(top)
-    marker = repo.state / "ticket-cutover.json"
-    with contextlib.suppress(OSError, ValueError):
-        if json.loads(marker.read_text(encoding="utf-8")) == project:
-            return "after"  # Cutover cannot reverse, even if the server is down.
-    # An outage on a machine that has not observed cutover yet is ambiguous.
-    # Do not fall back to the frozen Beads store.
-    state = ticket_reply(ticket_process(repo, "--retry-for", "2", "state"))
-    while state["cutover"] == "paused" and not cutover_draining():
-        state = ticket_reply(ticket_process(repo, "drain"))
-        if state["cutover"] != "paused":
-            break
-        wait = ticket_process(repo, "wait", "change", "--since", str(state["seq"]),
-                              "--timeout", "120")
-        if wait.returncode != 6:
-            ticket_reply(wait)
-        state = ticket_reply(ticket_process(repo, "state"))
-    if state["cutover"] == "after":
-        write_json(marker, project)
-    return state["cutover"]
-
-
-def cutover_draining() -> bool:
-    return (sys.argv[1:2] == ["sync"] and bool(os.environ.get("ENACT_SHIM_DRAINING"))
-            and bool(os.environ.get("ENACT_SYNC_NOW")))
-
-
-def uses_ticket_server(repo: Repo) -> bool:
-    if repo.config.ticket_backend == "server":
-        return True
-    project = repo.config.ticket_project
-    return bool(project and ticket_cutover(repo.top, project) == "after")
-
-
-def refresh_delivery_backend(repo: Repo) -> bool:
-    # A fast check can span cutover. Reconfirm the backend before delivery so
-    # an old process cannot publish using a Git lease after the switch.
-    if repo.config.ticket_project and not uses_ticket_server(repo):
-        ticket_cutover.cache_clear()
-    return uses_ticket_server(repo)
 
 
 def canonical_ticket_id(repo: Repo, value: str) -> str:
@@ -659,15 +607,9 @@ def session_event(ticket: str, action: str, session: str) -> dict[str, Any]:
             "data": {"action": action, "session": session}}
 
 
-class Beads:
+class Tickets:
     def __init__(self, repo: Repo) -> None:
         self.repo = repo
-        self.env = {"BD_NON_INTERACTIVE": "1"}
-
-    @property
-    def server(self) -> bool:
-        return uses_ticket_server(self.repo)
-
     def ticket(self, *args: str) -> Any:
         return ticket_reply(ticket_process(self.repo, *args))
 
@@ -703,88 +645,22 @@ class Beads:
         return ([ticket_as_bead(self.repo, t, edges.get(t["id"], ())) for t in graph["tickets"]],
                 graph["seq"])
 
-    def raw(self, *args: str, actor: str | None = None) -> subprocess.CompletedProcess[str]:
-        if args[0] not in {"show", "list", "ready"}:
-            _beads_reads.get(self.repo.common, {}).clear()
-            if args[0] != "dolt" and not (args[0] == "comments" and "add" not in args):
-                _beads_dirty.add(self.repo.common)
-        cmd = ["bd"]
-        if actor:
-            cmd += ["--actor", actor]
-        env = self.env
-        if self.repo.state / "ownership.lock" in _ownership_locks:
-            env = {**env, "ENACT_BD_IN_FLIGHT": "1"}
-        return run([*cmd, *args], self.repo.main, check=False, env=env)
 
-    def run(self, *args: str, actor: str | None = None) -> str:
-        if self.server:
-            command, bead_id, *_ = args
-            if command == "reopen":
-                bead = self.show(bead_id)
-                self.batch({"op": "reopen", "id": bead["id"]}, actor=actor,
-                           conditions=[ticket_version(bead)])
-                return ""
-            raise Fail(f"unsupported ticket write: {command}")
-        proc = self.raw(*args, actor=actor)
-        if proc.returncode != 0:
-            output = (proc.stderr or proc.stdout).strip()
-            if "schema version mismatch" in output:
-                # Another machine's newer bd migrated the shared database.
-                output += "\nupgrade bd to the newest Beads release"
-            raise Fail(f"bd {' '.join(args)} failed: {output}")
-        return proc.stdout
-
-    def json(self, *args: str, actor: str | None = None) -> Any:
-        if self.server:
-            command, *fields = args
-            if command == "comments":
-                return self.ticket("comments", fields[0])
-            if command == "ready":
-                return [ticket_as_bead(self.repo, t) for t in self.ticket("ready")
-                        if t["type"] != "epic" and not t.get("assignee")]
-            if command == "list":
-                return [ticket_as_bead(self.repo, t) for t in self.ticket("list", *fields)]
-            raise Fail(f"unsupported ticket read: {command}")
-        out = self.run(*args, "--json", actor=actor)
-        return json.loads(out) if out.strip() else None
-
-    def read(self, *args: str) -> Any:
-        # A helper-owned lock gives one coherent read phase. Writes and sync
-        # invalidate it; unlocked observers always query Beads directly.
-        cache = _beads_reads.get(self.repo.common)
-        if cache is None:
-            return self.json(*args)
-        if args not in cache:
-            cache[args] = self.run(*args, "--json")
-        out = cache[args]
-        return json.loads(out) if out.strip() else None
+    def reopen(self, ticket_id: str) -> None:
+        ticket = self.show(ticket_id)
+        self.batch({"op": "reopen", "id": ticket["id"]}, conditions=[ticket_version(ticket)])
 
     def show(self, bead_id: str) -> dict[str, Any]:
-        if self.server:
-            ticket = self.ticket("show", bead_id)
-            return ticket_as_bead(self.repo, ticket, ticket.get("edges", ()))
-        data = self.read("show", bead_id)
-        return data[0] if isinstance(data, list) else data
+        ticket = self.ticket("show", bead_id)
+        return ticket_as_bead(self.repo, ticket, ticket.get("edges", ()))
 
     def all(self) -> list[dict[str, Any]]:
-        if self.server:
-            return self.ticket_graph()[0]
-        return self.read("list", "--all", "-n", "0") or []
+        return self.ticket_graph()[0]
 
-    def has_remote(self) -> bool:
-        if self.server:
-            return True
-        proc = self.raw("dolt", "remote", "list")
-        return proc.returncode == 0 and bool(proc.stdout.strip())
 
     def set_meta(self, bead_id: str, pairs: dict[str, str], actor: str | None = None) -> None:
-        if self.server:
-            self.batch({"op": "update", "id": bead_id, "set_meta": pairs}, actor=actor)
-            return
-        args = ["update", bead_id]
-        for key, value in pairs.items():
-            args += ["--set-metadata", f"{key}={value}"]
-        self.run(*args, actor=actor)
+        self.batch({"op": "update", "id": bead_id, "set_meta": pairs}, actor=actor)
+        return
 
     def wait_for_change(self, deadline: float, seq: int) -> bool:
         timeout = str(max(0, math.ceil(deadline - time.monotonic())))
@@ -797,7 +673,7 @@ class Beads:
 
 def meta(bead: dict[str, Any], key: str) -> str | None:
     value = (bead.get("metadata") or {}).get(key)
-    if isinstance(value, bool):  # bd stores key=true as a JSON boolean
+    if isinstance(value, bool):  # imported metadata can contain JSON booleans
         return "true" if value else "false"
     return None if value in (None, "") else str(value)
 
@@ -813,12 +689,12 @@ def role_of(bead: dict[str, Any]) -> str:
     return label_value(bead, "role") or "executor"
 
 
-# Dependency types that keep a bead out of `bd ready` until the other closes.
+# Dependency types that keep a bead out of the ready list until the other closes.
 BLOCKING_DEPS = frozenset({"blocks", "conditional-blocks", "waits-for"})
 
 
 def blockers(bead: dict[str, Any]) -> list[str]:
-    """IDs of the beads this one waits on. `bd list` and `bd show` spell
+    """IDs of the beads this one waits on. Ticket list and detail responses spell
     dependency entries differently."""
     return [dep.get("depends_on_id") or dep.get("id")
             for dep in bead.get("dependencies") or []
@@ -840,7 +716,7 @@ def chain_lengths(graph: list[dict[str, Any]]) -> dict[str, int]:
     def length(bead_id: str, path: frozenset[str]) -> int:
         if bead_id in lengths:
             return lengths[bead_id]
-        if bead_id in path:  # a cycle: bd refuses these, but never loop on one
+        if bead_id in path:  # never loop on a dependency cycle
             return 0
         path |= {bead_id}
         lengths[bead_id] = 1 + max((length(d, path) for d in dependents.get(bead_id, ())),
@@ -902,675 +778,14 @@ def stranded(repo: Repo, bead: dict[str, Any], epic: dict[str, Any]) -> bool:
                    for route in routes)
 
 
-def dolt_db_dir(repo: Repo) -> Path:
-    metadata = json.loads((repo.main / ".beads" / "metadata.json").read_text(encoding="utf-8"))
-    if metadata.get("dolt_mode", "embedded") != "embedded":
-        raise Fail("automatic Dolt conflict resolution needs embedded mode")
-    return repo.main / ".beads" / "embeddeddolt" / metadata["dolt_database"]
-
-
-DOLT_BUSY_SECONDS = 60
-# What Dolt says while another process has the store open: on Windows its
-# file lock keeps it from opening the store at all, even read-only.
-DOLT_BUSY = ("database is read only", "fslock")
-
-
-def dolt(args: list[str], db: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
-    """Run the Dolt CLI on an embedded Beads database. While another process
-    has the store open (any bd command, even a read), Dolt opens it read-only
-    instead of waiting and every write fails; bd waits, so retry like it."""
-    began = time.monotonic()
-    deadline = began + DOLT_BUSY_SECONDS
-    delay = 0.1
-    while True:
-        attempt = time.monotonic()
-        proc = run(["dolt", *args], db, check=False)
-        output = proc.stdout + proc.stderr
-        if (proc.returncode == 0 or time.monotonic() >= deadline or
-                not any(busy in output for busy in DOLT_BUSY)):
-            break
-        time.sleep(random.uniform(delay, 2 * delay))
-        delay = min(delay * 2, 2.0)
-    if attempt > began:
-        # Every attempt before the last found the store busy.
-        for steps in _lock_steps.values():
-            steps["busy"] += attempt - began
-    if check and proc.returncode != 0:
-        raise Fail(f"dolt {' '.join(args)} failed ({proc.returncode}): "
-                   f"{(proc.stderr or proc.stdout).strip()[-2000:]}")
-    return proc
-
-
-def dolt_json(db: Path, query: str) -> list[dict[str, Any]]:
-    out = dolt(["sql", "-r", "json", "-q", query], db).stdout.strip()
-    return json.loads(out).get("rows", []) if out else []
-
-
-IGNORED_CONFLICT_COLUMNS = {"updated_at", "content_hash", "last_activity", "started_at"}
-
-
-def resolve_remote_wins(repo: Repo) -> list[dict[str, Any]]:
-    """Merge the remote Beads branch, resolving every conflict to the remote side.
-
-    Returns the local values that were dropped so the agent can reapply them.
-    """
-    if not shutil.which("dolt"):
-        raise Fail("dolt CLI not found; it is needed to resolve Beads merge conflicts")
-    db = dolt_db_dir(repo)
-    branch = dolt_json(db, "select active_branch() as b")[0]["b"]
-    dolt(["fetch", repo.config.remote], db)
-    dolt(["merge", f"{repo.config.remote}/{branch}"], db, check=False)
-    dropped: list[dict[str, Any]] = []
-    for row in dolt_json(db, "select `table` as t from dolt_conflicts"):
-        table = row["t"]
-        for conflict in dolt_json(db, f"select * from `dolt_conflicts_{table}`"):
-            ours = {k[4:]: v for k, v in conflict.items() if k.startswith("our_")}
-            theirs = {k[6:]: v for k, v in conflict.items() if k.startswith("their_")}
-            changed = {
-                k: v
-                for k, v in ours.items()
-                if k not in IGNORED_CONFLICT_COLUMNS and theirs.get(k) != v
-            }
-            dropped.append(
-                {"table": table, "id": ours.get("id") or theirs.get("id"), "dropped_local": changed}
-            )
-        dolt(["conflicts", "resolve", "--theirs", table], db)
-    dolt(["add", "."], db)
-    dolt(["commit", "--allow-empty", "-m", "enact sync: merge remote (remote wins)"], db, check=False)
-    for item in dropped:
-        log(f"conflict: remote won for {item['table']} {item['id']}; dropped {item['dropped_local']}")
-    return dropped
-
-
-# Serialize the read/check/write/sync sequence within one clone. Remote
-# conflicts still resolve remote-wins; verify the published owner afterwards.
-_ownership_locks: set[Path] = set()
-_beads_reads: dict[Path, dict[tuple[str, ...], str]] = {}
-
-
-OWNERSHIP_WAIT = 180
-# After a fast check has passed, losing the checked work costs far more than waiting.
-OWNERSHIP_WAIT_CHECKED = 3600
-
-
-def lock_holder(path: Path) -> str:
-    """Describe who holds the lock at `path` from its `.holder` record, for a waiter's log."""
-    try:
-        info = json.loads(path.with_name(path.name + ".holder").read_text())
-        held = int(time.time() - info["since"])
-        return f"pid {info['pid']} ({info['command']}), held for {held} s"
-    except (OSError, ValueError, KeyError, TypeError):
-        return "unknown holder"
-
-
-def lock_holder_command(path: Path) -> str | None:
-    """The command in the `.holder` record next to the lock at `path`, if any."""
-    try:
-        command = json.loads(path.with_name(path.name + ".holder").read_text())["command"]
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-    return command if isinstance(command, str) else None
-
-
-# One JSON line per ownership-lock acquisition or give-up, in the clone's state
-# directory, for the efficiency dashboard (fields in docs/design.md). Once the
-# file passes LOCK_LOG_BYTES it replaces the previous `.1` file, so the two
-# together never exceed twice that.
-LOCK_LOG = "lock-waits.jsonl"
-LOCK_LOG_BYTES = 8 << 20
-# Seconds spent in `sync` while holding each ownership lock, by lock path.
-_lock_syncs: dict[Path, list[float]] = {}
-# Seconds spent in each step of those syncs, by lock path (`SYNC_STEPS`).
-_lock_steps: dict[Path, dict[str, float]] = {}
-# The steps of `sync`, each logged as `<step>_s`: `tip` asks the remote for its
-# Beads data ref, `settings` reads the store's remotes and branch, `commit`,
-# `pull`, `check` compares the local and remote tips, `push`, `retry` sleeps
-# after a rejected push, and `gc` is `compact_beads`. `busy` is the part of
-# any of them that Dolt spent retrying while another process had the store
-# open (`dolt`), so it overlaps the others.
-SYNC_STEPS = ("tip", "settings", "commit", "pull", "check", "push", "retry", "gc", "busy")
-
-
-@contextlib.contextmanager
-def sync_step(repo: Repo, name: str):
-    """Add the time spent in the block to step `name` of the ownership lock's
-    line in the lock log, when this process holds the lock."""
-    start = time.monotonic()
-    try:
-        yield
-    finally:
-        steps = _lock_steps.get(repo.state / "ownership.lock")
-        if steps is not None:
-            steps[name] += time.monotonic() - start
-
-
-def log_lock_wait(path: Path, entry: dict[str, Any]) -> None:
-    """Append `entry` to the lock log next to the lock at `path`. Never raises."""
-    append_wait_log(path.with_name(LOCK_LOG), entry)
-
-
 def append_wait_log(log_path: Path, entry: dict[str, Any]) -> None:
-    """Append one local timing record and keep one rotated copy."""
+    """Append a staging lease wait and retain one rotated copy."""
     with contextlib.suppress(OSError, ValueError):
-        if log_path.stat().st_size >= LOCK_LOG_BYTES:
+        if log_path.stat().st_size >= 8 << 20:
             log_path.replace(log_path.with_suffix(".1.jsonl"))
     with contextlib.suppress(OSError, ValueError):
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, sort_keys=True) + "\n")
-
-
-# A waiter whose ticket is this old has died without removing it: live waiters
-# refresh theirs every TICKET_REFRESH seconds.
-TICKET_STALE = 30
-TICKET_REFRESH = 5
-
-
-def first_in_line(queue: Path, mine: Path) -> bool:
-    """Whether no live waiter's ticket in `queue` sorts before `mine`.
-
-    Tickets are named `<time_ns>-<pid>`, so they sort in arrival order. A ticket
-    whose waiter died, or stopped refreshing it, is removed.
-    """
-    now = time.time()
-    try:
-        tickets = sorted(p for p in queue.iterdir() if p.name < mine.name)
-    except OSError:
-        return True
-    for ticket in tickets:
-        try:
-            pid = int(ticket.name.rpartition("-")[2])
-            fresh = now - ticket.stat().st_mtime < TICKET_STALE
-        except (OSError, ValueError):
-            continue
-        if fresh and pid_alive(pid):
-            return False
-        ticket.unlink(missing_ok=True)
-    return True
-
-
-@contextlib.contextmanager
-def ownership_lock(repo: Repo, wait: float = OWNERSHIP_WAIT):
-    path = repo.state / "ownership.lock"
-    if path in _ownership_locks:
-        yield
-        return
-    while not uses_ticket_server(repo):
-        with legacy_ownership_lock(repo, wait):
-            # A command that saw "before" can queue behind this machine's
-            # drain. Recheck under the lock before admitting a legacy write.
-            if not repo.config.ticket_project or cutover_draining() or \
-                    ticket_reply(ticket_process(repo, "--retry-for", "2", "state"))["cutover"] == "before":
-                yield
-                return
-        ticket_cutover.cache_clear()
-    yield
-
-
-@contextlib.contextmanager
-def legacy_ownership_lock(repo: Repo, wait: float):
-    """Take the clone's ownership lock, waiting up to `wait` seconds.
-
-    Callers that already passed a fast check use `OWNERSHIP_WAIT_CHECKED`. A holder record
-    next to the lock names the process, so a waiter that gives up can say who kept it.
-
-    Waiters queue in arrival order. Every waiter used to poll the OS lock, and
-    whichever process polled first after a release took it, so with the lock busy
-    all the time a waiter could lose every handoff until it gave up: on Beryl's
-    Mac, 16 holds of 19 s on average kept the lock busy for a whole 5-minute
-    sample, and sessions gave up after 180 s about 20 times in 3 days. Now a
-    waiter only tries the lock once no live waiter that arrived before it is
-    still waiting. Older helpers that skip the queue can still take the lock
-    between two queued waiters.
-    """
-    path = repo.state / "ownership.lock"
-    began = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    start = time.monotonic()
-    command = " ".join(sys.argv[:4])
-    holder_seen: str | None = None
-    deadline = start + wait
-    next_report = start + 60
-    queue = repo.state / "ownership.queue"
-    ticket = queue / f"{time.time_ns():020d}-{os.getpid()}"
-    try:
-        queue.mkdir(exist_ok=True)
-        ticket.touch()
-    except OSError:
-        ticket = None  # an unwritable queue must not block the lock itself
-    refreshed = start
-    try:
-        while (ticket is not None and not first_in_line(queue, ticket)) or \
-                (guard := try_lock(path)) is None:
-            now = time.monotonic()
-            if holder_seen is None and now - start > 1:
-                holder_seen = lock_holder_command(path) or ""
-            if now >= deadline:
-                holder = lock_holder(path)
-                log_lock_wait(path, {
-                    "time": began, "pid": os.getpid(), "command": command,
-                    "outcome": "gave_up", "waited_s": round(now - start, 3),
-                    "held_s": None, "sync_s": None, "syncs": None,
-                    **{f"{step}_s": None for step in SYNC_STEPS},
-                    "holder": lock_holder_command(path) or holder_seen or None,
-                })
-                log(f"gave up waiting for the ownership lock after {int(now - start)} s; "
-                    f"held by {holder}")
-                raise Fail(f"ownership operation busy (held by {holder}); retry", code=3)
-            if now >= next_report:
-                log(f"still waiting for the ownership lock, held by {lock_holder(path)}")
-                next_report = now + 60
-            if ticket is not None and now - refreshed >= TICKET_REFRESH:
-                with contextlib.suppress(OSError):
-                    os.utime(ticket)
-                refreshed = now
-            time.sleep(0.1)
-    finally:
-        if ticket is not None:
-            ticket.unlink(missing_ok=True)
-    acquired = time.monotonic()
-    holder_path = path.with_name(path.name + ".holder")
-    try:
-        write_json(holder_path, {"pid": os.getpid(), "command": command,
-                                 "since": time.time()})
-    except OSError:
-        pass
-    _ownership_locks.add(path)
-    _beads_reads[repo.common] = {}
-    syncs = _lock_syncs[path] = []
-    steps = _lock_steps[path] = dict.fromkeys(SYNC_STEPS, 0.0)
-    try:
-        yield
-    finally:
-        _ownership_locks.remove(path)
-        _beads_reads.pop(repo.common, None)
-        _lock_syncs.pop(path, None)
-        _lock_steps.pop(path, None)
-        # Written before the release, so holders' appends never interleave.
-        log_lock_wait(path, {
-            "time": began, "pid": os.getpid(), "command": command, "outcome": "acquired",
-            "waited_s": round(acquired - start, 3),
-            "held_s": round(time.monotonic() - acquired, 3),
-            "sync_s": round(sum(syncs), 3), "syncs": len(syncs),
-            **{f"{step}_s": round(seconds, 3) for step, seconds in steps.items()},
-            "holder": holder_seen or None,
-        })
-        holder_path.unlink(missing_ok=True)
-        release_lock(path, guard)
-
-
-def serialized(function):
-    @functools.wraps(function)
-    def call(first, *args, **kwargs):
-        repo = first if isinstance(first, Repo) else find_repo()
-        with ownership_lock(repo):
-            return function(first, *args, **kwargs)
-    return call
-
-
-# Dolt appends every chunk a write makes to one journal and never compacts it
-# on its own: a week of bd writes grew Beryl's to 410 MB, and every bd command,
-# which opens the embedded store afresh, spent about a second reading it (0.2 s
-# after a `dolt gc`). Sync compacts it once it passes this size.
-DOLT_JOURNAL = "v" * 32
-COMPACT_JOURNAL_BYTES = 64 << 20
-
-
-# Most commands sync before they read, to see other machines' writes, and again
-# after they write. The lock passes straight from one command's closing sync to
-# the next command's opening one, which then only repeats the pull. Each sync
-# costs about 6 Dolt launches that wait whenever any bd command has the store
-# open, all inside the ownership lock. So a sync is skipped when this process
-# has written nothing since its last sync and this clone already has the
-# remote's Beads data ref (`remote_tip_known`). Asking the remote takes one
-# `git ls-remote` and never opens the store.
-# Clones this process wrote to (a bd command other than a read) since it last synced.
-_beads_dirty: set[Path] = set()
-# Dolt keeps a git cache of a `git+` remote here, holding every commit of its
-# data ref that this clone fetched or pushed.
-DOLT_GIT_CACHE = Path(".dolt") / "git-remote-cache"
-DOLT_DATA_REF = "refs/dolt/data"
-
-
-def dolt_git_remote(repo: Repo) -> tuple[str, Path] | None:
-    """The git URL of the embedded store's remote and Dolt's local cache of it,
-    when the remote is a `git+` URL with a single cache."""
-    try:
-        db = dolt_db_dir(repo)
-        state = json.loads((db / ".dolt" / "repo_state.json").read_text(encoding="utf-8"))
-        url = state["remotes"][repo.config.remote]["url"]
-        caches = list((db / DOLT_GIT_CACHE).glob("*/repo.git"))
-    except (Fail, OSError, ValueError, KeyError, TypeError):
-        return None
-    if not isinstance(url, str) or not url.startswith("git+") or len(caches) != 1:
-        return None
-    return url[len("git+"):], caches[0]
-
-
-def remote_data_tip(url: str, cwd: Path) -> str | None:
-    try:
-        proc = subprocess.run(["git", "ls-remote", url, DOLT_DATA_REF], cwd=cwd,
-                              text=True, capture_output=True, stdin=subprocess.DEVNULL,
-                              env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    fields = proc.stdout.split()
-    return fields[0] if proc.returncode == 0 and fields else None
-
-
-def remote_tip_known(repo: Repo) -> bool:
-    """Whether this clone already has the commit at the remote's data ref.
-
-    Dolt's git cache holds a commit of the data ref only once this clone
-    fetched it (and a pull merges what it fetches) or pushed it, through Enact
-    or through bd, which pushes after each write on its own. Every bd write
-    anywhere moves the ref, about every 15 s on Beryl, so comparing with the
-    tip of the last sync would rarely match. A push from another machine is
-    never in the cache, so a pause written there is still pulled before the
-    next command here reads it.
-    """
-    remote = dolt_git_remote(repo)
-    tip = remote and remote_data_tip(remote[0], repo.main)
-    if not remote or not tip:
-        return False
-    return subprocess.run(["git", "--git-dir", str(remote[1]), "cat-file", "-e",
-                           f"{tip}^{{commit}}"], capture_output=True,
-                          stdin=subprocess.DEVNULL).returncode == 0
-
-
-@serialized
-def sync(repo: Repo, force: bool = False, publish: bool = False) -> dict[str, Any]:
-    """Commit local Beads writes and merge the remote, then compact an embedded
-    store whose journal has grown (`compact_beads`).
-
-    With `publish`, also push refs/dolt/data before returning, so a check that
-    follows sees what the remote kept after a race with another machine (claims,
-    start, release). Otherwise local commits that the remote lacks are left to
-    the background pusher (`defer_sync`): see `PUBLISH_IN_LOCK`.
-
-    Without `force`, the sync is skipped when nothing was written here and the
-    remote has not moved since the last one (see `_beads_dirty`). Its time is
-    added to the ownership lock's line in the lock log (`log_lock_wait`)."""
-    if uses_ticket_server(repo):
-        return {"backend": "server", "skipped": "tickets are already on the server"}
-    start = time.monotonic()
-    try:
-        return sync_unlogged(repo, force, publish)
-    finally:
-        syncs = _lock_syncs.get(repo.state / "ownership.lock")
-        if syncs is not None:
-            syncs.append(time.monotonic() - start)
-
-
-def sync_unlogged(repo: Repo, force: bool, publish: bool = True) -> dict[str, Any]:
-    if not force and repo.common not in _beads_dirty and known_tip(repo):
-        # Other processes' bd reads and writes on this host need no pull, but
-        # cached reads must still see the latter.
-        _beads_reads.get(repo.common, {}).clear()
-        return {"remote": True, "dropped": [], "unchanged": True}
-    result = sync_beads(repo, publish)
-    _beads_dirty.discard(repo.common)
-    if not result.get("deferred"):
-        # Every local commit is on the remote now, deferred ones included.
-        (repo.state / SYNC_PENDING).unlink(missing_ok=True)
-    with sync_step(repo, "gc"):
-        compact_beads(repo)
-    return result
-
-
-def known_tip(repo: Repo) -> bool:
-    with sync_step(repo, "tip"):
-        return remote_tip_known(repo)
-
-
-# A full sync holds the ownership lock for 10-25 s on Beryl, mostly in the push
-# (about 8 s through Dolt's git cache) and the pull. Writes by a bead's owner
-# (`enact meta`, `enact close`) need no other machine to see them at once: no
-# one else may claim an owned bead, and claims still sync before and after. So
-# those commands commit locally, record `SYNC_PENDING` and return, and one
-# background `enact sync --deferred` per clone pushes them together after
-# `DEFERRED_SYNC_DELAY`. Any full sync before then pushes them too.
-SYNC_PENDING = "sync-pending"
-SYNC_PUSHER = "sync-pusher.lock"
-DEFERRED_SYNC_DELAY = 2.0
-
-
-def defer_sync(repo: Repo) -> dict[str, Any]:
-    """Publish this process's Beads writes in the background. The caller holds
-    the ownership lock. With `ENACT_SYNC_NOW` set, sync now instead."""
-    if uses_ticket_server(repo) or os.environ.get(PUBLISH_IN_LOCK):
-        return sync(repo, publish=True)
-    try:
-        (repo.state / SYNC_PENDING).write_text(f"{os.getpid()}\n", encoding="utf-8")
-    except OSError:
-        return sync(repo, publish=True)
-    start_pusher(repo)
-    return {"remote": True, "dropped": [], "deferred": True}
-
-
-def start_pusher(repo: Repo) -> bool:
-    """Start `enact sync --deferred` unless one is running. A running pusher
-    looks for `SYNC_PENDING` again after it lets go of its lock, so a write
-    recorded while it runs is never left behind."""
-    path = repo.state / SYNC_PUSHER
-    try:
-        guard = try_lock(path)
-    except OSError:
-        return False
-    if guard is None:
-        return False
-    release_lock(path, guard)
-    kwargs: dict[str, Any] = {}
-    if WINDOWS:
-        kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED | NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
-    try:
-        with open(repo.state / "deferred-sync.log", "w", encoding="utf-8") as log_file:
-            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "sync",
-                              "--deferred"], cwd=repo.main, stdout=log_file, stderr=log_file,
-                             stdin=subprocess.DEVNULL, **kwargs)
-    except OSError as exc:
-        log(f"could not start the deferred sync: {exc}")
-        return False
-    return True
-
-
-def deferred_sync(repo: Repo) -> dict[str, Any]:
-    """Push pending writes after a short wait that lets more of them gather."""
-    pending, path = repo.state / SYNC_PENDING, repo.state / SYNC_PUSHER
-    synced = 0
-    while pending.exists():
-        guard = try_lock(path)
-        if guard is None:
-            break  # another pusher has it
-        try:
-            time.sleep(DEFERRED_SYNC_DELAY)
-            with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED):
-                if uses_ticket_server(repo):
-                    break
-                if pending.exists():
-                    sync(repo, force=True, publish=True)
-                    synced += 1
-        finally:
-            release_lock(path, guard)
-    return {"deferred": True, "synced": synced}
-
-
-def compact_beads(repo: Repo) -> bool:
-    """Run `dolt gc` on an embedded store whose journal passed
-    COMPACT_JOURNAL_BYTES. It reclaims unreferenced chunks and rewrites the
-    journal into table files without touching history, so the remote and other
-    clones see nothing; `bd gc` would also squash commits they already have.
-    Best effort: a failure is logged and sync's result stands."""
-    try:
-        db = dolt_db_dir(repo)
-    except (Fail, OSError, KeyError, ValueError):
-        return False  # server mode, or no Beads database here
-    try:
-        size = (db / ".dolt" / "noms" / DOLT_JOURNAL).stat().st_size
-    except OSError:
-        return False
-    if size < COMPACT_JOURNAL_BYTES or not shutil.which("dolt"):
-        return False
-    proc = dolt(["gc"], db, check=False)
-    if proc.returncode != 0:
-        log(f"dolt gc failed: {(proc.stderr or proc.stdout).strip()[-500:]}")
-        return False
-    log(f"compacted the Beads store (journal was {size >> 20} MB)")
-    return True
-
-
-def dolt_settings_key(repo: Repo) -> str:
-    """A hash of the files that hold the embedded store's identity, remotes and
-    branch. Dolt rewrites repo_state.json on every pull, so compare contents."""
-    db = dolt_db_dir(repo) / ".dolt"
-    digest = hashlib.sha256()
-    for path in (db / "config.json", db / "repo_state.json",
-                 Path.home() / ".dolt" / "config_global.json"):
-        try:
-            digest.update(path.read_bytes())
-        except OSError:
-            digest.update(b"-")
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
-def load_dolt_settings(repo: Repo) -> dict[str, str] | None:
-    """The remotes and branch an earlier sync read from the embedded store, if
-    its config files have not changed since. Reading them again takes three Dolt
-    launches inside the ownership lock, each waiting while any bd command has the
-    store open."""
-    try:
-        cached = json.loads((repo.state / "beads-dolt-settings.json").read_text())
-        if cached.get("key") == dolt_settings_key(repo):
-            return {"remotes": str(cached["remotes"]), "branch": str(cached["branch"])}
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        pass
-    return None
-
-
-def save_dolt_settings(repo: Repo, remotes: str, branch: str) -> None:
-    with contextlib.suppress(OSError):
-        write_json(repo.state / "beads-dolt-settings.json",
-                   {"key": dolt_settings_key(repo), "remotes": remotes, "branch": branch})
-
-
-# A Dolt push holds the embedded store's file lock for its whole run, so every
-# bd command on the host waits for it, and it reads every table file of the
-# remote through Dolt's git cache whatever it uploads: on Beryl in November
-# 2026, 230 blobs and 864 MB for a push of a few KB, 4 s on an idle machine and
-# a median of 12 s under load. Syncs inside the ownership lock pushed 40-80
-# times an hour, about a third of all the time the lock was held, mostly
-# publishing other sessions' bd writes. Only checks of ownership against other
-# machines need the push before they read (`sync(publish=True)`). Every other
-# sync commits and merges, and leaves the push to the background pusher, which
-# gathers the writes of several commands into one push. Setting this variable
-# pushes in every sync, as before.
-PUBLISH_IN_LOCK = "ENACT_SYNC_NOW"
-
-
-def sync_beads(repo: Repo, publish: bool = True) -> dict[str, Any]:
-    _beads_reads.get(repo.common, {}).clear()
-    beads = Beads(repo)
-    # Embedded databases need no Beads schema/engine initialization to sync.
-    # Keep the bd path for server mode and installations without the CLI.
-    metadata = repo.main / ".beads" / "metadata.json"
-    settings = json.loads(metadata.read_text(encoding="utf-8")) if metadata.exists() else {}
-    embedded = (repo.config.remote == "origin"
-                and settings.get("dolt_mode", "embedded") == "embedded"
-                and settings.get("dolt_database") and shutil.which("dolt"))
-
-    def command(*args: str) -> subprocess.CompletedProcess[str]:
-        if not embedded:
-            return beads.raw("dolt", *args)
-        return dolt(list(args), dolt_db_dir(repo), check=False)
-
-    with sync_step(repo, "settings"):
-        settings_read = read_sync_settings(repo, beads, command, bool(embedded))
-    if settings_read is None:
-        return {"remote": False, "dropped": []}
-    embedded, branch = settings_read
-    target = [repo.config.remote, branch] if embedded else []
-    dropped: list[dict[str, Any]] = []
-    for attempt in range(8):
-        with sync_step(repo, "commit"):
-            committed = command("commit", *(["-A"] if embedded else []), "-m", "enact sync")
-        if embedded and committed.returncode != 0:
-            message = (committed.stdout + committed.stderr).lower()
-            if "no changes added to commit" not in message and "nothing to commit" not in message:
-                raise Fail(f"dolt commit failed: {(committed.stderr or committed.stdout).strip()}")
-        # A pull costs 2-6 s on Beryl. When this clone already has the commit at
-        # the remote's data ref, the push fast-forwards without one; a push
-        # rejected because the remote moved meanwhile pulls on the next attempt.
-        if not attempt and embedded and known_tip(repo):
-            pull = subprocess.CompletedProcess(["dolt", "pull"], 0, "", "")
-        else:
-            with sync_step(repo, "pull"):
-                pull = command("pull", *target)
-                if pull.returncode != 0:
-                    text = (pull.stdout + pull.stderr).lower()
-                    if ("no branches found" in text or
-                            (embedded and
-                             f'branch "{branch}" not found on remote'.lower() in text)):
-                        pass  # first push of this database to the remote
-                    elif "conflict" in text:
-                        dropped += resolve_remote_wins(repo)
-                    else:
-                        raise Fail(f"bd dolt pull failed: "
-                                   f"{(pull.stderr or pull.stdout).strip()}")
-        if embedded:
-            remote_ref = f"{repo.config.remote}/{branch}".replace("'", "''")
-            try:
-                with sync_step(repo, "check"):
-                    heads = dolt_json(dolt_db_dir(repo),
-                                      f"select hashof('HEAD') as local_tip, "
-                                      f"hashof('{remote_ref}') as remote_tip")[0]
-            except Fail:
-                pass  # absent first-push ref or older CLI: use normal push
-            else:
-                if heads["local_tip"] == heads["remote_tip"]:
-                    return {"remote": True, "dropped": dropped}
-            if not publish and not os.environ.get(PUBLISH_IN_LOCK):
-                return {**defer_sync(repo), "dropped": dropped}
-        with sync_step(repo, "push"):
-            push = command("push", *target)
-        if push.returncode == 0:
-            return {"remote": True, "dropped": dropped}
-        log(f"beads push rejected (attempt {attempt + 1}); retrying")
-        with sync_step(repo, "retry"):
-            time.sleep(random.uniform(0.5, 2.0) * (attempt + 1))
-    raise Fail("could not push Beads after repeated attempts")
-
-
-def read_sync_settings(repo: Repo, beads: Beads, command, embedded: bool
-                       ) -> tuple[bool, str | None] | None:
-    """Whether to sync through the Dolt CLI, and the branch to sync; None when
-    the store has no remote."""
-    cached = load_dolt_settings(repo) if embedded else None
-    if cached:
-        return embedded, cached["branch"]
-    if embedded:
-        config = dict(line.split(" = ", 1) for line in
-                      command("config", "--list").stdout.splitlines() if " = " in line)
-        # bd supplies its own identity; the external CLI requires Dolt config.
-        # Preserve that fallback rather than adding a new setup requirement.
-        embedded = bool(config.get("user.name") and config.get("user.email"))
-    remote = command("remote") if embedded else beads.raw("dolt", "remote", "list")
-    if embedded and remote.returncode != 0:
-        raise Fail(f"dolt remote failed: {(remote.stderr or remote.stdout).strip()}")
-    if embedded and "origin" not in remote.stdout.split():
-        embedded = False  # retain bd's remote selection for custom Dolt remotes
-        remote = beads.raw("dolt", "remote", "list")
-    if remote.returncode != 0 or not remote.stdout.strip():
-        return None
-    branch = (dolt_json(dolt_db_dir(repo), "select active_branch() as b")[0]["b"]
-              if embedded else None)
-    if embedded:
-        save_dolt_settings(repo, remote.stdout, branch)
-    return embedded, branch
-
-
-# ---------------------------------------------------------------------------
-# Claims and bead bookkeeping
 
 
 def require_owner(bead: dict[str, Any], actor: str, *, closed: bool = False) -> None:
@@ -1586,24 +801,11 @@ def recovery_records(bead: dict[str, Any]) -> list[dict[str, Any]]:
     return json.loads(value) if isinstance(value, str) else value
 
 
-@serialized
-def reassign(beads: Beads, bead_id: str, *fields: str, actor: str) -> None:
-    """Hand over a bead whose owner Enact already fenced. bd 1.3 refuses to
-    overwrite another actor's in_progress claim, and --force cannot be
-    combined with --if-assignee; callers re-read the owner after syncing."""
-    try:
-        beads.run("update", bead_id, *fields, actor=actor)
-    except Fail as error:
-        if "cannot reassign" not in str(error):
-            raise
-        beads.run("update", bead_id, *fields, "--force", actor=actor)
-
-
 def ticket_version(ticket: dict[str, Any]) -> dict[str, Any]:
     return {"id": ticket["id"], "version": ticket["version"]}
 
 
-def reserve_ticket(beads: Beads, bead: dict[str, Any], actor: str,
+def reserve_ticket(beads: Tickets, bead: dict[str, Any], actor: str,
                    metadata: dict[str, str], seq: int,
                    *other_ops: dict[str, Any]) -> bool:
     bead_id = bead["id"]
@@ -1621,36 +823,16 @@ def reserve_ticket(beads: Beads, bead: dict[str, Any], actor: str,
 
 def claim(repo: Repo, bead_id: str, actor: str, extra_meta: dict[str, str]) -> bool:
     """Claim a bead fleet-wide. Returns False when another actor won."""
-    beads = Beads(repo)
-    if uses_ticket_server(repo):
-        graph, seq = beads.ticket_graph()
-        bead = next((b for b in graph if b["id"] == canonical_ticket_id(repo, bead_id)), None)
-        if bead is None or bead["status"] == "closed":
-            return False
-        require_running(bead, graph, extra_meta.get("enact_run"))
-        if bead.get("assignee"):
-            return bead["assignee"] == actor and all(
-                meta(bead, key) == value for key, value in extra_meta.items())
-        return reserve_ticket(beads, bead, actor, extra_meta, seq)
-    sync(repo)
-    bead = beads.show(bead_id)
-    require_running(bead, beads.all(), extra_meta.get("enact_run"))
-    if bead.get("status") == "closed":
+    beads = Tickets(repo)
+    graph, seq = beads.ticket_graph()
+    bead = next((b for b in graph if b["id"] == canonical_ticket_id(repo, bead_id)), None)
+    if bead is None or bead["status"] == "closed":
         return False
+    require_running(bead, graph, extra_meta.get("enact_run"))
     if bead.get("assignee"):
         return bead["assignee"] == actor and all(
             meta(bead, key) == value for key, value in extra_meta.items())
-    args = ["update", bead_id, "--claim"]
-    for key, value in extra_meta.items():
-        args += ["--set-metadata", f"{key}={value}"]
-    if meta(bead, "enact_unowned"):
-        args += ["--unset-metadata", "enact_unowned"]  # someone is repairing it now
-    beads.run(*args, actor=actor)
-    sync(repo, publish=True)
-    saved = beads.show(bead_id)
-    require_running(saved, beads.all())
-    return saved.get("assignee") == actor and all(
-        meta(saved, key) == value for key, value in extra_meta.items())
+    return reserve_ticket(beads, bead, actor, extra_meta, seq)
 
 
 def cmd_claim(args: argparse.Namespace) -> dict[str, Any]:
@@ -1661,23 +843,16 @@ def cmd_claim(args: argparse.Namespace) -> dict[str, Any]:
     return {"claimed": args.bead, "assignee": actor}
 
 
-@serialized
 def cmd_start(args: argparse.Namespace) -> dict[str, Any]:
     """Take only the reservation handed to this spawned session."""
     repo = find_repo()
     actor = require_actor(args.actor)
-    beads = Beads(repo)
-    sync(repo)
-    server = uses_ticket_server(repo)
-    if server:
-        graph, seq = beads.ticket_graph()
-        bead = next((b for b in graph if b["id"] == canonical_ticket_id(repo, args.bead)), None)
-        if bead is None:
-            raise Fail(f"{args.bead} is closed or no longer reserved", code=3)
-        require_running(bead, graph)
-    else:
-        bead = beads.show(args.bead)
-        require_running(bead, beads.all())
+    beads = Tickets(repo)
+    graph, seq = beads.ticket_graph()
+    bead = next((b for b in graph if b["id"] == canonical_ticket_id(repo, args.bead)), None)
+    if bead is None:
+        raise Fail(f"{args.bead} is closed or no longer reserved", code=3)
+    require_running(bead, graph)
     actor = as_owner(actor, bead)
     owner = bead.get("assignee") or ""
     token = meta(bead, "enact_reservation")
@@ -1692,80 +867,48 @@ def cmd_start(args: argparse.Namespace) -> dict[str, Any]:
         if (token and args.reservation != token) or (not token and assigned != actor):
             raise Fail("reservation does not match this worker", code=3)
     assignment = {"enact_actor": actor, "enact_session": actor}
-    if server:
-        fields = {"assignee": actor, "status": "in_progress"}
-        beads.batch({"op": "update", "id": bead["id"], "set": fields, "set_meta": assignment},
-                    session_event(bead["id"], "start", actor),
-                    actor=actor, conditions=[{"seq": seq}, ticket_version(bead)])
-        saved = {**bead, **fields, "metadata": {**bead["metadata"], **assignment}}
-        return {"bead": saved, "role": role_of(saved), "emoji": EMOJI.get(role_of(saved), "")}
-    reassign(beads, args.bead, "--assignee", actor, "--status", "in_progress",
-             "--set-metadata", f"enact_actor={actor}",
-             "--set-metadata", f"enact_session={actor}", actor=actor)
-    sync(repo, publish=True)
-    bead = beads.show(args.bead)
-    require_owner(bead, actor)
-    require_running(bead, beads.all())
-    return {"bead": bead, "role": role_of(bead), "emoji": EMOJI.get(role_of(bead), "")}
+    fields = {"assignee": actor, "status": "in_progress"}
+    beads.batch({"op": "update", "id": bead["id"], "set": fields, "set_meta": assignment},
+                session_event(bead["id"], "start", actor),
+                actor=actor, conditions=[{"seq": seq}, ticket_version(bead)])
+    saved = {**bead, **fields, "metadata": {**bead["metadata"], **assignment}}
+    return {"bead": saved, "role": role_of(saved), "emoji": EMOJI.get(role_of(saved), "")}
 
 
-@serialized
 def cmd_close(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     actor = require_actor(args.actor)
-    beads = Beads(repo)
-    sync(repo)
-    server = uses_ticket_server(repo)
-    if server:
-        graph, seq = beads.ticket_graph()
-        bead = next((b for b in graph if b["id"] == canonical_ticket_id(repo, args.bead)), None)
-        if bead is None:
-            raise Fail(f"no active assignment for {args.bead}", code=3)
-    else:
-        bead = beads.show(args.bead)
+    beads = Tickets(repo)
+    graph, seq = beads.ticket_graph()
+    bead = next((b for b in graph if b["id"] == canonical_ticket_id(repo, args.bead)), None)
+    if bead is None:
+        raise Fail(f"no active assignment for {args.bead}", code=3)
     actor = as_owner(actor, bead)
     require_owner(bead, actor, closed=True)
     if bead.get("issue_type") == "epic":
-        require_running(bead, graph if server else beads.all())
-    if server:
-        if bead["status"] == "closed":
-            return {"closed": args.bead, "epics_closed": [], "sync": sync(repo)}
-        lane = args.continue_lane and bool(label_value(bead, "lane"))
-        close = {"op": "close", "id": bead["id"], "reason": args.reason}
-        if lane:
-            close["include_ready"] = True
-        result = beads.batch(close, session_event(bead["id"], "close", actor),
-                             actor=actor, conditions=[{"seq": seq}, ticket_version(bead)])
-        saved = result["results"][0]
-        report = {"closed": args.bead, "epics_closed": saved.get("closed", []),
-                  "sync": sync(repo)}
-        if args.continue_lane:
-            following = None
-            if lane:
-                closed_ids = {bead["id"], *report["epics_closed"]}
-                updated = [{**b, "status": "closed"} if b["id"] in closed_ids else b for b in graph]
-                following = continue_lane(repo, beads, {**bead, "status": "closed"}, actor,
-                                          (updated, result["seq"], saved["ready"]))
-            report["next"] = following and {key: following.get(key) for key in (
-                "id", "title", "description", "acceptance_criteria", "labels")}
-        return report
-    beads.run("close", args.bead, "--reason", args.reason, actor=actor)
-    result = defer_sync(repo)
-    saved = beads.show(args.bead)
-    require_owner(saved, actor, closed=True)
-    if saved.get("status") != "closed":
-        raise Fail("close lost during sync; recheck ownership", code=3)
-    closed = close_finished_epics(repo)
-    report = {"closed": args.bead, "epics_closed": closed, "sync": result}
+        require_running(bead, graph)
+    if bead["status"] == "closed":
+        return {"closed": args.bead, "epics_closed": []}
+    lane = args.continue_lane and bool(label_value(bead, "lane"))
+    close = {"op": "close", "id": bead["id"], "reason": args.reason}
+    if lane:
+        close["include_ready"] = True
+    result = beads.batch(close, session_event(bead["id"], "close", actor),
+                         actor=actor, conditions=[{"seq": seq}, ticket_version(bead)])
+    saved = result["results"][0]
+    report = {"closed": args.bead, "epics_closed": saved.get("closed", [])}
     if args.continue_lane:
-        # Under the same lock, so a vizier on this host cannot reserve it first.
-        following = continue_lane(repo, beads, saved, actor)
+        following = None
+        if lane:
+            closed_ids = {bead["id"], *report["epics_closed"]}
+            updated = [{**b, "status": "closed"} if b["id"] in closed_ids else b for b in graph]
+            following = continue_lane(repo, beads, {**bead, "status": "closed"}, actor,
+                                      (updated, result["seq"], saved["ready"]))
         report["next"] = following and {key: following.get(key) for key in (
             "id", "title", "description", "acceptance_criteria", "labels")}
     return report
 
 
-@serialized
 def cmd_meta(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     actor = require_actor(args.actor)
@@ -1775,8 +918,7 @@ def cmd_meta(args: argparse.Namespace) -> dict[str, Any]:
         if not sep:
             raise Fail(f"expected key=value, got {item!r}")
         pairs[key] = value
-    sync(repo)
-    beads = Beads(repo)
+    beads = Tickets(repo)
     bead = beads.show(args.bead)
     # Only the current vizier may bind a child/routing. An already started
     # child can be recorded idempotently, never replaced by a late spawn.
@@ -1807,40 +949,21 @@ def cmd_meta(args: argparse.Namespace) -> dict[str, Any]:
     if any(key.startswith(("enact_control", "enact_vizier_route_",
                            "enact_marshal_attempt_")) for key in pairs):  # legacy recovery keys
         raise Fail("run state and recovery fields are managed by enact run", code=3)
-    if uses_ticket_server(repo):
-        events = []
-        if set(pairs) <= routing and pairs.get("enact_session"):
-            events.append(session_event(bead["id"], "spawn", pairs["enact_session"]))
-        elif pairs.get("enact_archived") == "true" and meta(bead, "enact_archived") != "true":
-            session = meta(bead, "enact_session")
-            if session:
-                events.append(session_event(bead["id"], "archive", session))
-        beads.batch({"op": "update", "id": bead["id"], "set_meta": pairs}, *events,
-                    actor=actor, conditions=[ticket_version(bead)])
-        return {"bead": args.bead, "metadata": pairs, "sync": sync(repo)}
-    beads.set_meta(args.bead, pairs, actor=actor)
-    result = defer_sync(repo)
-    if not result.get("deferred"):
-        saved = beads.show(args.bead)
-        if any(meta(saved, key) != value for key, value in pairs.items()):
-            raise Fail("metadata lost during sync; recheck ownership", code=3)
-    return {"bead": args.bead, "metadata": pairs, "sync": result}
+    events = []
+    if set(pairs) <= routing and pairs.get("enact_session"):
+        events.append(session_event(bead["id"], "spawn", pairs["enact_session"]))
+    elif pairs.get("enact_archived") == "true" and meta(bead, "enact_archived") != "true":
+        session = meta(bead, "enact_session")
+        if session:
+            events.append(session_event(bead["id"], "archive", session))
+    beads.batch({"op": "update", "id": bead["id"], "set_meta": pairs}, *events,
+                actor=actor, conditions=[ticket_version(bead)])
+    return {"bead": args.bead, "metadata": pairs}
 
 
 def cmd_backend(_args: argparse.Namespace) -> dict[str, Any]:
-    if uses_ticket_server(find_repo()):
-        return {"backend": "server", "tk": str(ticket_binary())}
-    return {"backend": "beads"}
-
-
-def cmd_sync(args: argparse.Namespace) -> dict[str, Any]:
-    repo = find_repo()
-    if uses_ticket_server(repo):
-        return sync(repo)
-    if args.deferred:
-        return deferred_sync(repo)
-    # Run after raw bd writes this process cannot see, so never skipped.
-    return sync(repo, force=True, publish=True)
+    require_ticket_config(find_repo())
+    return {"backend": "server", "tk": str(ticket_binary())}
 
 
 def handoff(comments: list[dict[str, Any]]) -> str | None:
@@ -1853,15 +976,15 @@ def handoff(comments: list[dict[str, Any]]) -> str | None:
 
 def cmd_brief(args: argparse.Namespace) -> dict[str, Any]:
     """Everything a session needs to start on a bead, in one compact read,
-    instead of several verbose `bd show` calls."""
+    instead of several separate ticket reads."""
     repo = find_repo()
-    beads = Beads(repo)
+    beads = Tickets(repo)
     bead = beads.show(args.bead)
     graph = beads.all()
     by_id = {b["id"]: b for b in graph}
 
     def comments(bead_id: str) -> list[dict[str, Any]]:
-        return beads.json("comments", bead_id) or []
+        return beads.ticket("comments", bead_id) or []
 
     def files(bead: dict[str, Any]) -> list[str]:
         found: list[str] = []
@@ -1873,7 +996,7 @@ def cmd_brief(args: argparse.Namespace) -> dict[str, Any]:
     epics = []
     parent = bead.get("parent")
     while parent in by_id and len(epics) < 10:
-        epic = beads.show(parent) if uses_ticket_server(repo) else by_id[parent]
+        epic = (beads.show(parent))
         epics.append({k: epic.get(k) for k in ("id", "title", "description",
                                                "acceptance_criteria", "labels")})
         parent = epic.get("parent")
@@ -2054,22 +1177,21 @@ def cmd_pool(args: argparse.Namespace) -> dict[str, Any]:
                 pool["resting"][session] = until
     if args.action != "status":
         save_pool(repo, vizier, pool)
-    graph = Beads(repo).all()
+    graph = Tickets(repo).all()
     return {"vizier": vizier, "pool": pool["sessions"], "started": pool["started"],
             "limit": POOL_LIMIT, "idle": idle_members(pool, graph, justiciar_state(repo))}
 
 
-def continue_lane(repo: Repo, beads: Beads, closed: dict[str, Any], actor: str,
-                  snapshot: tuple[list[dict[str, Any]], int, list[str]] | None = None
+def continue_lane(repo: Repo, beads: Tickets, closed: dict[str, Any], actor: str,
+                  snapshot: tuple[list[dict[str, Any]], int, list[str]]
                   ) -> dict[str, Any] | None:
     """Claim the next ready bead of the closed bead's lane for the same session."""
     if not label_value(closed, "lane"):
         return None
-    graph = snapshot[0] if snapshot else beads.all()
+    graph = snapshot[0]
     by_id = {b["id"]: b for b in graph}
-    ready = ([b for name in snapshot[2] if (b := by_id.get(name))
-              and b["issue_type"] != "epic" and not b.get("assignee")] if snapshot else
-             beads.json("ready", "-n", "0", "--exclude-type", "epic", "--unassigned") or [])
+    ready = [b for name in snapshot[2] if (b := by_id.get(name))
+             and b["issue_type"] != "epic" and not b.get("assignee")]
     options = [by_id.get(b["id"], b) for b in ready]
     options = sorted((b for b in options
                       if same_lane(closed, b, graph) and role_of(b) == role_of(closed)
@@ -2077,13 +1199,8 @@ def continue_lane(repo: Repo, beads: Beads, closed: dict[str, Any], actor: str,
     carry = {key: meta(closed, key) or "" for key in LANE_CARRY if meta(closed, key)}
     if meta(closed, "enact_reservation"):
         carry["enact_reservation"] = uuid.uuid4().hex
-    for bead in options:
-        if snapshot:
-            if reserve_ticket(beads, bead, actor, carry, snapshot[1]):
-                return bead
-            return None  # Retry through the scheduler with a fresh graph.
-        if claim(repo, bead["id"], actor, carry):
-            return beads.show(bead["id"])
+    if options and reserve_ticket(beads, options[0], actor, carry, snapshot[1]):
+        return options[0]
     return None
 
 
@@ -2138,7 +1255,7 @@ def run_delivery(repo: Repo, graph: list[dict[str, Any]], epic: str,
             "complete": not pending and not stewards}
 
 
-# Shared run control is separate from Beads issue status: paused workers may
+# Shared run control is separate from Tickets issue status: paused workers may
 # finish, but no new assignment or automatic recovery may start.
 def json_meta(bead: dict[str, Any], key: str, default: Any) -> Any:
     value = (bead.get("metadata") or {}).get(key, default)
@@ -2220,18 +1337,13 @@ def require_running(bead: dict[str, Any], graph: list[dict[str, Any]],
 
 def save_run_meta(repo: Repo, epic: str, key: str, value: Any,
                   expected: dict[str, Any] | None = None, *, reopen: bool = False) -> None:
-    beads = Beads(repo)
-    if uses_ticket_server(repo):
-        bead = expected or beads.show(epic)
-        ops = [{"op": "update", "id": bead["id"], "set_meta": {key: json.dumps(value)}}]
-        if reopen:
-            ops.append({"op": "reopen", "id": bead["id"]})
-        beads.batch(*ops, conditions=[ticket_version(bead)])
-        return
-    beads.set_meta(epic, {key: json.dumps(value)})
-    sync(repo)
-    if json_meta(beads.show(epic), key, None) != value:
-        raise Fail("run update lost during sync; inspect shared state", code=3)
+    beads = Tickets(repo)
+    bead = expected or beads.show(epic)
+    ops = [{"op": "update", "id": bead["id"], "set_meta": {key: json.dumps(value)}}]
+    if reopen:
+        ops.append({"op": "reopen", "id": bead["id"]})
+    beads.batch(*ops, conditions=[ticket_version(bead)])
+    return
 
 
 def route_key(session: str) -> str:
@@ -2243,28 +1355,18 @@ def run_routes(epic: dict[str, Any]) -> list[dict[str, Any]]:
             if key.startswith("enact_vizier_route_")]
 
 
-def lease_path(repo: Repo, vizier: str) -> Path:
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", vizier)
-    return repo.state / f"vizier-{safe}.json"
-
-
 def renew_lease(repo: Repo, vizier: str, epic: str) -> None:
     """Refresh the heartbeat that says a vizier can repair this machine's CI failures."""
-    if uses_ticket_server(repo):
-        ticket_reply(ticket_lease(repo, "acquire", f"vizier/{epic}/{vizier}", vizier,
-                                  VIZIER_LEASE_SECONDS, {"host": host_name()}, no_queue=True))
-        return
-    write_json(lease_path(repo, vizier), {"session": vizier, "epic": epic,
-                                          "host": host_name(), "at": time.time()})
+    ticket_reply(ticket_lease(repo, "acquire", f"vizier/{epic}/{vizier}", vizier,
+                              VIZIER_LEASE_SECONDS, {"host": host_name()}, no_queue=True))
+    return
 
 
 def drop_lease(repo: Repo, vizier: str, epic: str) -> None:
-    if uses_ticket_server(repo):
-        proc = ticket_lease(repo, "release", f"vizier/{epic}/{vizier}", vizier)
-        if proc.returncode != 3:
-            ticket_reply(proc)
-        return
-    lease_path(repo, vizier).unlink(missing_ok=True)
+    proc = ticket_lease(repo, "release", f"vizier/{epic}/{vizier}", vizier)
+    if proc.returncode != 3:
+        ticket_reply(proc)
+    return
 
 
 def lease_age(repo: Repo, vizier: str, epic: str | Collection[str] | None) -> float | None:
@@ -2273,25 +1375,17 @@ def lease_age(repo: Repo, vizier: str, epic: str | Collection[str] | None) -> fl
     None when it holds none here (another epic, or a vizier older than
     leases)."""
     epics = {epic} if isinstance(epic, str) else None if epic is None else set(epic)
-    if uses_ticket_server(repo):
-        prefix = "vizier/"
-        ages = []
-        for lease in Beads(repo).ticket("leases"):
-            if not lease["name"].startswith(prefix):
-                continue
-            run, _, session = lease["name"][len(prefix):].partition("/")
-            if (session == vizier and lease["holder"] == vizier
-                    and lease["payload"].get("host") == host_name()
-                    and (epics is None or run in epics)):
-                ages.append(max(0.0, VIZIER_LEASE_SECONDS - lease_remaining(lease)))
-        return min(ages, default=None)
-    try:
-        lease = json.loads(lease_path(repo, vizier).read_text(encoding="utf-8"))
-        if epics is not None and lease.get("epic") not in epics:
-            return None
-        return max(time.time() - float(lease["at"]), 0.0)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        return None
+    prefix = "vizier/"
+    ages = []
+    for lease in Tickets(repo).ticket("leases"):
+        if not lease["name"].startswith(prefix):
+            continue
+        run, _, session = lease["name"][len(prefix):].partition("/")
+        if (session == vizier and lease["holder"] == vizier
+                and lease["payload"].get("host") == host_name()
+                and (epics is None or run in epics)):
+            ages.append(max(0.0, VIZIER_LEASE_SECONDS - lease_remaining(lease)))
+    return min(ages, default=None)
 
 
 def lease_fresh(repo: Repo, vizier: str, epic: str | Collection[str] | None) -> bool:
@@ -2395,11 +1489,10 @@ def bead_watched(repo: Repo, graph: list[dict[str, Any]], bead: dict[str, Any]) 
 
 def register_run(repo: Repo, epic: str, vizier: str, parallel: int,
                  authorized: bool = False) -> dict[str, Any]:
-    bead = Beads(repo).show(epic)
+    bead = Tickets(repo).show(epic)
     key, route, changed = vizier_route(repo, bead, vizier, parallel, authorized)
     if changed:
-        save_run_meta(repo, epic, key, route,
-                      **({"expected": bead} if uses_ticket_server(repo) else {}))
+        save_run_meta(repo, epic, key, route, **{'expected': bead})
     return route
 
 
@@ -2413,38 +1506,6 @@ def vizier_route(repo: Repo, bead: dict[str, Any], vizier: str, parallel: int,
              "app": os.environ.get("ENACT_APP", provider()), "project": str(repo.main),
              "parallel": parallel, "authorized": authorized or old.get("authorized", False)}
     return key, route, old != route
-
-
-@serialized
-def close_finished_epics(repo: Repo) -> list[str]:
-    # bd close-eligible has no exclusion for paused/blocked runs. Close only
-    # eligible active epics, bottom-up, preserving held acceptance criteria.
-    if uses_ticket_server(repo):
-        return []  # The closing batch already closes completed ancestors.
-    beads = Beads(repo)
-    graph = beads.all()
-    closed = []
-    while True:
-        eligible = [b for b in graph if b.get("issue_type") == "epic"
-                    and b.get("status") != "closed" and not stopped_runs(b, graph)
-                    and (children := [c for c in graph if c.get("parent") == b["id"]])
-                    and all(work_done(c) for c in children)]
-        if not eligible:
-            if closed:
-                sync(repo)
-            return closed
-        for bead in eligible:
-            # bd refuses to close an epic with deferred children unless forced;
-            # the filter above proved every child is closed or set aside indefinitely.
-            try:
-                beads.run("close", bead["id"], "--reason", "All children complete", "--force")
-            except Fail as failure:
-                # One stubborn epic must not abort every caller (`enact next`).
-                log(f"could not close {bead['id']}: {failure}")
-                graph = [b for b in graph if b["id"] != bead["id"]]
-                continue
-            bead["status"] = "closed"
-            closed.append(bead["id"])
 
 
 def stale_runs(repo: Repo, graph: list[dict[str, Any]],
@@ -2483,12 +1544,10 @@ def stale_runs(repo: Repo, graph: list[dict[str, Any]],
     return stale
 
 
-@serialized
 def prune_runs(repo: Repo) -> list[dict[str, Any]]:
     """Retire stale runs. Only a closed, fully delivered epic is finished;
     an open epic still has work even when every current commit is green."""
-    sync(repo)
-    graph = Beads(repo).all()
+    graph = Tickets(repo).all()
     pruned = []
     for item in stale_runs(repo, graph):
         bead, delivery = item["bead"], item["delivery"]
@@ -2502,21 +1561,18 @@ def prune_runs(repo: Repo) -> list[dict[str, Any]]:
                       {"state": state, "epoch": control["epoch"], "reason": reason,
                        "actor": PRUNE_ACTOR, "at": now()})
         if state == "paused" and bead.get("status") == "closed":
-            Beads(repo).run("reopen", bead["id"], "--reason", reason)
-            sync(repo)
+            Tickets(repo).reopen(bead["id"])
         pruned.append({"epic": bead["id"], "state": state, "reason": reason})
     return pruned
 
 
-@serialized
 def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     if args.action == "prune":
         return {"pruned": prune_runs(repo)}
     if not args.epic:
         raise Fail(f"run {args.action} needs an epic")
-    sync(repo)
-    beads = Beads(repo)
+    beads = Tickets(repo)
     bead = beads.show(args.epic)
     if bead.get("issue_type") != "epic":
         raise Fail("run must name an epic")
@@ -2533,8 +1589,7 @@ def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
                        code=3)
         control = {"state": "finished", "epoch": control["epoch"],
                    "reason": args.reason, "actor": actor, "at": now()}
-        save_run_meta(repo, args.epic, "enact_control", control,
-                      **({"expected": bead} if uses_ticket_server(repo) else {}))
+        save_run_meta(repo, args.epic, 'enact_control', control, **{'expected': bead})
         return {"epic": args.epic, "control": control}
     if args.action in ("pause", "block", "resume"):
         if not args.reason:
@@ -2546,14 +1601,9 @@ def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
         control = {"state": {"pause": "paused", "block": "blocked", "resume": "active"}[args.action],
                    "epoch": uuid.uuid4().hex if args.action == "resume" else control["epoch"],
                    "reason": args.reason, "actor": actor, "at": now()}
-        server = uses_ticket_server(repo)
         reopen = args.action != "resume" and bead.get("status") == "closed"
-        save_run_meta(repo, args.epic, "enact_control", control,
-                      **({"expected": bead, "reopen": reopen} if server else {}))
+        save_run_meta(repo, args.epic, 'enact_control', control, **{'expected': bead, 'reopen': reopen})
         cleared = resume_pruned_milestones(repo, args.epic, control) if args.action == "resume" else []
-        if reopen and not server:
-            beads.run("reopen", args.epic, "--reason", args.reason)
-            sync(repo)
         return {"epic": args.epic, "control": control,
                 **({"resumed_milestones": cleared} if cleared else {})}
     raise Fail(f"unknown run action {args.action}")
@@ -2567,7 +1617,7 @@ def resume_pruned_milestones(repo: Repo, epic: str, control: dict[str, Any]) -> 
     milestones, which older Enact pruned as runs of their own; otherwise the
     resumed run stays held by them. A pause a person put on a milestone
     stays until they resume that milestone."""
-    graph = Beads(repo).all()
+    graph = Tickets(repo).all()
     cleared = []
     for bead in descendants(graph, epic):
         held = run_control(bead)
@@ -2694,31 +1744,23 @@ STALL_NOTICE = (
 )
 
 
-@serialized
 def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
              running: Collection[str] = ()) -> dict[str, Any]:
     fetch(repo)
     recover_deliveries(repo, drop_dead=True)
-    beads = Beads(repo)
-    server = uses_ticket_server(repo)
+    beads = Tickets(repo)
     # Use a time no later than the readiness snapshot so a deadline passing
     # during this call cannot turn a stale "not ready" into a deadlock.
     now = dt.datetime.now(dt.timezone.utc)
-    if server:
-        epic = canonical_ticket_id(repo, epic)
-        graph, seq = beads.ticket_graph()
-    else:
-        register_run(repo, epic, vizier, parallel)
-        close_finished_epics(repo)
-        graph = beads.all()
+    epic = canonical_ticket_id(repo, epic)
+    graph, seq = beads.ticket_graph()
     by_id = {b["id"]: b for b in graph}
     if epic not in by_id:
         raise Fail(f"epic {epic} not found")
     route_ops = []
-    if server:
-        key, route, changed = vizier_route(repo, by_id[epic], vizier, parallel)
-        if changed:
-            route_ops.append({"op": "update", "id": epic, "set_meta": {key: json.dumps(route)}})
+    key, route, changed = vizier_route(repo, by_id[epic], vizier, parallel)
+    if changed:
+        route_ops.append({"op": "update", "id": epic, "set_meta": {key: json.dumps(route)}})
     mine = [b for b in graph if meta(b, "enact_vizier") == vizier]
     busy = busy_sessions(graph)
     pool = load_pool(repo, vizier) if provider() == "claude" else {}
@@ -2743,9 +1785,8 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
         "reminder": (POOL_REMINDER if pooled else CODEX_LOOP_REMINDER
                      if provider() == "codex" else LOOP_REMINDER),
     }
-    if server:
-        result["ticket_seq"] = seq
-        result["ticket_route"] = route_ops
+    result["ticket_seq"] = seq
+    result["ticket_route"] = route_ops
     if pooled:
         result["pool_notice"] = POOL_NOTICE
     inflight = [b for b in mine if b.get("status") != "closed"]
@@ -2754,7 +1795,7 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
     result["stalled"] = stalled_workers(inflight, marks)
     result["running"] = sorted(marks)
     if provider() == "codex":
-        # The host can wait for these chats without another Beads lookup.
+        # The host can wait for these chats without another Tickets lookup.
         result["inflight_threads"] = sorted({meta(b, "enact_session") for b in inflight
                                               if meta(b, "enact_session")})
 
@@ -2800,20 +1841,11 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
 
     scope = {b["id"] for b in descendants(graph, epic)} | set(delivery["stewards"])
     hold_archivist = archivist_waits([by_id[i] for i in scope])
-    ready = ([b for b in graph if b["ready"] and b["issue_type"] != "epic"
-              and not b.get("assignee")] if server else
-             beads.json("ready", "-n", "0", "--exclude-type", "epic", "--unassigned") or [])
+    ready = (([b for b in graph if b['ready'] and b['issue_type'] != 'epic' and (not b.get('assignee'))]))
     candidates = [
         b
         for b in ready
-        if (b["id"] in scope or (role_of(b) == "steward" and not b.get("parent")))
-        and targeted_here(b)
-        and not (run_holds(b, graph, epic) if b["id"] in scope
-                 else stopped_runs(b, graph, epic))
-        # The server already applies readiness to new Archivist tickets.
-        # Imported Archivists have no last flag and still need the old hold.
-        and not (hold_archivist and role_of(b) == "archivist" and not (server and b.get("last")))
-        and not lane_held(by_id.get(b["id"], b), graph)
+        if ((b['id'] in scope or (role_of(b) == 'steward' and (not b.get('parent')))) and targeted_here(b) and (not (run_holds(b, graph, epic) if b['id'] in scope else stopped_runs(b, graph, epic))) and (not (hold_archivist and role_of(b) == 'archivist' and (not b.get('last')))) and (not lane_held(by_id.get(b['id'], b), graph)))
     ]
     candidates.sort(key=spawn_key(graph))
     if candidates and pooled and not members:
@@ -2835,24 +1867,18 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
         if pooled:
             reservation["enact_pool_session"] = idle[0]
         owner = f"vizier:{host_name()}:{provider()}:{vizier}"
-        claimed = (reserve_ticket(beads, bead, owner, reservation, seq, *route_ops) if server
-                   else claim(repo, bead["id"], owner, reservation))
+        claimed = ((reserve_ticket(beads, bead, owner, reservation, seq, *route_ops)))
         if claimed:
-            saved = ({**bead, "assignee": owner, "status": "in_progress",
-                      "metadata": {**bead["metadata"], **reservation}}
-                     if server else beads.show(bead["id"]))
+            saved = (({**bead, 'assignee': owner, 'status': 'in_progress', 'metadata': {**bead['metadata'], **reservation}}))
             action = spawn_action(repo, saved, epic, vizier)
             if pooled:
                 take_member(repo, vizier, pool, idle[0])
                 # A pool member already exists: no holding prompt is needed.
                 action.pop("model_required", None)
                 action["session"] = idle[0]
-            if server:
-                result.pop("ticket_route")  # It was part of the reservation batch.
+            result.pop("ticket_route")  # It was part of the reservation batch.
             return {**result, **action}
-        if server:
-            return {**result, "action": "wait", "reason": "claims changed"}
-        log(f"lost the claim race for {bead['id']}; trying the next bead")
+        return {**result, "action": "wait", "reason": "claims changed"}
     if candidates:
         # The graph predates the winning claim; it cannot prove a deadlock.
         return {**result, "action": "wait", "reason": "claims changed"}
@@ -2875,16 +1901,11 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
                 or bead.get("assignee") or bead.get("issue_type") == "epic"
                 or run_holds(bead, graph, epic)):
             continue
-        if server:
-            blocked = bool(bead.get("blocked_by"))
-        else:
-            blocked = any(by_id.get(dep, {}).get("status") != "closed"
-                          for ancestor in epic_and_ancestors(bead["id"], graph)
-                          for dep in blockers(by_id[ancestor]))
+        blocked = bool(bead.get("blocked_by"))
         if blocked:
             continue
         if targeted_here(bead) or not stranded(repo, bead, by_id[epic]):
-            # Beads rechecks on the next poll. The ticket feed wakes when the
+            # Tickets rechecks on the next poll. The ticket feed wakes when the
             # server's deadline alarm announces a readiness change.
             scheduled = True
             break
@@ -2927,7 +1948,7 @@ def running_mark(bead: dict[str, Any]) -> str:
 
 
 def running_marks(inflight: list[dict[str, Any]], running: Collection[str]) -> set[str]:
-    """Beads whose worker the vizier last saw with its turn still running.
+    """Tickets whose worker the vizier last saw with its turn still running.
     `running` holds marks kept from earlier calls and bead IDs just reported
     with `--running`. A mark names the bead's `updated_at`, so any bead
     update drops it."""
@@ -2995,19 +2016,17 @@ def next_step(repo: Repo, args: argparse.Namespace, vizier: str) -> dict[str, An
         reported = set()
     renew_at = 0.0
     while True:
-        server = uses_ticket_server(repo)
-        epic = canonical_ticket_id(repo, args.epic) if server else args.epic
-        if not server or time.monotonic() >= renew_at:
+        epic = (canonical_ticket_id(repo, args.epic))
+        if (time.monotonic() >= renew_at):
             renew_lease(repo, vizier, epic)
             renew_at = time.monotonic() + VIZIER_LEASE_SECONDS / 2
-        sync(repo)
         running = {key.removeprefix("running:") for key in reported
                    if key.startswith("running:")} | set(getattr(args, "running", None) or ())
         result = schedule(repo, epic, args.parallel, vizier, running)
         seq = result.pop("ticket_seq", None)
         if (route := result.pop("ticket_route", None)) and result.get("reason") != "claims changed":
             try:
-                seq = Beads(repo).batch(*route, actor=vizier, conditions=[{"seq": seq}])["seq"]
+                seq = Tickets(repo).batch(*route, actor=vizier, conditions=[{"seq": seq}])["seq"]
             except Fail as error:
                 if error.code != 3:
                     raise
@@ -3027,98 +2046,42 @@ def next_step(repo: Repo, args: argparse.Namespace, vizier: str) -> dict[str, An
                 result["stalled"] = fresh
                 result["stall_notice"] = STALL_NOTICE
             return result
-        if server:
-            wait_until = min(deadline, renew_at)
-            if (result["reason"] != "claims changed" and not Beads(repo).wait_for_change(wait_until, seq)
-                    and wait_until == deadline):
-                deadline = time.monotonic()
-        else:
-            time.sleep(min(args.interval, max(deadline - time.monotonic(), 1)))
+        wait_until = min(deadline, renew_at)
+        if (result["reason"] != "claims changed" and not Tickets(repo).wait_for_change(wait_until, seq)
+                and wait_until == deadline):
+            deadline = time.monotonic()
 
 
 def cmd_wait(args: argparse.Namespace) -> dict[str, Any]:
     """Block until every named bead is closed, for work that must start after."""
     repo = find_repo()
     deadline = time.monotonic() + max(args.timeout, 0)
-    if uses_ticket_server(repo):
-        beads = Beads(repo)
-        while True:
-            graph, seq = beads.ticket_graph()
-            by_id = {b["id"]: b for b in graph}
-            open_beads = []
-            for name in args.beads:
-                bead = by_id.get(canonical_ticket_id(repo, name)) or beads.show(name)
-                if bead["status"] != "closed":
-                    open_beads.append({key: bead[key] for key in ("id", "status", "assignee")})
-            if not open_beads:
-                return {"state": "closed", "beads": args.beads}
-            if time.monotonic() >= deadline:
-                return {"state": "waiting", "open": open_beads}
-            if not beads.wait_for_change(deadline, seq):
-                deadline = time.monotonic()
+    beads = Tickets(repo)
     while True:
-        sync(repo)
-        beads = Beads(repo)
-        open_beads = [{"id": b["id"], "status": b.get("status"), "assignee": b.get("assignee")}
-                      for b in map(beads.show, args.beads) if b.get("status") != "closed"]
+        graph, seq = beads.ticket_graph()
+        by_id = {b["id"]: b for b in graph}
+        open_beads = []
+        for name in args.beads:
+            bead = by_id.get(canonical_ticket_id(repo, name)) or beads.show(name)
+            if bead["status"] != "closed":
+                open_beads.append({key: bead[key] for key in ("id", "status", "assignee")})
         if not open_beads:
             return {"state": "closed", "beads": args.beads}
         if time.monotonic() >= deadline:
             return {"state": "waiting", "open": open_beads}
-        time.sleep(min(args.interval, max(deadline - time.monotonic(), 1)))
-
+        if not beads.wait_for_change(deadline, seq):
+            deadline = time.monotonic()
 # ---------------------------------------------------------------------------
-# Justiciar lock (one ref per machine on the remote, independent of Beads)
-
-
-def justiciar_ref(host: str | None = None) -> str:
-    return JUSTICIAR_PREFIX + (host or host_name())
+# Justiciar lock (one ref per machine on the remote, independent of Tickets)
 
 
 def justiciar_state(repo: Repo, host: str | None = None) -> dict[str, Any] | None:
     """This machine's lock, or the legacy fleet-wide lock when this machine holds it."""
     host = host or host_name()
-    if uses_ticket_server(repo):
-        for lease in Beads(repo).ticket("leases"):
-            if lease["name"] == f"justiciar/{host}" and lease_remaining(lease) > 0:
-                return {**lease["payload"], "lease_holder": lease["holder"]}
-        return None
-    remote, ref = repo.config.remote, justiciar_ref(host)
-    listing = repo.git("ls-remote", remote, ref, LEGACY_JUSTICIAR_REF, check=False)
-    found = {}
-    for line in listing.splitlines():
-        parts = line.split()
-        if len(parts) == 2:
-            found[parts[1]] = parts[0]
-    for candidate in (ref, LEGACY_JUSTICIAR_REF):
-        sha = found.get(candidate)
-        if not sha:
-            continue
-        repo.git("fetch", "-q", remote, f"+{candidate}:{candidate}", check=False)
-        body = repo.git("log", "-1", "--format=%B", sha, check=False)
-        try:
-            state = json.loads(body)
-        except json.JSONDecodeError:
-            state = {"state": "unknown", "raw": body}
-        if candidate == LEGACY_JUSTICIAR_REF and state.get("host") != host:
-            continue  # another machine's Justiciar no longer blocks this one
-        state["sha"], state["ref"] = sha, candidate
-        return state
+    for lease in Tickets(repo).ticket("leases"):
+        if lease["name"] == f"justiciar/{host}" and lease_remaining(lease) > 0:
+            return {**lease["payload"], "lease_holder": lease["holder"]}
     return None
-
-
-def justiciar_commit(repo: Repo, payload: dict[str, Any]) -> str:
-    proc = subprocess.run(
-        ["git", "mktree"], cwd=repo.top, input="", text=True, capture_output=True, check=True
-    )
-    empty_tree = proc.stdout.strip()
-    message = json.dumps(payload, sort_keys=True)
-    return repo.git("commit-tree", empty_tree, "-m", message)
-
-
-def justiciar_push(repo: Repo, sha: str, expect: str, ref: str | None = None) -> bool:
-    ref = ref or justiciar_ref()
-    return compare_and_swap_ref(repo, sha, expect, ref)
 
 
 def compare_and_swap_ref(repo: Repo, sha: str, expect: str, ref: str) -> bool:
@@ -3132,8 +2095,6 @@ JUSTICIAR_LEASE_SECONDS = 6 * 60 * 60
 
 
 def justiciar_acquire(repo: Repo, payload: dict[str, Any]) -> bool:
-    if not uses_ticket_server(repo):
-        return justiciar_push(repo, justiciar_commit(repo, payload), "")
     holder = uuid.uuid4().hex
     payload = {**payload, "revision": uuid.uuid4().hex}
     proc = ticket_lease(repo, "acquire", f"justiciar/{payload['host']}", holder,
@@ -3145,19 +2106,14 @@ def justiciar_acquire(repo: Repo, payload: dict[str, Any]) -> bool:
 
 
 def justiciar_transition(repo: Repo, current: dict[str, Any], changes: dict[str, Any]) -> bool:
-    if uses_ticket_server(repo):
-        payload = {k: v for k, v in current.items() if k != "lease_holder"}
-        payload.update(changes, updated=now(), revision=uuid.uuid4().hex)
-        proc = ticket_lease(repo, "renew", f"justiciar/{current['host']}", current["lease_holder"],
-                            JUSTICIAR_LEASE_SECONDS, payload, revision=current["revision"])
-        if proc.returncode == 3:
-            return False
-        ticket_reply(proc)
-        return True
-    payload = {k: v for k, v in current.items() if k not in ("sha", "ref")}
-    payload.update(changes, updated=now())
-    return justiciar_push(repo, justiciar_commit(repo, payload), current["sha"],
-                          current.get("ref"))
+    payload = {k: v for k, v in current.items() if k != "lease_holder"}
+    payload.update(changes, updated=now(), revision=uuid.uuid4().hex)
+    proc = ticket_lease(repo, "renew", f"justiciar/{current['host']}", current["lease_holder"],
+                        JUSTICIAR_LEASE_SECONDS, payload, revision=current["revision"])
+    if proc.returncode == 3:
+        return False
+    ticket_reply(proc)
+    return True
 
 
 def justiciar_prompt(request: dict[str, Any]) -> str:
@@ -3212,14 +2168,11 @@ def cmd_justiciar(args: argparse.Namespace) -> dict[str, Any]:
         actor = args.actor or session_actor()
         if args.action == "release" and current.get("session") not in (None, actor):
             raise Fail("the lock belongs to another session; use `break`", code=3, holder=current)
-        if uses_ticket_server(repo):
-            proc = ticket_lease(repo, "release", f"justiciar/{current['host']}",
-                                current["lease_holder"], revision=current["revision"])
-            released = proc.returncode != 3
-            if released:
-                ticket_reply(proc)
-        else:
-            released = justiciar_push(repo, "", current["sha"], current.get("ref"))
+        proc = ticket_lease(repo, "release", f"justiciar/{current['host']}",
+                            current["lease_holder"], revision=current["revision"])
+        released = proc.returncode != 3
+        if released:
+            ticket_reply(proc)
         if not released:
             raise Fail("lock changed while releasing", code=3, holder=justiciar_state(repo))
         return {"released": current}
@@ -3233,8 +2186,6 @@ TRACKED_OK = ("current", "fast-forwarded", "created")
 
 
 def fetch(repo: Repo, check: bool = True) -> dict[str, str]:
-    # Embedded Dolt updates refs/remotes/<remote>/__dolt_remote_info__ in this
-    # same repository, so a concurrent sync can make git lose a ref lock.
     for attempt in range(5):
         proc = run(["git", "fetch", "-q", repo.config.remote], repo.main, check=False)
         if proc.returncode == 0 or "cannot lock ref" not in proc.stderr or attempt == 4:
@@ -3476,7 +2427,7 @@ def slot_busy(repo: Repo, path: Path, graph: list[dict[str, Any]] | None) -> str
     app restart): delivery and `worktree remove` delete the branch when they release the
     slot. Taking a slot in any of these states would discard that work. Last, a slot
     that Enact did not release (`slot_released`) may still be in use by whoever detached
-    it. `graph` is the whole Beads graph, or None when it is unavailable.
+    it. `graph` is the whole Tickets graph, or None when it is unavailable.
     """
     git_dir = slot_git_dir(repo, path)
     if (any((git_dir / state).exists() for state in PAUSED_OPERATIONS)
@@ -3512,8 +2463,7 @@ def claim_slot(repo: Repo, branch: str, base: str) -> Path | None:
     slots = [repo.worktree_root() / f"slot-{number:02d}"
              for number in range(1, repo.config.worktree_slots + 1)]
     candidates = [path for path in slots if path.resolve() in parked]
-    graph = Beads(repo).all() if candidates and (uses_ticket_server(repo) or
-                                               (repo.main / ".beads").is_dir()) else None
+    graph = (Tickets(repo).all() if candidates else None)
     free = []
     for path in candidates:
         if busy := slot_busy(repo, path, graph):
@@ -3636,7 +2586,7 @@ def reap_processes(path: Path, grace: float = 3.0) -> list[dict[str, Any]]:
     A fuzz run started in a bead's worktree once kept a core busy for hours
     after the bead closed and the tree was deleted. Never ends this process
     or its ancestors, whose working directory may be the tree itself, nor
-    anything in this process's group: `enact push --bead X | jq` runs the
+    anything in this process's group: `enact push --ticket ID | jq` runs the
     reader in the same group, and ending it breaks the pipe the result is
     written to. A leftover background run from the bead has its own group.
     """
@@ -3729,9 +2679,8 @@ def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
         return {"removed": [], "kept": {}}
     repo.git("worktree", "prune", cwd=repo.main, check=False)
     graph: list[dict[str, Any]] | None = None  # only closed beads release trees
-    if uses_ticket_server(repo) or (repo.main / ".beads").is_dir():
-        with contextlib.suppress(Fail, OSError, ValueError):
-            graph = Beads(repo).all()
+    with contextlib.suppress(Fail, OSError, ValueError):
+        graph = Tickets(repo).all()
     staging = repo.remote_ref(repo.config.staging)
     removed: list[str] = []
     kept: dict[str, str] = {}
@@ -3776,7 +2725,7 @@ def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
         elif not (bead := next((b for b in graph or [] if b["id"] == path.name or
                                 (owns_slot(b, path, branch) if is_slot(repo, path)
                                  else meta(b, "enact_worktree") == str(path))), None)):
-            kept[str(path)] = "no bead" if graph is not None else "Beads unavailable"
+            kept[str(path)] = "no bead" if graph is not None else "Tickets unavailable"
         elif bead.get("status") != "closed":
             kept[str(path)] = f"bead {bead['id']} is {bead.get('status')}"
         elif repo.git("status", "--porcelain", cwd=path, check=False):
@@ -3817,9 +2766,9 @@ def worktree_bead(repo: Repo, path: Path) -> dict[str, Any] | None:
     # were recorded. Never let omitting --bead bypass ownership checks.
     slot = is_slot(repo, path)
     current = tree_branch(repo, path) if slot and path.is_dir() else ""
-    beads = Beads(repo)
+    beads = Tickets(repo)
     project = repo.config.ticket_project
-    prefix = f"{project}-" if project and beads.server else ""
+    prefix = (f'{project}-' if project else '')
     for bead in beads.all():
         if path.name in (bead["id"], prefix + bead["id"]) and path.parent == repo.worktree_root():
             return bead
@@ -3851,12 +2800,10 @@ def cmd_worktree(args: argparse.Namespace) -> dict[str, Any]:
     return bead_worktree(args)
 
 
-@serialized
 def bead_worktree(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
     path = repo.worktree_root() / args.name
     branch = f"enact/{args.name}"
-    sync(repo)
     bead = worktree_bead(repo, path)
     actor = require_actor(None) if bead else None
     if bead:
@@ -3870,7 +2817,7 @@ def bead_worktree(args: argparse.Namespace) -> dict[str, Any]:
                 not meta(bead, "enact_reservation") and args.action == "create"):
             if not claim(repo, bead["id"], actor, {}):
                 raise Fail("worktree claim lost", code=3)
-            bead = Beads(repo).show(bead["id"])
+            bead = Tickets(repo).show(bead["id"])
         require_owner(bead, actor)
     elif not path.exists():
         # An ad hoc worktree may live in a slot, under its branch rather than its name.
@@ -3910,11 +2857,10 @@ def bead_worktree(args: argparse.Namespace) -> dict[str, Any]:
             slot = claim_slot(repo, branch, base) if bead or not path.exists() else None
             path = slot or create_worktree(repo, args.name, branch, base)
         if bead:
-            Beads(repo).set_meta(bead["id"], {
+            Tickets(repo).set_meta(bead["id"], {
                 "enact_worktree": str(path), "enact_branch": branch,
                 "enact_worktree_host": host_name()}, actor=actor)
-            sync(repo)
-            require_owner(Beads(repo).show(bead["id"]), actor)
+            require_owner(Tickets(repo).show(bead["id"]), actor)
         result = {"path": str(path), "branch": branch, "base": base, "recovered": reused}
         # Run sessions title from their role files; ad hoc ones learn it here.
         return result if bead else {**result, "title": TITLE_NOTICE}
@@ -3966,7 +2912,6 @@ def delivery_receipts(repo: Repo) -> Path:
     return path
 
 
-@serialized
 def finish_delivery(repo: Repo, receipt: Path, data: dict[str, Any],
                     start: bool = True) -> dict[str, Any]:
     """Replay bookkeeping after a confirmed push; retain receipt on any failure.
@@ -3980,7 +2925,7 @@ def finish_delivery(repo: Repo, receipt: Path, data: dict[str, Any],
         # sessions can both find one receipt; the first to lock it finishes it.
         return result
     if data.get("bead"):
-        beads = Beads(repo)
+        beads = Tickets(repo)
         # Remote-wins merges can discard a metadata write. Re-read and union,
         # then verify the published value before retiring the durable receipt.
         for _ in range(3):
@@ -3989,24 +2934,16 @@ def finish_delivery(repo: Repo, receipt: Path, data: dict[str, Any],
             for key, values in (("enact_commits", data["history"]),
                                 ("enact_runs", data["runs"])):
                 pairs[key] = " ".join(dict.fromkeys(values + (meta(bead, key) or "").split()))
-            if uses_ticket_server(repo):
-                try:
-                    beads.batch({"op": "update", "id": bead["id"], "set_meta": pairs},
-                                actor=session_actor(), conditions=[ticket_version(bead)])
-                except Fail as error:
-                    if error.code == 3:
-                        continue
-                    raise
-                result["sync"] = sync(repo)
-                break
-            beads.set_meta(data["bead"], pairs, actor=session_actor())
-            result["sync"] = sync(repo)
-            saved = beads.show(data["bead"])
-            if all(set(value.split()) <= set((meta(saved, key) or "").split())
-                   for key, value in pairs.items()):
-                break
+            try:
+                beads.batch({"op": "update", "id": bead["id"], "set_meta": pairs},
+                            actor=session_actor(), conditions=[ticket_version(bead)])
+            except Fail as error:
+                if error.code == 3:
+                    continue
+                raise
+            break
         else:
-            raise Fail("delivery metadata lost during sync; retry enact push", code=2)
+            raise Fail("ticket changed while recording delivery; retry enact push", code=2)
     if data["ci"] and not start:
         return result
     if data["ci"]:
@@ -4063,38 +3000,10 @@ class LeaseLost(Exception):
     """The remote staging lock changed while this host was checking a batch."""
 
 
-def staging_lock_state(repo: Repo) -> dict[str, Any] | None:
-    """Read the fleet-wide lock, fetching its commit to inspect its expiry."""
-    listing = repo.git("ls-remote", repo.config.remote, STAGING_LOCK_REF)
-    found = [line.split()[0] for line in listing.splitlines()
-             if line.split()[-1] == STAGING_LOCK_REF]
-    if not found:
-        return None
-    sha = found[0]
-    if not repo.git_ok("cat-file", "-e", sha):
-        fetched = run(["git", "fetch", "-q", repo.config.remote, STAGING_LOCK_REF],
-                      repo.main, check=False)
-        if fetched.returncode:
-            # The holder may have released the ref between ls-remote and fetch. A
-            # compare-and-swap against the listed SHA will fail, then we reread it.
-            return {"sha": sha, "updated": 0.0, "owner": "changing"}
-    body = repo.git("log", "-1", "--format=%B", sha, check=False)
-    try:
-        state = json.loads(body)
-        updated = float(state["updated"])
-    except (ValueError, KeyError, TypeError):
-        # The ref may have changed between listing and fetching. A CAS steal of the old
-        # value will fail in that case; a genuinely malformed abandoned ref can recover.
-        return {"sha": sha, "updated": 0.0, "owner": "unknown"}
-    return {**state, "sha": sha, "updated": updated}
-
-
 class StagingLease:
-    def __init__(self, repo: Repo, owner: str, sha: str | None) -> None:
+    def __init__(self, repo: Repo, owner: str) -> None:
         self.repo = repo
         self.owner = owner
-        self.sha = sha
-        self.server = sha is None
         self.updated = time.time()
         self.lost = False
         self.stop = threading.Event()
@@ -4103,24 +3012,15 @@ class StagingLease:
         self.renewer.start()
 
     def renew(self) -> None:
-        interval = SERVER_STAGING_RENEW_SECONDS if self.server else STAGING_RENEW_SECONDS
+        interval = (SERVER_STAGING_RENEW_SECONDS)
         while not self.stop.wait(interval):
             with self.guard:
                 if self.lost:
                     return
-                if self.server:
-                    try:
-                        self.renew_server()
-                    except (Fail, LeaseLost):
-                        return
-                else:
-                    next_sha = justiciar_commit(self.repo, {"owner": self.owner,
-                                                           "updated": time.time()})
-                    if not compare_and_swap_ref(self.repo, next_sha, self.sha, STAGING_LOCK_REF):
-                        self.lost = True
-                        return
-                    self.sha = next_sha
-                    self.updated = time.time()
+                try:
+                    self.renew_server()
+                except (Fail, LeaseLost):
+                    return
 
     def renew_server(self) -> None:
         # Use the server's clock for the ownership check and give the push a
@@ -4139,12 +3039,8 @@ class StagingLease:
         with self.guard:
             if self.lost or time.time() - self.updated >= STAGING_LOCK_SECONDS:
                 raise LeaseLost()
-            if self.server:
-                self.renew_server()
-                return
-            current = staging_lock_state(self.repo)
-            if current is None or current["sha"] != self.sha:
-                raise LeaseLost()
+            self.renew_server()
+            return
 
     def release(self) -> None:
         self.stop.set()
@@ -4155,12 +3051,9 @@ class StagingLease:
         with self.guard:
             if self.lost:
                 return
-            if self.server:
-                proc = ticket_lease(self.repo, "release", "staging", self.owner)
-                if proc.returncode not in (0, 3):
-                    log("merge queue: could not release the staging lease; it will expire")
-            else:
-                compare_and_swap_ref(self.repo, "", self.sha, STAGING_LOCK_REF)
+            proc = ticket_lease(self.repo, "release", "staging", self.owner)
+            if proc.returncode not in (0, 3):
+                log("merge queue: could not release the staging lease; it will expire")
 
 
 def acquire_server_staging(repo: Repo, owner: str, bead: str | None) -> None:
@@ -4197,31 +3090,12 @@ def acquire_server_staging(repo: Repo, owner: str, bead: str | None) -> None:
             })
 
 
-def acquire_git_staging(repo: Repo, owner: str) -> str:
-    last_log = 0.0
-    while True:
-        current = staging_lock_state(repo)
-        if current is None or time.time() - current["updated"] >= STAGING_LOCK_SECONDS:
-            sha = justiciar_commit(repo, {"owner": owner, "updated": time.time()})
-            if compare_and_swap_ref(repo, sha, current["sha"] if current else "",
-                                    STAGING_LOCK_REF):
-                return sha
-        elif time.monotonic() - last_log >= 60:
-            log(f"merge queue: waiting for staging lock held by {current['owner']}")
-            last_log = time.monotonic()
-        time.sleep(QUEUE_POLL_SECONDS)
-
-
 @contextlib.contextmanager
 def staging_lock(repo: Repo, bead: str | None):
     """Serialize staging batches across hosts. Only a host's integrator takes the lease."""
     owner = f"{host_name()}:{os.getpid()}:{uuid.uuid4().hex}"
-    sha = None
-    if uses_ticket_server(repo):
-        acquire_server_staging(repo, owner, bead)
-    else:
-        sha = acquire_git_staging(repo, owner)
-    lease = StagingLease(repo, owner, sha)
+    acquire_server_staging(repo, owner, bead)
+    lease = StagingLease(repo, owner)
     try:
         yield lease
     finally:
@@ -4427,55 +3301,48 @@ def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], progress: QueueP
             land(repo, tree, [e for e in entries if e["id"] not in aside], progress, lease)
             land(repo, tree, [e for e in entries if e["id"] in aside], progress, lease)
             return
-        if not lease.server and refresh_delivery_backend(repo):
-            raise LeaseLost()
-        with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED):
-            if not lease.server and uses_ticket_server(repo):
-                raise LeaseLost()
-            graph: list[dict[str, Any]] = []
-            if any(e["bead"] for e in picked):
-                sync(repo)
-                graph = Beads(repo).all()
-                if uses_ticket_server(repo):
-                    picked = [{**entry, "bead": canonical_ticket_id(repo, entry["bead"])}
-                              if entry["bead"] else entry for entry in picked]
-            lost = False
-            for entry in picked:
-                if not entry["bead"]:
-                    continue
-                bead = next((b for b in graph if b["id"] == entry["bead"]), None)
-                try:
-                    if not bead:
-                        raise Fail(f"bead {entry['bead']} not found")
-                    require_owner(bead, entry["owner"])
-                except Fail as error:
-                    decide(repo, entry, {"status": "error", "error": str(error),
-                                         "code": error.code})
-                    lost = True
-            if lost:
-                continue  # rebuild the batch without the entries that lost ownership
-            receipts = []
-            for entry in picked:
-                bead = next((b for b in graph if b["id"] == entry["bead"]), {})
-                data = {"bead": entry["bead"], "head": entry["head"], "commits": entry["commits"],
-                        "history": list(dict.fromkeys(
-                            (meta(bead, "enact_commits") or "").split() + entry["commits"])),
-                        "runs": bead_runs(bead, graph) if bead else [], "ci": entry["ci"],
-                        "queue": entry["id"]}
-                receipt = delivery_receipts(repo) / f"{entry['head']}.json"
-                # Written before the push, so a lost push response is recoverable.
-                write_json(receipt, data)
-                receipts.append((entry, receipt, data))
-            tip = repo.git("rev-parse", "HEAD", cwd=tree)
-            lease.assert_owned()
-            if repo.git_ok("push", "-q", cfg.remote, f"{tip}:refs/heads/{cfg.staging}", cwd=tree):
-                for entry, receipt, data in receipts:
-                    decide(repo, entry, {"status": "landed", "receipt": str(receipt),
-                                         "delivery": data, "staging": tip,
-                                         "batch": len(picked), "checks": progress.checks})
-                return
-            for _, receipt, _ in receipts:
-                receipt.unlink(missing_ok=True)
+        graph: list[dict[str, Any]] = []
+        if any(e["bead"] for e in picked):
+            graph = Tickets(repo).all()
+            picked = [{**entry, "bead": canonical_ticket_id(repo, entry["bead"])}
+                      if entry["bead"] else entry for entry in picked]
+        lost = False
+        for entry in picked:
+            if not entry["bead"]:
+                continue
+            bead = next((b for b in graph if b["id"] == entry["bead"]), None)
+            try:
+                if not bead:
+                    raise Fail(f"bead {entry['bead']} not found")
+                require_owner(bead, entry["owner"])
+            except Fail as error:
+                decide(repo, entry, {"status": "error", "error": str(error),
+                                     "code": error.code})
+                lost = True
+        if lost:
+            continue  # rebuild the batch without the entries that lost ownership
+        receipts = []
+        for entry in picked:
+            bead = next((b for b in graph if b["id"] == entry["bead"]), {})
+            data = {"bead": entry["bead"], "head": entry["head"], "commits": entry["commits"],
+                    "history": list(dict.fromkeys(
+                        (meta(bead, "enact_commits") or "").split() + entry["commits"])),
+                    "runs": bead_runs(bead, graph) if bead else [], "ci": entry["ci"],
+                    "queue": entry["id"]}
+            receipt = delivery_receipts(repo) / f"{entry['head']}.json"
+            # Written before the push, so a lost push response is recoverable.
+            write_json(receipt, data)
+            receipts.append((entry, receipt, data))
+        tip = repo.git("rev-parse", "HEAD", cwd=tree)
+        lease.assert_owned()
+        if repo.git_ok("push", "-q", cfg.remote, f"{tip}:refs/heads/{cfg.staging}", cwd=tree):
+            for entry, receipt, data in receipts:
+                decide(repo, entry, {"status": "landed", "receipt": str(receipt),
+                                     "delivery": data, "staging": tip,
+                                     "batch": len(picked), "checks": progress.checks})
+            return
+        for _, receipt, _ in receipts:
+            receipt.unlink(missing_ok=True)
         remote_tip = repo.git("ls-remote", cfg.remote,
                               f"refs/heads/{cfg.staging}").split()
         if not remote_tip:
@@ -4498,7 +3365,7 @@ def queue_push(repo: Repo, args: argparse.Namespace, base: str, head: str,
     for its verdict, running the queue whenever no other push on this host is."""
     owner = ""
     if args.bead:
-        owner = as_owner(require_actor(None), Beads(repo).show(args.bead))
+        owner = as_owner(require_actor(None), Tickets(repo).show(args.bead))
     entry = {"id": f"{time.time_ns():020d}-{os.getpid()}", "top": str(repo.top),
              "base": base, "head": head, "bead": args.bead, "owner": owner,
              "files": repo.git("diff", "--name-only", "--no-renames", base, head).splitlines(),
@@ -4535,37 +3402,25 @@ def queue_push(repo: Repo, args: argparse.Namespace, base: str, head: str,
 
 
 def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
-    """Rebase, run the fast check and publish to staging.
-
-    The ownership lock covers only the Beads bookkeeping: the first ownership
-    check, and the final check, push and delivery record. The rebase and the
-    fast check run outside it, so other pushes, claims and syncs on this host
-    proceed while a check runs; a push that loses the race to staging is
-    rejected by the remote and re-integrates, as before.
-
-    With `[push] queue = true`, the fast check runs in the host's merge queue
-    instead (`queue_push`), once for a batch of pushes.
-    """
+    """Rebase, run the fast check and deliver the checked commits to staging."""
     repo = find_repo()
     enact_update = update_enact()
-    with ownership_lock(repo):
-        sync(repo)
-        assigned = worktree_bead(repo, repo.top)
-        if args.bead and uses_ticket_server(repo):
-            args.bead = canonical_ticket_id(repo, args.bead)
-        if assigned and args.bead and args.bead != assigned["id"]:
-            raise Fail("--bead differs from this worktree's assignment", code=3)
-        args.bead = args.bead or (assigned["id"] if assigned else None)
-        if args.bead:
-            bead = Beads(repo).show(args.bead)
-            require_owner(bead, require_actor(None))
-            # Another bead's branch checked out here (a slot handed to two beads, say)
-            # would deliver its commits under this bead's name.
-            expected, current = meta(bead, "enact_branch"), tree_branch(repo, repo.top)
-            if expected and current != expected:
-                raise Fail(f"this worktree has {current} checked out, not {expected}, the "
-                           f"branch of bead {args.bead}; check out {expected} here or push "
-                           "from its own worktree", code=2)
+    assigned = worktree_bead(repo, repo.top)
+    if (args.bead):
+        args.bead = canonical_ticket_id(repo, args.bead)
+    if assigned and args.bead and args.bead != assigned["id"]:
+        raise Fail("--bead differs from this worktree's assignment", code=3)
+    args.bead = args.bead or (assigned["id"] if assigned else None)
+    if args.bead:
+        bead = Tickets(repo).show(args.bead)
+        require_owner(bead, require_actor(None))
+        # Another bead's branch checked out here (a slot handed to two beads, say)
+        # would deliver its commits under this bead's name.
+        expected, current = meta(bead, "enact_branch"), tree_branch(repo, repo.top)
+        if expected and current != expected:
+            raise Fail(f"this worktree has {current} checked out, not {expected}, the "
+                       f"branch of bead {args.bead}; check out {expected} here or push "
+                       "from its own worktree", code=2)
     cfg = repo.config
     if repo.git("status", "--porcelain", "--untracked-files=no"):
         raise Fail("working tree has uncommitted changes; commit them first", code=2)
@@ -4613,12 +3468,11 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
                 raise Fail(verdict["error"], code=verdict["code"])
             data = verdict["delivery"]
             receipt = Path(verdict["receipt"])
-            with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED):
-                result = {"pushed": True, **finish_delivery(repo, receipt, data, start=False)}
+            result = {"pushed": True, **finish_delivery(repo, receipt, data, start=False)}
             result["queue"] = {k: verdict[k] for k in ("batch", "checks") if k in verdict}
             # The tree now holds what landed: the queue may have replayed its commits.
             repo.git("reset", "-q", "--hard", data["head"])
-            bead = Beads(repo).show(args.bead) if args.bead else {}
+            bead = Tickets(repo).show(args.bead) if args.bead else {}
             pending_ci = receipt if data["ci"] else None
             if recovered:
                 result["recovered"] = recovered
@@ -4635,26 +3489,24 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
                 raise Fail("fast checks failed; fix them and run `enact push` again", code=2)
             checked = head
         commits = repo.git("rev-list", "--reverse", f"{before}..{head}").split()
-        with ownership_lock(repo, OWNERSHIP_WAIT_CHECKED if checked else OWNERSHIP_WAIT):
-            if uses_ticket_server(repo) and args.bead:
-                args.bead = canonical_ticket_id(repo, args.bead)
-            graph = Beads(repo).all() if args.bead else []
-            bead = next((b for b in graph if b["id"] == args.bead), {})
-            if args.bead and not bead:
-                raise Fail(f"bead {args.bead} not found")
-            data = {"bead": args.bead, "head": head, "commits": commits,
-                    "history": list(dict.fromkeys(
-                        (meta(bead, "enact_commits") or "").split() + commits)),
-                    "runs": bead_runs(bead, graph), "ci": bool(cfg.slow and not args.no_ci)}
-            receipt = delivery_receipts(repo) / f"{head}.json"
-            # Write before the remote mutation, so a lost push response is recoverable.
-            write_json(receipt, data)
-            if args.bead:
-                sync(repo)
-                require_owner(Beads(repo).show(args.bead), require_actor(None))
-            pushed = repo.git_ok("push", "-q", cfg.remote, f"HEAD:refs/heads/{cfg.staging}")
-            if pushed:
-                result = {"pushed": True, **finish_delivery(repo, receipt, data, start=False)}
+        if (args.bead):
+            args.bead = canonical_ticket_id(repo, args.bead)
+        graph = Tickets(repo).all() if args.bead else []
+        bead = next((b for b in graph if b["id"] == args.bead), {})
+        if args.bead and not bead:
+            raise Fail(f"bead {args.bead} not found")
+        data = {"bead": args.bead, "head": head, "commits": commits,
+                "history": list(dict.fromkeys(
+                    (meta(bead, "enact_commits") or "").split() + commits)),
+                "runs": bead_runs(bead, graph), "ci": bool(cfg.slow and not args.no_ci)}
+        receipt = delivery_receipts(repo) / f"{head}.json"
+        # Write before the remote mutation, so a lost push response is recoverable.
+        write_json(receipt, data)
+        if args.bead:
+            require_owner(Tickets(repo).show(args.bead), require_actor(None))
+        pushed = repo.git_ok("push", "-q", cfg.remote, f"HEAD:refs/heads/{cfg.staging}")
+        if pushed:
+            result = {"pushed": True, **finish_delivery(repo, receipt, data, start=False)}
         if pushed:
             pending_ci = receipt if data["ci"] else None
             if recovered:
@@ -4671,7 +3523,7 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     if args.bead and (dropped := drop_released_branch(
             repo, bead, repo.git("rev-parse", "--abbrev-ref", "HEAD"))):
         result["dropped_remote_branch"] = dropped
-    graph = Beads(repo).all() if pending_ci else []
+    graph = Tickets(repo).all() if pending_ci else []
     # A held run's worker finishes what is in flight but starts no repair.
     if (pending_ci and not (bead and stopped_runs(bead, graph))
             and not bead_watched(repo, graph, bead)):
@@ -4853,17 +3705,16 @@ def local_ci_status(repo: Repo) -> dict[str, Any]:
 
 def ci_status(repo: Repo) -> dict[str, Any]:
     report = local_ci_status(repo)
-    if uses_ticket_server(repo):
-        results = {}
-        for event in Beads(repo).ticket("events", "--kind", "ci"):
-            data = event["data"]
-            if isinstance(data, dict) and isinstance(data.get("os"), str):
-                result = {**data, "at": event["at"]}
-                if data.get("ticket"):
-                    result["steward"] = data["ticket"]
-                results.setdefault(data["os"], result)
-        report["results_by_os"] = results
-        report["result"] = results.get(ci_os(), report["result"])
+    results = {}
+    for event in Tickets(repo).ticket("events", "--kind", "ci"):
+        data = event["data"]
+        if isinstance(data, dict) and isinstance(data.get("os"), str):
+            result = {**data, "at": event["at"]}
+            if data.get("ticket"):
+                result["steward"] = data["ticket"]
+            results.setdefault(data["os"], result)
+    report["results_by_os"] = results
+    report["result"] = results.get(ci_os(), report["result"])
     return report
 
 
@@ -4906,17 +3757,11 @@ def ci_wait(repo: Repo, sha: str, seconds: int, interval: int) -> dict[str, Any]
     deadline = time.monotonic() + max(seconds, 0)
     master = repo.remote_ref(repo.config.master)
     while True:
-        sync(repo)
-        beads = Beads(repo)
-        server = uses_ticket_server(repo)
-        if server:
-            # Read the sequence before fetching. A promotion that happens
-            # after this fetch must still wake the feed waiter.
-            graph, seq = beads.ticket_graph()
-            fetch(repo)
-        else:
-            fetch(repo)
-            graph, seq = beads.all(), None
+        beads = Tickets(repo)
+        # Read the sequence before fetching. A promotion that happens
+        # after this fetch must still wake the feed waiter.
+        graph, seq = beads.ticket_graph()
+        fetch(repo)
         covering = [b for b in graph if role_of(b) == "steward"
                     and b.get("status") != "closed" and steward_covers(repo, b, sha)]
         # Another OS failing does not stop this one promoting master, but the
@@ -4940,11 +3785,8 @@ def ci_wait(repo: Repo, sha: str, seconds: int, interval: int) -> dict[str, Any]
             status = start_ci(repo)
         if time.monotonic() >= deadline:
             return {"sha": sha, "state": "waiting", "ci": status, **elsewhere}
-        if server:
-            if not beads.wait_for_change(deadline, seq):
-                deadline = time.monotonic()
-        else:
-            time.sleep(min(interval, max(deadline - time.monotonic(), 1)))
+        if not beads.wait_for_change(deadline, seq):
+            deadline = time.monotonic()
 
 
 def ci_runner(repo: Repo, script: Path | None = None) -> Path:
@@ -5030,21 +3872,20 @@ def ci_event_data(tip: str, **result: Any) -> dict[str, Any]:
 
 
 def report_ci_failure(repo: Repo, tip: str, green: str, log_tail: str, seconds: int) -> str:
-    beads = Beads(repo)
-    sync(repo)
+    beads = Tickets(repo)
     # A server precondition fences two machines of the same OS that saw
     # no open Steward at the same time. Re-read before attempting a retry.
     for attempt in range(8):
-        graph, seq = beads.ticket_graph() if beads.server else (beads.all(), None)
+        graph, seq = (beads.ticket_graph())
         try:
             return file_ci_steward(repo, beads, graph, seq, tip, green, log_tail, seconds)
         except Fail as error:
-            if seq is None or error.code != 3 or attempt == 7:
+            if (error.code != 3 or attempt == 7):
                 raise
     raise AssertionError("unreachable")
 
 
-def file_ci_steward(repo: Repo, beads: Beads, graph: list[dict[str, Any]],
+def file_ci_steward(repo: Repo, beads: Tickets, graph: list[dict[str, Any]],
                     seq: int | None, tip: str, green: str, log_tail: str, seconds: int) -> str:
     os_name = ci_os()
     by_id = {b["id"]: b for b in graph}
@@ -5055,8 +3896,7 @@ def file_ci_steward(repo: Repo, beads: Beads, graph: list[dict[str, Any]],
                for sha in (meta(bead, "enact_commits") or "").split())
         for run_id in bead_runs(bead, graph, by_id)
     ))
-    candidates = (graph if seq is not None
-                  else beads.json("list", "--label", "role:steward", "-n", "0") or [])
+    candidates = ((graph))
     open_stewards = [b for b in candidates if role_of(b) == "steward"
                      and b.get("status") != "closed" and meta(b, "enact_ci_os") == os_name]
     body = (
@@ -5076,38 +3916,22 @@ def file_ci_steward(repo: Repo, beads: Beads, graph: list[dict[str, Any]],
         if not open_stewards[0].get("assignee") and not runs_watched(repo, graph, runs):
             body += UNOWNED_NOTE
             changes["enact_unowned"] = "true"
-        if seq is not None:
-            beads.batch({"op": "comment", "id": bead_id, "text": body},
-                        {"op": "update", "id": bead_id, "set_meta": changes},
-                        {**event, "id": bead_id}, conditions=[{"seq": seq}])
-        else:
-            beads.run("comments", "add", bead_id, body)
-            beads.set_meta(bead_id, changes)
+        beads.batch({"op": "comment", "id": bead_id, "text": body},
+                    {"op": "update", "id": bead_id, "set_meta": changes},
+                    {**event, "id": bead_id}, conditions=[{"seq": seq}])
     else:
         unowned = not runs_watched(repo, graph, runs)
         metadata = {"enact_ci_os": os_name, "enact_ci_host": host_name(),
                     "enact_ci_range": f"{green}..{tip}", "enact_runs": " ".join(runs),
                     **({"enact_unowned": "true"} if unowned else {})}
-        if seq is not None:
-            created = beads.batch({"op": "create", "request_key": uuid.uuid4().hex,
-                                   "fields": {"title": f"Fix slow CI failure on {os_name}",
-                                              "body": body + (UNOWNED_NOTE if unowned else ""),
-                                              "acceptance": f"`{repo.config.slow}` passes on {os_name} at the staging tip.",
-                                              "priority": 0, "labels": ["role:steward"],
-                                              "metadata": metadata}},
-                                  {**event, "id": "$0"}, conditions=[{"seq": seq}])
-            return created["results"][0]["id"]
-        created = beads.json(
-            "create",
-            "--title", f"Fix slow CI failure on {os_name}",
-            "--description", body + (UNOWNED_NOTE if unowned else ""),
-            "--acceptance", f"`{repo.config.slow}` passes on {os_name} at the staging tip.",
-            "--priority", "0",
-            "--labels", "role:steward",
-            "--metadata", json.dumps(metadata),
-        )
-        bead_id = created["id"]
-    sync(repo)
+        created = beads.batch({"op": "create", "request_key": uuid.uuid4().hex,
+                               "fields": {"title": f"Fix slow CI failure on {os_name}",
+                                          "body": body + (UNOWNED_NOTE if unowned else ""),
+                                          "acceptance": f"`{repo.config.slow}` passes on {os_name} at the staging tip.",
+                                          "priority": 0, "labels": ["role:steward"],
+                                          "metadata": metadata}},
+                              {**event, "id": "$0"}, conditions=[{"seq": seq}])
+        return created["results"][0]["id"]
     return bead_id
 
 
@@ -5120,8 +3944,7 @@ def superseding_repair(repo: Repo, tip: str) -> str | None:
     newer = set(repo.git("rev-list", f"{tip}..{staging}", cwd=repo.main).split())
     if not newer:
         return None
-    sync(repo)
-    for bead in Beads(repo).all():
+    for bead in Tickets(repo).all():
         if (role_of(bead) == "steward" and meta(bead, "enact_ci_os") == ci_os()
                 and newer & set((meta(bead, "enact_commits") or "").split())):
             return bead["id"]
@@ -5129,8 +3952,7 @@ def superseding_repair(repo: Repo, tip: str) -> str | None:
 
 
 def post_ci_event(repo: Repo, tip: str, **result: Any) -> None:
-    if uses_ticket_server(repo):
-        Beads(repo).ticket("event", "ci", json.dumps(ci_event_data(tip, **result)))
+    Tickets(repo).ticket("event", "ci", json.dumps(ci_event_data(tip, **result)))
 
 
 def ci_pass(repo: Repo, tip: str) -> bool:
@@ -5208,8 +4030,6 @@ def ticket_backup_tip(repo: Repo) -> tuple[str, str]:
 
 
 def backup_tickets(repo: Repo) -> dict[str, Any]:
-    if not uses_ticket_server(repo):
-        return {"backed_up": False, "reason": "legacy ticket backend"}
     day = now()[:10]
     parent, last_day = ticket_backup_tip(repo)
     if last_day >= day:
@@ -5510,8 +4330,7 @@ def ci_run_once(repo: Repo, tip: str) -> dict[str, Any]:
     sys.stderr.write(output[-20000:])
     report = {"tip": tip, "green": green, "seconds": seconds, "passed": returncode == 0,
               "tail": "\n".join(output.strip().splitlines()[-60:])}
-    if uses_ticket_server(repo):
-        write_json(pending, report)
+    write_json(pending, report)
     return publish_ci_report(repo, pending, report)
 
 
@@ -5552,7 +4371,7 @@ def publish_ci_result(repo: Repo, report: dict[str, Any]) -> dict[str, Any]:
 
 
 def spawned_here(bead: dict[str, Any], host: str, host_provider: str) -> bool:
-    """Spawned by a vizier in this host app on this machine. Beads reserved
+    """Spawned by a vizier in this host app on this machine. Tickets reserved
     before provider/app routing existed remain visible for inspection."""
     spawn_provider = meta(bead, "enact_spawn_provider")
     spawn_app = meta(bead, "enact_spawn_app")
@@ -5581,10 +4400,9 @@ def cmd_status(args: argparse.Namespace) -> dict[str, Any]:
     """This machine and host app's Enact state: a Claude session cannot see
     Codex threads, and vice versa."""
     repo = find_repo()
-    sync(repo)
     local_branches = fetch(repo, check=False)
     recover_deliveries(repo)
-    graph = Beads(repo).all()
+    graph = Tickets(repo).all()
     here = host_name()
     ours = [b for b in graph if spawned_here(b, here, provider())]
     busy = busy_sessions(graph)
@@ -5678,20 +4496,14 @@ def routed_here(bead: dict[str, Any]) -> bool:
             bool(meta(bead, "enact_spawn_project")))
 
 
-@serialized
 def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
     """Relinquish work, or hand off an explicitly confirmed inactive owner."""
     repo = find_repo()
-    beads = Beads(repo)
+    beads = Tickets(repo)
     actor = require_actor(args.actor)
-    sync(repo)
     bead = beads.show(args.bead)
-    server = uses_ticket_server(repo)
-    if server:
-        graph, seq = beads.ticket_graph()
-        require_running(bead, graph)
-    else:
-        require_running(bead, beads.all())
+    graph, seq = beads.ticket_graph()
+    require_running(bead, graph)
     actor = as_owner(actor, bead)
     owner = bead.get("assignee")
     if not owner or bead.get("status") == "closed":
@@ -5736,28 +4548,13 @@ def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
         # assigned and the session can fix the cause and release again.
         record.update(publish_released_branch(repo, Path(path), branch))
     records = recovery_records(bead) + [record]
-    if server:
-        beads.batch({"op": "update", "id": bead["id"], "set": {"assignee": None, "status": "open"},
-                     "set_meta": {"enact_recovery": records},
-                     "unset_meta": ["enact_vizier", "enact_session", "enact_actor", "enact_archived",
-                                    "enact_reservation", "enact_pool_session"]},
-                    {"op": "comment", "id": bead["id"], "text": f"Released by Enact: {args.reason}"},
-                    actor=actor, conditions=[{"seq": seq}, ticket_version(bead)])
-        return {"released": args.bead, "recovery": record, "sync": sync(repo)}
-    reassign(
-        beads, args.bead, "--assignee", "", "--status", "open",
-        "--set-metadata", "enact_recovery=" + json.dumps(records),
-        "--unset-metadata", "enact_vizier", "--unset-metadata", "enact_session",
-        "--unset-metadata", "enact_actor", "--unset-metadata", "enact_archived",
-        "--unset-metadata", "enact_reservation", "--unset-metadata", "enact_pool_session",
-        actor=actor)
-    result = sync(repo, publish=True)
-    saved = beads.show(args.bead)
-    if saved.get("assignee") or recovery_records(saved) != records:
-        raise Fail("release lost during sync; recheck ownership", code=3)
-    beads.run("comments", "add", args.bead, f"Released by Enact: {args.reason}", actor=actor)
-    sync(repo)
-    return {"released": args.bead, "recovery": record, "sync": result}
+    beads.batch({"op": "update", "id": bead["id"], "set": {"assignee": None, "status": "open"},
+                 "set_meta": {"enact_recovery": records},
+                 "unset_meta": ["enact_vizier", "enact_session", "enact_actor", "enact_archived",
+                                "enact_reservation", "enact_pool_session"]},
+                {"op": "comment", "id": bead["id"], "text": f"Released by Enact: {args.reason}"},
+                actor=actor, conditions=[{"seq": seq}, ticket_version(bead)])
+    return {"released": args.bead, "recovery": record}
 
 
 def publish_released_branch(repo: Repo, path: Path, branch: str) -> dict[str, Any]:
@@ -5911,115 +4708,19 @@ def cmd_install(args: argparse.Namespace) -> dict[str, Any]:
     return {"skills": linked, "tk": str(ticket_binary())}
 
 
-ENACT_TOML_TEMPLATE = """\
-# Enact configuration. See {root}/README.md.
-remote = "origin"
-staging_branch = "staging"
-master_branch = "{master}"
-
-[checks]
-fast = "{fast}"
-slow = "{slow}"
-
-[worktree]
-root = ".worktrees"   # inside the checkout; gitignored
-# create = "scripts/enact-worktree create"   # replaces `git worktree add`
-# remove = "scripts/enact-worktree remove"   # replaces `git worktree remove`
-
-# Model settings for spawned sessions, by role and by a bead's `tier:<name>`
-# label (a tier overrides its role). The vizier labels mechanical beads
-# `tier:light`; reviews and design work keep the default model. `tier:fable`,
-# `tier:opus` and `tier:sonnet` are built in for Claude and need no entry
-# here; map them for another provider with `[tiers.opus.<provider>]`.
-[tiers.light.claude]
-model = "sonnet"
-
-# [roles.warden.claude]
-# model = "opus"
-# effort = "max"
-"""
-
-
-AUDIT_LOG = ".beads/interactions.jsonl"
-
-
-def untrack_audit_log(repo: Repo) -> str:
-    """Ignore bd's audit log and drop it from the index.
-
-    bd appends to it in the main checkout, which Enact never commits to, so a
-    tracked copy leaves the checkout dirty and blocks fast-forwards. The
-    issue data itself lives in Dolt.
-    """
-    changes = []
-    if repo.ignore(repo.main / ".gitignore", f"/{AUDIT_LOG}"):
-        changes.append("ignored")
-    if repo.git_ok("ls-files", "--error-unmatch", AUDIT_LOG, cwd=repo.main):
-        repo.git("rm", "-q", "--cached", AUDIT_LOG, cwd=repo.main)
-        changes.append("untracked")
-    return " and ".join(changes) or "unchanged"
-
-
 def cmd_setup(args: argparse.Namespace) -> dict[str, Any]:
     repo = find_repo()
-    report: dict[str, Any] = {}
-    tickets_configured = bool(repo.config.ticket_project or repo.config.ticket_backend == "server")
-    if tickets_configured:
-        report["tk"] = str(ticket_binary())
-        report["has_tk"] = True
-        register_ticket_client(repo)
-    server = uses_ticket_server(repo)
-    for tool in (("git",) if server else ("git", "bd", "dolt")):
-        report[f"has_{tool}"] = bool(shutil.which(tool))
-    if not server and not report["has_bd"]:
-        raise Fail("bd (Beads) is not installed")
-    toml = repo.main / ".enact.toml"
-    if not toml.exists():
-        toml.write_text(
-            ENACT_TOML_TEMPLATE.format(
-                root=ENACT_ROOT, master=args.master, fast=args.fast or "", slow=args.slow or ""
-            ),
-            encoding="utf-8",
-            newline="\n",
-        )
-        report["enact_toml"] = "created"
-    else:
-        report["enact_toml"] = "present"
-    repo = find_repo()
-    beads = Beads(repo)
-    if server:
-        report["tickets"] = "server"
-    elif not (repo.main / ".beads").exists():
-        # Enact's AGENTS.md section replaces bd's agent files and git hooks.
-        cmd = ["init", "--non-interactive", "--skip-agents", "--skip-hooks"]
-        if args.prefix:
-            cmd += ["-p", args.prefix]
-        beads.run(*cmd)
-        report["beads"] = "initialized"
-    elif beads.raw("list", "-n", "1", "--json").returncode != 0:
-        beads.run("bootstrap")  # tracked .beads/ but no local database yet
-        report["beads"] = "bootstrapped from remote"
-    else:
-        report["beads"] = "present"
-    report["gitignore"] = repo.ignore_worktree_root(repo.main / ".gitignore") or "unchanged"
-    report["audit_log"] = untrack_audit_log(repo)
-    repo.git("config", "beads.role", "maintainer", cwd=repo.main, check=False)
+    require_ticket_config(repo)
+    client = str(ticket_binary())
+    register_ticket_client(repo)
     cfg = repo.config
-    repo.git("fetch", "-q", cfg.remote, cwd=repo.main, check=False)
+    repo.git("fetch", "-q", cfg.remote, cwd=repo.main)
     if not repo.git_ok("rev-parse", "-q", "--verify", repo.remote_ref(cfg.staging), cwd=repo.main):
-        base = repo.remote_ref(cfg.master)
-        repo.git("push", "-q", cfg.remote, f"{base}:refs/heads/{cfg.staging}", cwd=repo.main)
-        report["staging"] = f"created from {base}"
-    else:
-        report["staging"] = "present"
-    report["local_branches"] = track_local_branches(repo)
-    report["beads_remote"] = beads.has_remote()
-    if report["beads_remote"]:
-        report["sync"] = sync(repo, publish=True)
-    if tickets_configured:
-        event = ticket_process(repo, "event", "machine", '{"enrolled":true}')
-        report["ticket_enrollment"] = ticket_reply(event)
-    report["agents_template"] = str(ENACT_ROOT / "templates" / "AGENTS.md")
-    return report
+        repo.git("push", "-q", cfg.remote,
+                 f"{repo.remote_ref(cfg.master)}:refs/heads/{cfg.staging}", cwd=repo.main)
+    event = ticket_process(repo, "event", "machine", '{"enrolled":true}')
+    return {"tk": client, "tickets": "server", "ticket_enrollment": ticket_reply(event),
+            "local_branches": track_local_branches(repo)}
 
 
 # ---------------------------------------------------------------------------
@@ -6034,11 +4735,6 @@ def build_parser() -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=help_text, description=help_text)
         p.set_defaults(func=func)
         return p
-
-    p = add("sync", cmd_sync, "Commit, merge and push the Beads database.")
-    p.add_argument("--deferred", action="store_true",
-                   help="Push writes that enact meta and close left pending (run in the "
-                        "background by those commands).")
 
     add("backend", cmd_backend, "Show the active ticket backend and its client path.")
 
@@ -6099,7 +4795,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--interval", type=int, default=30, help=argparse.SUPPRESS)
 
     p = add("push", cmd_push, "Integrate with staging, run fast checks, push, start slow CI.")
-    p.add_argument("--bead", help="record the pushed commits on this bead")
+    p.add_argument("--ticket", dest="bead", help="record the pushed commits on this ticket")
+    p.add_argument("--bead", dest="bead", help=argparse.SUPPRESS)
     p.add_argument("--keep", action="store_true", help="keep the worktree after pushing")
     p.add_argument("--no-ci", action="store_true", help="do not start the slow-CI runner")
     p.add_argument("--skip-checks", action="store_true", help=argparse.SUPPRESS)
@@ -6141,12 +4838,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("install", cmd_install, "Install tk and link the Enact skills.")
 
-    p = add("setup", cmd_setup, "Set up Enact in the current project.")
-    p.add_argument("--prefix", help="Beads issue prefix")
-    p.add_argument("--master", default="master")
-    p.add_argument("--fast")
-    p.add_argument("--slow")
-
+    add("setup", cmd_setup, "Register this machine in the current ticket project.")
     return parser
 
 

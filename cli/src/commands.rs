@@ -216,37 +216,7 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
         Command::State {
             set_cutover: None, ..
         } => read(client, &["state"], &[]),
-        Command::Drain => crate::shim::state::drain(client),
-        Command::Import {
-            file,
-            frozen_beads,
-            history_dir,
-            row_budget,
-            since_frozen_beads,
-            pause_id,
-            before_cutover,
-        } => crate::migration::import(
-            client,
-            file,
-            frozen_beads,
-            history_dir,
-            row_budget,
-            since_frozen_beads,
-            if let Some(id) = pause_id {
-                json!({"pause_id": id})
-            } else if before_cutover {
-                json!({"before_cutover": true})
-            } else {
-                json!({})
-            },
-        ),
-        Command::Restore { file, row_budget } => {
-            crate::migration::restore(client, &file, row_budget)
-        }
-        Command::Compare {
-            frozen_beads,
-            history_dir,
-        } => crate::migration::compare(client, frozen_beads, history_dir),
+        Command::Restore { file, row_budget } => crate::backup::restore(client, &file, row_budget),
         Command::Bench { .. } | Command::Export | Command::Register { .. } | Command::Version => {
             unreachable!("handled by main")
         }

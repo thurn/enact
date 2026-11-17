@@ -113,32 +113,8 @@ pub enum Command {
         #[arg(long, requires = "set_cutover")]
         pause_id: Option<String>,
     },
-    /// Publish this machine's in-flight Beads writes during a cutover pause.
-    Drain,
     /// Stream a full JSON Lines export.
     Export,
-    /// Copy a legacy Beads JSON Lines export and its audit history.
-    Import {
-        #[arg(required_unless_present = "frozen_beads")]
-        file: Option<std::path::PathBuf>,
-        /// Read tickets and audit events from an isolated copy of the Beads checkout.
-        #[arg(long, conflicts_with_all = ["file", "history_dir"])]
-        frozen_beads: Option<std::path::PathBuf>,
-        #[arg(long)]
-        history_dir: Option<std::path::PathBuf>,
-        /// Override the daily import ceiling for a local rehearsal.
-        #[arg(long)]
-        row_budget: Option<u64>,
-        /// Import only legacy changes since this archive, after cutover.
-        #[arg(long, requires = "frozen_beads")]
-        since_frozen_beads: Option<std::path::PathBuf>,
-        /// Fence the final import to the active managed pause.
-        #[arg(long, requires = "frozen_beads", conflicts_with = "since_frozen_beads")]
-        pause_id: Option<String>,
-        /// Fence a staged import to the period when Beads is authoritative.
-        #[arg(long, conflicts_with_all = ["pause_id", "since_frozen_beads"])]
-        before_cutover: bool,
-    },
     /// Restore a ticket backup into a fresh project, or resume its restore.
     Restore {
         file: std::path::PathBuf,
@@ -146,14 +122,7 @@ pub enum Command {
         #[arg(long)]
         row_budget: Option<u64>,
     },
-    /// Check the legacy Beads store against the ticket server.
-    Compare {
-        /// Verify tickets, readiness and audit events against an isolated Beads copy.
-        #[arg(long, conflicts_with = "history_dir")]
-        frozen_beads: Option<std::path::PathBuf>,
-        #[arg(long)]
-        history_dir: Option<std::path::PathBuf>,
-    },
+
     /// Measure fresh-process read and write latency.
     Bench {
         #[arg(long, default_value_t = 25, value_parser = clap::value_parser!(u32).range(1..))]

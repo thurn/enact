@@ -75,7 +75,7 @@ Go beyond ordinary code review. Ask:
 
 Fix confirmed problems directly in your worktree, with the same quality bar
 as an Executor. Verify the fixes with tests and by running the code, then
-deliver with `enact push --bead <bead>`. Record on your bead what you found,
+deliver with `enact push --ticket <bead>`. Record on your bead what you found,
 what you changed and what you deliberately left alone.
 
 An essential problem too large for this session, or outside the reviewed

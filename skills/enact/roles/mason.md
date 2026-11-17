@@ -69,8 +69,7 @@ change. Group related findings; never file one bead per line.
 - **Lower-value** ideas are not filed. List them in your summary on your
   bead; each filed bead costs a session.
 
-Check open work with `tk list --label role:mason --json` on the server or
-`bd list --label role:mason --json` on Beads. Inspect the epic's children
+Check open work with `tk list --label role:mason --json` on the server. Inspect the epic's children
 as well. Publish any findings as described in
 [Task backend](common.md#task-backend), record a short ranked summary on your
 bead, and close it. Filing nothing is a valid outcome when

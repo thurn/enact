@@ -6,6 +6,8 @@ Beads operations needed by the policy scenarios and rejects unknown calls.
 """
 
 import contextlib
+import datetime as dt
+import subprocess
 import io
 import json
 import os
@@ -21,12 +23,12 @@ class PolicyWorld:
         self.path = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         self.repo = module.Repo(self.path, self.path, self.path / ".git", module.Config())
         self.graph, self.dependencies, self.comments = {}, {}, {}
+        self.leases = {}
+        self.sequence = 0
         for name, kwargs in (
             ("find_repo", {"return_value": self.repo}),
-            ("Beads", {"return_value": self}),
-            ("sync", {"return_value": {"remote": False, "dropped": []}}),
-            # A detached pusher cannot see this fixture's in-memory store.
-            ("start_pusher", {"return_value": False}),
+            ("Tickets", {"return_value": self}),
+            ("ticket_lease", {"side_effect": self.lease}),
             ("fetch", {"return_value": {}}),
             ("recover_deliveries", {"return_value": []}),
         ):
@@ -43,7 +45,7 @@ class PolicyWorld:
             "id": bead, "title": title, "status": "open", "assignee": "",
             "issue_type": options.pop("type", "task"),
             "labels": options.pop("labels", "").split(",") if "labels" in options else [],
-            "metadata": {}, "updated_at": self.module.now(), **options,
+            "metadata": {}, "version": 0, "updated_at": self.module.now(), **options,
         }
         return bead
 
@@ -57,14 +59,70 @@ class PolicyWorld:
     def all(self):
         return [self.show(bead) for bead in self.graph]
 
-    def json(self, *args):
-        if args[0] == "comments":
-            return [{"text": text} for text in self.comments.get(args[1], [])]
-        assert args == ("ready", "-n", "0", "--exclude-type", "epic", "--unassigned"), args
-        return [bead for bead in self.all() if bead["status"] == "open"
-                and bead["issue_type"] != "epic" and not bead["assignee"]
-                and all(self.graph[dep]["status"] == "closed"
-                        for dep in self.dependencies.get(bead["id"], []))]
+    def ticket(self, command, *args):
+        if command == "comments":
+            return [{"text": text} for text in self.comments.get(args[0], [])]
+        if command == "leases":
+            return list(self.leases.values())
+        if command == "events":
+            return []
+        raise AssertionError((command, args))
+
+    def lease(self, repo, action, name, holder, ttl=180, payload=None, **options):
+        previous = self.leases.get(name)
+        if previous and previous["holder"] != holder:
+            return subprocess.CompletedProcess([], 3, "{}", "lease held")
+        if action == "release":
+            self.leases.pop(name, None)
+        else:
+            self.leases[name] = {"name": name, "holder": holder, "payload": payload or {},
+                                 "expires_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=ttl)).isoformat()}
+        return subprocess.CompletedProcess([], 0, "{}", "")
+
+    def ticket_graph(self):
+        rows = self.all()
+        for ticket in rows:
+            ticket["ready"] = ticket["status"] == "open" and all(
+                self.graph[dependency]["status"] == "closed"
+                for dependency in self.dependencies.get(ticket["id"], []))
+        return rows, self.sequence
+
+    def batch(self, *operations, actor=None, conditions=()):
+        results = []
+        for operation in operations:
+            kind = operation["op"]
+            name = operation["id"]
+            row = self.graph[name]
+            if kind == "update":
+                row.update(operation.get("set", {}))
+                self.set_meta(name, operation.get("set_meta", {}))
+                for key in operation.get("unset_meta", []):
+                    row["metadata"].pop(key, None)
+            elif kind == "claim":
+                row.update(assignee=actor, status="in_progress")
+            elif kind == "close":
+                self.finish(name)
+            elif kind == "reopen":
+                row["status"] = "open"
+            elif kind == "comment":
+                self.comments.setdefault(name, []).append(operation["text"])
+            else:
+                assert kind == "event", kind
+            row["updated_at"] = self.module.now()
+            row["version"] += 1
+            results.append({"ready": [r["id"] for r in self.ticket_graph()[0] if r["ready"]]})
+        self.sequence += 1
+        return {"seq": self.sequence, "results": results}
+
+    def finish(self, name):
+        row = self.graph[name]
+        row["status"] = "closed"
+        parent = row.get("parent")
+        if parent and all(r["status"] == "closed" for r in self.graph.values() if r.get("parent") == parent):
+            self.finish(parent)
+
+    def reopen(self, name):
+        self.graph[name]["status"] = "open"
 
     def set_meta(self, bead, pairs, actor=None):
         for key, value in pairs.items():
@@ -82,7 +140,7 @@ class PolicyWorld:
         row = self.graph[bead]
         if command == "close":
             assert args[0] == "--reason", args
-            row["status"] = "closed"
+            self.finish(bead)
         else:
             assert command == "update", (command, bead, args)
             options = iter(args)

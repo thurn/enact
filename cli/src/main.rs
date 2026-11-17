@@ -1,12 +1,11 @@
 mod args;
+mod backup;
 mod bench;
 mod client;
 mod commands;
 mod feed;
-mod migration;
 mod output_ids;
 mod register;
-mod shim;
 
 use args::{Command, EdgeOperation, Options};
 use clap::Parser;
@@ -17,9 +16,6 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 fn main() -> ExitCode {
-    if shim::invoked_as_bd() {
-        return shim::main();
-    }
     let options = match Options::try_parse() {
         Ok(options) => options,
         Err(error) => {

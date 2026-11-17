@@ -100,7 +100,6 @@ if sys.argv[1] == "slow" and (os.environ.get("TEST_FAIL_SLOW") or Path("SLOW").e
     def test_daily_backup_and_restore(self):
         a, b = self.hosts
         ref = "refs/heads/ticket-backups"
-        self.assertEqual(self.enact(a, "ticket-backup")["reason"], "legacy ticket backend")
         self.assertEqual(sh(["git", "for-each-ref", ref], self.origin), "")
         self.cutover()
         parent, closed, changed = (item["id"] for item in self.tk(a, "batch", data={"ops": [
@@ -331,7 +330,7 @@ print(json.dumps(enact.ci_run_once(enact.find_repo(), sys.argv[2])))
 
     def test_vizier_finishes_legacy_named_lane_through_steward_repair(self):
         vizier, worker = self.hosts
-        self.assertEqual(self.enact(worker, "backend")["backend"], "beads")
+        self.assertEqual(self.enact(worker, "backend")["backend"], "server")
         self.cutover()
         epic, first, second = (item["id"].removeprefix("T") for item in self.tk(vizier, "batch", data={"ops": [
             {"op": "create", "fields": {"title": "Run", "type": "epic"}},

@@ -66,7 +66,7 @@ chats; carry that authority into every worker and recovery prompt.
 
 In Claude Desktop, load deferred tools with ToolSearch before first use.
 Subagents are never Enact sessions. In Codex, use the returned tool host ID
-(for example `local`), not the OS hostname in Beads, when routing tools.
+(for example `local`), not the OS hostname on the ticket, when routing tools.
 `read_thread` supplies turn status; `wait_threads` supplies a compact status
 and cursor. An idle chat is not necessarily abandoned.
 Archive with `archived: true` and an exact `threadId`/`hostId`, then record
@@ -144,8 +144,8 @@ a recorded default (`common.md`, "Speculative defaults").
    [Titles](#titles)), then `git -C "$ENACT" pull --ff-only` (ignore failure
    when offline).
 2. **Project setup.** `.enact.toml` must exist and the remote must have a
-   `staging` branch. Require `.beads/` on the beads backend. If setup is
-   missing, tell the user to run `/enact-setup` first and stop.
+   `staging` branch. If setup is missing, tell the user to run `/enact-setup`
+   first and stop.
 3. **Permission mode.** Spawned sessions inherit your permission mode, and a
    permission prompt stalls an unattended run. In Claude Desktop, call
    `get_session` on `self`; `permissionMode` must be `bypassPermissions` or
@@ -253,8 +253,7 @@ agent can run.
 Read enough of the codebase to decompose well. On the server, file the graph
 with `tk create --json --title <title>` and add edges with `tk dep add`.
 Use `--body-file` for the description and `--deps a,b` for prerequisites
-known at creation. On the beads backend, use `bd create` and `bd dep add`
-with `--json` (see `bd create --help`).
+known at creation.
 
 - **One epic** for the run (`--type epic`) whose description holds the plan
   summary or task prompt, a link to the plan document, the decisions from the
@@ -262,8 +261,7 @@ with `--json` (see `bd create --help`).
   **code map**: the modules the run touches, their entry points and test
   commands. Leave parallelism out.
 - **Milestones** as child epics when the plan has phases. Milestone N+1
-  depends on milestone N. See below for the extra audit gates used by
-  the beads backend.
+  depends on milestone N.
 - **Beads** as children (`--parent`), each completable by one session in
   one sitting, with `--acceptance` criteria an agent can verify,
   `--priority` and a role label (`--labels role:<role>`; unlabeled beads
@@ -375,10 +373,6 @@ For a plan, use every role unless AGENTS.md or the invocation restricts them:
   as ordinary tickets. The next milestone's dependency waits for the audits
   and findings. The server closes the milestone after its last descendant
   closes. Imported gate epics keep their existing children and edges.
-- **Beads.** File each audit in a small gate epic such as "M1 review gate".
-  The gate depends on the milestone, and the next milestone depends on the
-  gate. File important findings under the gate. Enact closes the gate
-  after all its children finish.
 
 #### Final documentation
 
@@ -391,8 +385,6 @@ in its description, if any. A small task-prompt run or a light run gets none.
   dependency on that audit. The server ignores other `last` tickets when it
   checks this flag. Milestone epics already hold the Archivist until their
   audits and findings close.
-- **Beads.** File the Archivist with no dependencies. Enact holds it until
-  the rest of the run's work, including follow-ups, closes.
 
 ### Light runs
 
@@ -408,7 +400,7 @@ in its description, if any. A small task-prompt run or a light run gets none.
   audit: an unattended run needs it at any pace.
 - Label the run epic `run:light`. Workers check the epic for this label.
   On the server, explicitly include `run:light` on new children that need
-  to carry the label themselves. Beads inherits the label at creation.
+  to carry the label themselves.
 - An existing epic: close each unclaimed Mason, Sage, Archivist and Warden
   bead in it (`enact claim <id>`, then `enact close <id> --reason "skipped:
   light run"`; on exit 3 leave it). The final Warden depends on the beads
@@ -419,9 +411,7 @@ in its description, if any. A small task-prompt run or a light run gets none.
 1. If you filed or moved beads, check the whole graph. On the server, use
    `tk list --ancestor <epic> --all --json` and
    `tk ready --ancestor <epic> --json`.
-   On Beads, run `enact sync`, then use `bd list --parent <epic> --all
-   --limit 0 --json` and recurse into child epics. Use
-   `bd ready --parent <epic> --limit 0 --json` for ready work. Something must
+   Something must
    be ready unless another vizier holds it, and every bead must be reachable.
    For each bead you moved in, check that no open bead under another epic
    now waits on this run's beads unless the user agreed.
@@ -467,7 +457,7 @@ Handle its action, including `archive`, before waiting. For `action: wait`:
   rejects that duration, use its supported maximum. Rotate targets when
   more than eight chats are in flight. On a wake or timeout, save cursors
   and run `enact next --wait 0` again. The timeout also refreshes the
-  vizier's 20-minute lease and catches Beads or CI changes before a chat
+  vizier's 20-minute lease and catches ticket or CI changes before a chat
   finishes. A completed chat with an open bead is not a reason to spin on
   repeated terminal snapshots. Call `wait_threads` directly when available;
   if an orchestration wrapper is required, set its yield time to cover the
@@ -631,8 +621,7 @@ files.
 Several viziers can work one epic: one per machine or provider, each invoked
 by the user on its own host with the same epic ID. Code goes through
 `origin/staging`. The ticket server shares the task graph and grants claims
-atomically. On Beads, the graph lives in `refs/dolt/data` on the remote and
-`enact next` uses a pull-claim-push cycle. Viziers coordinate through beads.
+atomically. Viziers coordinate through tickets.
 A bead with `enact_host=<host>` or `enact_provider=<claude|codex>` metadata
 can only be picked up by the matching vizier.
 

@@ -17,7 +17,7 @@ why they were made, and the commands to build, test and run. Leave out
 anything the code, tests or `--help` already say clearly.
 
 - Describe the **shipped state** only: no history, no changelog, no "was
-  changed to", no future plans or TODOs. Beads track open work.
+  changed to", no future plans or TODOs. Tickets track open work.
 - Edit minimally. Update and delete stale statements before adding new ones.
   A run that changed nothing worth documenting gets no documentation edits.
 - Prefer one accurate sentence to a section. Prefer deleting a wrong
@@ -89,7 +89,7 @@ Planners copy the relevant part into each run epic.
 ## Deliver
 
 - Commit the documentation edits in your worktree, following the project's
-  commit conventions, and deliver with `enact push --bead <bead>`.
+  commit conventions, and deliver with `enact push --ticket <bead>`.
 - Do not change code, tests or configuration. If documenting the code
   reveals a real bug or a missing test for risky behavior, file a follow-up
   bead under the run's top epic. Mention lesser issues in your summary.

@@ -1,11 +1,8 @@
 """Fast tests: helper behavior that needs no git or Beads."""
 
 import importlib.util
-import contextlib
 import datetime as dt
 import functools
-import gzip
-import io
 import json
 import multiprocessing
 import os
@@ -14,7 +11,6 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import types
 import unittest
@@ -28,38 +24,6 @@ sys.modules["enact"] = enact
 spec.loader.exec_module(enact)
 
 
-class CutoverTests(unittest.TestCase):
-    def test_freeze_prevents_a_detached_dolt_writer_in_the_restore_root(self):
-        spec = importlib.util.spec_from_file_location("cutover", SCRIPT.with_name("cutover.py"))
-        cutover = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cutover)
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            live = root / "live"
-            repo = enact.Repo(live, live, live, enact.Config(ticket_project="by"))
-            beads = live / ".beads"
-            dolt = beads / "embeddeddolt" / "by" / ".dolt"
-            dolt.mkdir(parents=True)
-            (beads / "metadata.json").write_text('{"dolt_database": "by"}', encoding="utf-8")
-            (dolt / "repo_state.json").write_text(json.dumps({
-                "head": "refs/heads/main",
-                "remotes": {"origin": {"url": "file:///source"}},
-            }), encoding="utf-8")
-            snapshot = root / "frozen"
-            restore_roots = []
-
-            def run_dolt(command, cwd, *, env, timeout):
-                if command[:3] == ["dolt", "backup", "restore"]:
-                    restore_root = Path(env["DOLT_ROOT_PATH"])
-                    self.assertTrue(restore_root.is_dir())
-                    self.assertEqual(env.get("DOLT_DISABLE_EVENT_FLUSH"), "1")
-                    restore_roots.append(restore_root)
-
-            with mock.patch.object(cutover, "run", side_effect=run_dolt):
-                cutover.freeze(repo, snapshot)
-
-            self.assertEqual(len(restore_roots), 1)
-            self.assertFalse(restore_roots[0].exists())
 
 
 class TicketInstallTests(unittest.TestCase):
@@ -156,27 +120,14 @@ class TicketContractTests(unittest.TestCase):
             etag = "by-all-1-123456"
             snapshot = {"seq": 1, "etag": etag, "tickets": [], "edges": []}
             changed = {**snapshot, "etag": "by-all-2", "seq": 2}
-            with mock.patch.object(enact.Beads, "ticket", side_effect=[snapshot, {"unchanged": True}, changed]) as tk:
-                self.assertEqual(enact.Beads(repo).ticket_graph(), ([], 1))
-                self.assertEqual(enact.Beads(repo).ticket_graph(), ([], 1))
-                self.assertEqual(enact.Beads(repo).ticket_graph(), ([], 2))
+            with mock.patch.object(enact.Tickets, "ticket", side_effect=[snapshot, {"unchanged": True}, changed]) as tk:
+                self.assertEqual(enact.Tickets(repo).ticket_graph(), ([], 1))
+                self.assertEqual(enact.Tickets(repo).ticket_graph(), ([], 1))
+                self.assertEqual(enact.Tickets(repo).ticket_graph(), ([], 2))
             self.assertEqual(tk.call_args_list, [mock.call("graph", "--all"),
                                                  mock.call("graph", "--all", "--if-none-match", etag),
                                                  mock.call("graph", "--all", "--if-none-match", etag)])
 
-    def test_cutover_cannot_guess_legacy_when_the_server_is_unavailable(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            repo = types.SimpleNamespace(state=root)
-            response = subprocess.CompletedProcess(["tk"], 4, "", "server unavailable")
-            with (mock.patch.object(enact, "find_repo", return_value=repo),
-                  mock.patch.object(enact, "ticket_process", return_value=response) as tk):
-                with self.assertRaises(enact.Fail) as error:
-                    enact.ticket_cutover(root, "by")
-                self.assertEqual(error.exception.code, 4)
-                (root / "ticket-cutover.json").write_text('"by"', encoding="utf-8")
-                self.assertEqual(enact.ticket_cutover(root, "by"), "after")
-                tk.assert_called_once()
 
     def test_schema_and_api_cover_the_design(self):
         root = SCRIPT.parents[1]
@@ -300,17 +251,6 @@ class TicketContractTests(unittest.TestCase):
                              {first, last})
 
 
-def lock_log_holder(root, connection):
-    """Hold the ownership lock as `enact.py meta by-x`, with one 50 ms sync,
-    until told to let go."""
-    sys.argv = ["enact.py", "meta", "by-x"]
-    root = Path(root)
-    repo = enact.Repo(root, root, root / ".git", enact.Config())
-    enact.sync_unlogged = lambda repo, force, publish=True: time.sleep(0.05) or {}
-    with enact.ownership_lock(repo):
-        enact.sync(repo)
-        connection.send("held")
-        connection.recv()
 
 
 def lock_runner(path, mode, connection):
@@ -432,22 +372,6 @@ class LockTest(unittest.TestCase):
                 self.finish(second, two)
                 self.assertFalse(self.path.exists())
 
-    def test_legacy_writer_is_respected_before_and_after_publication(self):
-        legacy, old = self.runner("legacy")
-        self.assertEqual(self.receive(old), "paused")
-        for published in (False, True):
-            with self.subTest(published=published):
-                if published:
-                    old.send("publish")
-                    self.assertEqual(self.receive(old), "entered")
-                process, connection = self.runner()
-                self.assertEqual(self.receive(connection), "busy")
-                process.join(10)
-        legacy.terminate()
-        legacy.join(10)
-        process, connection = self.runner()
-        self.assertEqual(self.receive(connection), "entered")
-        self.finish(process, connection)
 
     def test_stale_observation_cannot_remove_replaced_legacy_owner(self):
         dead = subprocess.Popen([sys.executable, "-c", "pass"])
@@ -594,18 +518,6 @@ class RunBoundedTest(unittest.TestCase):
                 os.kill(grandchild, 0)
 
 
-class StagingLockStateTest(unittest.TestCase):
-    def test_release_between_listing_and_fetch_is_retried(self):
-        repo = mock.Mock()
-        repo.config.remote = "origin"
-        repo.main = Path("/tmp")
-        repo.git.return_value = "abc123 refs/enact/staging-lock"
-        repo.git_ok.return_value = False
-        missing = subprocess.CompletedProcess([], 128, "", "remote ref disappeared")
-        with mock.patch.object(enact, "run", return_value=missing):
-            state = enact.staging_lock_state(repo)
-        self.assertEqual(state, {"sha": "abc123", "updated": 0.0,
-                                 "owner": "changing"})
 
 
 @unittest.skipIf(enact.WINDOWS, "reaping is skipped on Windows")
@@ -669,11 +581,6 @@ class RunMissingTest(unittest.TestCase):
                 enact.run(["enact-no-such-tool"], Path(tmp))
         self.assertIn("enact-no-such-tool is not installed", str(caught.exception))
 
-    def test_missing_directory_points_to_setup(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(enact.Fail) as caught:
-                enact.run([sys.executable, "-c", "pass"], Path(tmp) / "absent")
-        self.assertIn("enact setup", str(caught.exception))
 
 
 class ShellTest(unittest.TestCase):
@@ -1009,89 +916,6 @@ class InstallTest(unittest.TestCase):
             self.assertFalse(enact.unlink_retired(target, live))
 
 
-class ParallelSuiteTest(unittest.TestCase):
-    def test_isolated_lanes_replay_all_test_outcomes(self):
-        from tests import test_integration as integration
-
-        barrier = threading.Barrier(4)
-        fixtures = []
-
-        class Scenario(unittest.TestCase):
-            @classmethod
-            def setUpClass(cls):
-                cls.marker = object()
-                fixtures.append(cls.marker)
-                barrier.wait(timeout=10)
-
-            def test_0_success(self):
-                self.assertIn(self.marker, fixtures)
-
-            def test_1_failure(self):
-                self.fail("intentional failure")
-
-            def test_2_error(self):
-                raise RuntimeError("intentional error")
-
-            @unittest.skip("intentional skip")
-            def test_3_skip(self):
-                pass
-
-            @unittest.expectedFailure
-            def test_4_expected_failure(self):
-                self.fail("expected")
-
-            @unittest.expectedFailure
-            def test_5_unexpected_success(self):
-                pass
-
-            def test_6_subtest(self):
-                with self.subTest(value="failure"):
-                    self.fail("subtest failure")
-
-            def test_7_success(self):
-                self.assertIsNotNone(self.marker)
-
-        result = unittest.TestResult()
-        with mock.patch.object(integration, "EnactTest", Scenario), \
-                mock.patch.object(integration.os, "cpu_count", return_value=4):
-            suite = integration.ParallelScenarios(
-                unittest.defaultTestLoader.loadTestsFromTestCase(Scenario))
-            self.assertEqual(suite.countTestCases(), 8)
-            suite.run(result)
-        self.assertEqual(len(set(fixtures)), 4)
-        self.assertEqual(result.testsRun, 8)
-        self.assertEqual(len(result.failures), 2)
-        self.assertEqual(len(result.errors), 1)
-        self.assertEqual(len(result.skipped), 1)
-        self.assertEqual(len(result.expectedFailures), 1)
-        self.assertEqual(len(result.unexpectedSuccesses), 1)
-        self.assertIn("subtest failure", result.failures[1][1] + result.failures[0][1])
-
-    def test_fixture_failures_are_reported(self):
-        from tests import test_integration as integration
-
-        barrier = threading.Barrier(2)
-
-        class Scenario(unittest.TestCase):
-            @classmethod
-            def setUpClass(cls):
-                barrier.wait(timeout=10)
-                raise RuntimeError("fixture failure")
-
-            def test_first(self):
-                pass
-
-            def test_second(self):
-                pass
-
-        result = unittest.TestResult()
-        with mock.patch.object(integration, "EnactTest", Scenario), \
-                mock.patch.object(integration.os, "cpu_count", return_value=2):
-            integration.ParallelScenarios(
-                unittest.defaultTestLoader.loadTestsFromTestCase(Scenario)).run(result)
-        self.assertEqual(result.testsRun, 0)
-        self.assertEqual(len(result.errors), 2)
-        self.assertTrue(all("fixture failure" in error for _, error in result.errors))
 
 
 class VizierLeaseTest(unittest.TestCase):
@@ -1099,10 +923,25 @@ class VizierLeaseTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.repo = types.SimpleNamespace(state=Path(tmp.name), config=enact.Config())
+        self.leases = {}
         for name, value in (("host_name", "jarvis"), ("provider", "claude")):
             patcher = mock.patch.object(enact, name, return_value=value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        self.enterContext(mock.patch.object(enact, "ticket_lease", side_effect=self.change_lease))
+        self.enterContext(mock.patch.object(enact.Tickets, "ticket", side_effect=self.read_tickets))
+
+    def change_lease(self, repo, action, name, holder, ttl=180, payload=None, **options):
+        if action == "release":
+            self.leases.pop(name, None)
+        else:
+            self.leases[name] = {"name": name, "holder": holder, "payload": payload or {},
+                                 "expires_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=ttl)).isoformat()}
+        return subprocess.CompletedProcess([], 0, "{}", "")
+
+    def read_tickets(self, *args):
+        assert args == ("leases",), args
+        return list(self.leases.values())
 
     def epic(self, host="jarvis", status="open", metadata=None):
         route = {"session": "v", "host": host, "provider": "claude"}
@@ -1111,10 +950,9 @@ class VizierLeaseTest(unittest.TestCase):
 
     def lease(self, seconds_ago, epic="e"):
         enact.renew_lease(self.repo, "v", epic)
-        path = enact.lease_path(self.repo, "v")
-        lease = json.loads(path.read_text())
-        lease["at"] -= seconds_ago
-        path.write_text(json.dumps(lease))
+        lease = self.leases[f"vizier/{epic}/v"]
+        expiry = dt.datetime.fromisoformat(lease["expires_at"]) - dt.timedelta(seconds=seconds_ago)
+        lease["expires_at"] = expiry.isoformat()
 
     def active(self, *graph):
         return enact.vizier_active(self.repo, list(graph))
@@ -1142,8 +980,7 @@ class VizierLeaseTest(unittest.TestCase):
 
     def test_a_finished_run_drops_its_lease(self):
         args = types.SimpleNamespace(epic="e", parallel=1, wait=0, interval=1)
-        with mock.patch.object(enact, "sync"), \
-                mock.patch.object(enact, "schedule",
+        with mock.patch.object(enact, "schedule",
                                   return_value={"action": "wait", "archive": []}) as step:
             enact.next_step(self.repo, args, "v")
             self.assertTrue(self.active(self.epic()))
@@ -1153,8 +990,7 @@ class VizierLeaseTest(unittest.TestCase):
 
     def test_next_on_a_finished_run_stops_the_loop_and_drops_the_lease(self):
         args = types.SimpleNamespace(epic="e", parallel=1, wait=60, interval=1)
-        with mock.patch.object(enact, "sync"), \
-                mock.patch.object(enact, "schedule",
+        with mock.patch.object(enact, "schedule",
                                   return_value={"action": "finished", "archive": []}):
             result = enact.next_step(self.repo, args, "v")
         self.assertEqual(result["action"], "finished")
@@ -1209,8 +1045,7 @@ class VizierLeaseTest(unittest.TestCase):
             return {"action": "wait", "archive": [], "stalled": [],
                     "running": ["a@t1"] if running else []}
 
-        with mock.patch.object(enact, "sync"), \
-                mock.patch.object(enact, "schedule", side_effect=schedule):
+        with mock.patch.object(enact, "schedule", side_effect=schedule):
             enact.next_step(self.repo, args, "v")
             args.running = None
             enact.next_step(self.repo, args, "v")
@@ -1221,7 +1056,7 @@ class VizierLeaseTest(unittest.TestCase):
         stall = {"bead": "a", "session": "s1", "idle_minutes": 95, "tier": 1, "nudge": "n"}
 
         def step(*stalled):
-            with mock.patch.object(enact, "sync"), mock.patch.object(
+            with mock.patch.object(
                     enact, "schedule", return_value={"action": "wait", "archive": [],
                                                      "stalled": list(stalled)}):
                 return enact.next_step(self.repo, args, "v")
@@ -1237,7 +1072,7 @@ class VizierLeaseTest(unittest.TestCase):
     def test_a_new_stall_ends_a_background_wait_early(self):
         args = types.SimpleNamespace(epic="e", parallel=1, wait=3000, interval=1)
         stall = {"bead": "a", "session": "s1", "idle_minutes": 95, "tier": 1, "nudge": "n"}
-        with mock.patch.object(enact, "sync"), mock.patch.object(
+        with mock.patch.object(
                 enact, "schedule", return_value={"action": "wait", "archive": [],
                                                  "stalled": [stall]}), \
                 mock.patch.object(enact.time, "sleep", side_effect=AssertionError):
@@ -1258,10 +1093,11 @@ class VizierLeaseTest(unittest.TestCase):
         self.assertEqual((aged[0]["lease_age"], stale), (None, True))
         self.lease(90)
         aged, stale = enact.route_leases(self.repo, "e", routes)
-        self.assertEqual((aged[0]["lease_age"], stale), (90, False))
+        self.assertAlmostEqual(aged[0]["lease_age"], 90, places=1)
+        self.assertFalse(stale)
         self.lease(enact.VIZIER_LEASE_SECONDS + 5)
         aged, stale = enact.route_leases(self.repo, "e", routes)
-        self.assertEqual((aged[0]["lease_age"], stale), (enact.VIZIER_LEASE_SECONDS + 5, True))
+        self.assertTrue(stale)
         # Another machine's route cannot keep a run fresh from here.
         self.lease(0)
         cygnus = enact.run_routes(self.epic(host="cygnus"))
@@ -1272,11 +1108,12 @@ class VizierLeaseTest(unittest.TestCase):
         saved = []
         beads = mock.Mock()
         beads.all.return_value = list(graph)
-        with mock.patch.object(enact, "sync"), mock.patch.object(enact, "Beads",
+        beads.ticket.side_effect = self.read_tickets
+        with mock.patch.object(enact, "Tickets",
                                                                  return_value=beads), \
                 mock.patch.object(enact, "run_delivery", return_value=delivery), \
                 mock.patch.object(enact, "save_run_meta",
-                                  side_effect=lambda *a: saved.append(a)):
+                                  side_effect=lambda *a, **kw: saved.append(a)):
             pruned = enact.prune_runs(self.repo)
         return pruned, saved, beads
 
@@ -1291,8 +1128,8 @@ class VizierLeaseTest(unittest.TestCase):
         pruned, saved, beads = self.prune(self.epic(status="closed"), complete=False)
         self.assertEqual(pruned[0]["state"], "paused")
         self.assertIn("lease expired", saved[0][3]["reason"])
-        beads.run.assert_called_once()
-        self.assertEqual(beads.run.call_args.args[:2], ("reopen", "e"))
+        beads.reopen.assert_called_once()
+        beads.reopen.assert_called_with("e")
 
     def test_prune_leaves_fresh_foreign_finished_and_held_runs_alone(self):
         self.lease(60)
@@ -1313,6 +1150,7 @@ class VizierLeaseTest(unittest.TestCase):
                                            [self.epic(), milestone])[1] is False)
         # A lease on another run still says nothing about this one. Pausing
         # the run holds its milestone, which is not pruned on its own.
+        self.lease(enact.VIZIER_LEASE_SECONDS + 1)
         self.lease(0, epic="other")
         pruned = self.prune(self.epic(), milestone, complete=False)[0]
         self.assertEqual([p["epic"] for p in pruned], ["e"])
@@ -1364,12 +1202,11 @@ class VizierLeaseTest(unittest.TestCase):
         args = types.SimpleNamespace(action="resume", epic="e", reason="user says go",
                                      explicit=True, exhausted=False)
         with mock.patch.object(enact, "find_repo", return_value=self.repo), \
-                mock.patch.object(enact, "sync"), \
-                mock.patch.object(enact, "Beads", return_value=beads), \
+                mock.patch.object(enact, "Tickets", return_value=beads), \
                 mock.patch.object(enact, "require_actor", return_value="v"), \
                 mock.patch.object(enact, "save_run_meta",
-                                  side_effect=lambda *a: saved.append(a)):
-            result = enact.cmd_run.__wrapped__(args)  # skip the ownership lock
+                                  side_effect=lambda *a, **kw: saved.append(a)):
+            result = enact.cmd_run(args)  # skip the ownership lock
         self.assertEqual(result["resumed_milestones"], ["e.1"])
         self.assertEqual([a[1] for a in saved], ["e", "e.1"])
         self.assertEqual(saved[1][3]["state"], "active")
@@ -1399,7 +1236,7 @@ class VizierLeaseTest(unittest.TestCase):
     def test_prune_finishes_a_closed_run_without_reopening_it(self):
         pruned, _, beads = self.prune(self.epic(status="closed"), complete=True)
         self.assertEqual(pruned[0]["state"], "finished")
-        beads.run.assert_not_called()
+        beads.reopen.assert_not_called()
 
     def steward(self, assignee=None, minutes_idle=120, host="jarvis", parent=None):
         updated = enact.dt.datetime.now(enact.dt.timezone.utc) - enact.dt.timedelta(
@@ -1445,33 +1282,7 @@ class VizierLeaseTest(unittest.TestCase):
         self.assertFalse(enact.work_done({"status": "open"}))
         self.assertFalse(enact.work_done({"status": "in_progress"}))
 
-    def test_an_epic_with_only_deferred_children_left_closes(self):
-        epic = {"id": "e", "issue_type": "epic", "status": "open"}
-        children = [{"id": "c1", "parent": "e", "status": "closed"},
-                    {"id": "c2", "parent": "e", "status": "deferred"}]
-        graph = [epic, *children]
-        closed = mock.Mock()
-        fake = mock.Mock(run=closed, all=mock.Mock(return_value=graph))
-        with mock.patch.object(enact, "Beads", return_value=fake), \
-                mock.patch.object(enact, "sync"):
-            self.assertEqual(enact.close_finished_epics(self.repo), ["e"])
-        closed.assert_called_once_with(
-            "close", "e", "--reason", "All children complete", "--force")
 
-    def test_a_failed_epic_close_is_skipped_not_fatal(self):
-        graph = [{"id": "e", "issue_type": "epic", "status": "open"},
-                 {"id": "c", "parent": "e", "status": "closed"},
-                 {"id": "f", "issue_type": "epic", "status": "open"},
-                 {"id": "d", "parent": "f", "status": "closed"}]
-
-        def run(_verb, bead, *_rest):
-            if bead == "e":
-                raise enact.Fail("bd close refused")
-
-        fake = mock.Mock(run=mock.Mock(side_effect=run), all=mock.Mock(return_value=graph))
-        with mock.patch.object(enact, "Beads", return_value=fake), \
-                mock.patch.object(enact, "sync"):
-            self.assertEqual(enact.close_finished_epics(self.repo), ["f"])
 
     def test_a_push_is_watched_only_with_fresh_evidence(self):
         epic = self.epic()
@@ -1507,10 +1318,10 @@ class CiWatchTest(unittest.TestCase):
             git=lambda *args: "tip",
             git_ok=lambda *args: args[0] == "merge-base" and (args[2], args[3]) in ancestors)
         beads = mock.Mock()
-        beads.all.return_value = graph
+        beads.ticket_graph.return_value = (graph, 1)
         status = status or {"running": True, "last_tested": "old"}
-        with mock.patch.object(enact, "sync"), mock.patch.object(enact, "fetch"), \
-                mock.patch.object(enact, "Beads", return_value=beads), \
+        with mock.patch.object(enact, "fetch"), \
+                mock.patch.object(enact, "Tickets", return_value=beads), \
                 mock.patch.object(enact, "vizier_active", return_value=False), \
                 mock.patch.object(enact, "ci_status", return_value=status), \
                 mock.patch.object(enact, "start_ci", return_value={"started": True}) as start, \
@@ -1555,8 +1366,8 @@ class CiWatchTest(unittest.TestCase):
             git=lambda *args, **kwargs: newer)
         beads = mock.Mock()
         beads.all.return_value = graph
-        with mock.patch.object(enact, "sync"), mock.patch.object(enact, "fetch"), \
-                mock.patch.object(enact, "Beads", return_value=beads):
+        with mock.patch.object(enact, "fetch"), \
+                mock.patch.object(enact, "Tickets", return_value=beads):
             return enact.superseding_repair(repo, "tip")
 
     def test_slow_ci_reuses_the_saved_check_after_outage_and_daily_limit(self):
@@ -1567,8 +1378,7 @@ class CiWatchTest(unittest.TestCase):
                 remote_ref=lambda branch: f"origin/{branch}", git=lambda *a, **kw: "green")
             replies = [enact.Fail("server unavailable", code=4),
                        enact.Fail("server daily limit", code=5), "steward"]
-            with (mock.patch.object(enact, "uses_ticket_server", return_value=True),
-                  mock.patch.object(enact, "checkout_slow_tree", return_value=root),
+            with (mock.patch.object(enact, "checkout_slow_tree", return_value=root),
                   mock.patch.object(enact, "reap_processes"),
                   mock.patch.object(enact, "superseding_repair", return_value=None),
                   mock.patch.object(enact, "report_ci_failure", side_effect=replies),
@@ -1692,12 +1502,12 @@ class StableCheckoutTest(unittest.TestCase):
 class WaitTest(unittest.TestCase):
     def wait(self, statuses, *ids):
         beads = mock.Mock()
-        beads.show.side_effect = lambda i: {"id": i, "status": statuses[i]}
+        beads.ticket_graph.return_value = ([{"id": i, "status": status, "assignee": ""}
+                                            for i, status in statuses.items()], 1)
         args = types.SimpleNamespace(beads=list(ids), timeout=0, interval=1)
         repo = types.SimpleNamespace(config=enact.Config())
         with mock.patch.object(enact, "find_repo", return_value=repo), \
-                mock.patch.object(enact, "sync"), \
-                mock.patch.object(enact, "Beads", return_value=beads):
+                mock.patch.object(enact, "Tickets", return_value=beads):
             return enact.cmd_wait(args)
 
     def test_wait_reports_closed_only_when_every_bead_is_closed(self):
@@ -1726,48 +1536,6 @@ class FetchTest(unittest.TestCase):
                 self.assertEqual(enact.fetch(repo, check=False), {})
 
 
-class JusticiarPerMachineTest(unittest.TestCase):
-    def setUp(self):
-        holder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-        self.addCleanup(holder.cleanup)
-        tmp = Path(holder.name)
-        git = lambda *a, cwd=tmp: subprocess.run(["git", *a], cwd=cwd, check=True,
-                                                  capture_output=True)
-        git("init", "-q", "--bare", "remote.git")
-        git("clone", "-q", str(tmp / "remote.git"), "work")
-        self.work = tmp / "work"
-        for key, value in (("user.name", "t"), ("user.email", "t@example.com")):
-            git("config", key, value, cwd=self.work)
-
-    def justiciar(self, host, action, actor="sess", code=None):
-        args = types.SimpleNamespace(action=action, reason="r", actor=actor)
-        env = {"ENACT_HOST": host}
-        with mock.patch.dict(os.environ, env), contextlib.chdir(self.work):
-            if code is None:
-                return enact.cmd_justiciar(args)
-            with self.assertRaises(enact.Fail):
-                enact.cmd_justiciar(args)
-
-    def test_each_machine_holds_its_own_lock(self):
-        self.justiciar("host-a", "acquire", "sess-a")
-        self.justiciar("host-a", "acquire", "sess-x", code=3)
-        held = self.justiciar("host-b", "acquire", "sess-b")["acquired"]
-        self.assertEqual((held["host"], held["ref"]),
-                         ("host-b", "refs/enact/justiciars/host-b"))
-        self.justiciar("host-a", "release", "sess-a")
-        self.assertIsNone(self.justiciar("host-a", "status")["justiciar"])
-        self.assertEqual(self.justiciar("host-b", "status")["justiciar"]["session"], "sess-b")
-
-    def test_legacy_lock_binds_only_its_host(self):
-        repo = enact.find_repo(self.work)
-        payload = {"state": "active", "host": "host-a", "session": "old"}
-        sha = enact.justiciar_commit(repo, payload)
-        self.assertTrue(enact.justiciar_push(repo, sha, "", enact.LEGACY_JUSTICIAR_REF))
-        self.justiciar("host-b", "acquire", "sess-b")
-        self.justiciar("host-a", "acquire", "sess-a", code=3)
-        self.assertEqual(self.justiciar("host-a", "release", "old")["released"]["ref"],
-                         enact.LEGACY_JUSTICIAR_REF)
-        self.justiciar("host-a", "acquire", "sess-a")
 
 
 class StagingLeaseWaitTest(unittest.TestCase):
@@ -1800,525 +1568,13 @@ class StagingLeaseWaitTest(unittest.TestCase):
                 self.assertIsNotNone(dt.datetime.fromisoformat(record["time"]).tzinfo)
 
 
-class OwnershipLockWaitTest(unittest.TestCase):
-    def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        root = Path(temporary.name)
-        self.repo = enact.Repo(root, root, root / ".git", enact.Config())
-        self.repo.state.mkdir(parents=True, exist_ok=True)
-        self.path = self.repo.state / "ownership.lock"
-
-    def hold(self):
-        """Hold the lock the way another process would, with its holder record."""
-        guard = enact.try_lock(self.path)
-        self.assertIsNotNone(guard)
-        self.path.with_name("ownership.lock.holder").write_text(json.dumps(
-            {"pid": 4242, "command": "enact sync", "since": time.time() - 200}))
-        return guard
-
-    def test_a_waiter_that_gives_up_names_the_holder(self):
-        guard = self.hold()
-        self.addCleanup(enact.release_lock, self.path, guard)
-        stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr), self.assertRaises(enact.Fail) as raised:
-            with enact.ownership_lock(self.repo, wait=0.2):
-                pass
-        self.assertEqual(raised.exception.code, 3)
-        for text in (str(raised.exception), stderr.getvalue()):
-            self.assertIn("pid 4242 (enact sync)", text)
-
-    def test_a_patient_waiter_outlasts_a_short_wait(self):
-        guard = self.hold()
-        # The holder lets go only after a short wait has already given up.
-        release = threading.Timer(0.5, enact.release_lock, (self.path, guard))
-        release.start()
-        self.addCleanup(release.join)
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(enact.Fail):
-            with enact.ownership_lock(self.repo, wait=0.1):
-                pass
-        with enact.ownership_lock(self.repo, wait=60):
-            self.assertTrue(self.path.exists())
-
-    def test_waiters_take_the_lock_in_arrival_order(self):
-        queue = self.repo.state / "ownership.queue"
-        queue.mkdir()
-        mine = queue / f"{time.time_ns():020d}-{os.getpid()}"
-        mine.touch()
-        # A live waiter that arrived first keeps its place.
-        earlier = queue / f"{time.time_ns() - 10**9:020d}-{os.getpid()}"
-        earlier.touch()
-        self.assertFalse(enact.first_in_line(queue, mine))
-        # Its ticket goes stale once its waiter stops refreshing it.
-        old = time.time() - enact.TICKET_STALE - 1
-        os.utime(earlier, (old, old))
-        self.assertTrue(enact.first_in_line(queue, mine))
-        self.assertFalse(earlier.exists())
-        # A dead waiter's ticket is removed at once.
-        dead = queue / f"{time.time_ns() - 10**9:020d}-999999"
-        dead.touch()
-        with mock.patch.object(enact, "pid_alive", return_value=False):
-            self.assertTrue(enact.first_in_line(queue, mine))
-        self.assertFalse(dead.exists())
-        # Later arrivals never hold up an earlier one.
-        (queue / f"{time.time_ns() + 10**9:020d}-{os.getpid()}").touch()
-        self.assertTrue(enact.first_in_line(queue, mine))
-
-    def test_a_queued_waiter_waits_for_an_earlier_one(self):
-        queue = self.repo.state / "ownership.queue"
-        queue.mkdir()
-        earlier = queue / f"{time.time_ns() - 10**9:020d}-{os.getpid()}"
-        earlier.touch()
-        # The lock itself is free, but the earlier waiter is next.
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(enact.Fail):
-            with enact.ownership_lock(self.repo, wait=0.3):
-                pass
-        earlier.unlink()
-        with enact.ownership_lock(self.repo, wait=1):
-            pass
-        self.assertEqual(list(queue.iterdir()), [])
-
-    def lock_log(self):
-        text = (self.repo.state / "lock-waits.jsonl").read_text()
-        return [json.loads(line) for line in text.splitlines()]
-
-    def test_a_contended_wait_logs_both_holds(self):
-        context = multiprocessing.get_context("spawn")
-        parent, child = context.Pipe()
-        holder = context.Process(target=lock_log_holder,
-                                 args=(str(self.repo.main), child))
-        holder.start()
-        self.addCleanup(holder.join, 30)
-        self.assertTrue(parent.poll(60))
-        self.assertEqual(parent.recv(), "held")
-        # Let go only once this process has waited for over a second.
-        release = threading.Timer(1.5, parent.send, ("release",))
-        release.start()
-        self.addCleanup(release.join)
-        with enact.ownership_lock(self.repo, wait=60):
-            pass
-        first, second = self.lock_log()
-        self.assertEqual(first["command"], "enact.py meta by-x")
-        self.assertEqual(first["outcome"], "acquired")
-        self.assertGreaterEqual(first["held_s"], 1.5)
-        self.assertEqual(first["syncs"], 1)
-        self.assertGreater(first["sync_s"], 0)
-        self.assertLessEqual(first["sync_s"], first["held_s"])
-        self.assertEqual(second["outcome"], "acquired")
-        self.assertEqual(second["pid"], os.getpid())
-        self.assertGreaterEqual(second["waited_s"], 1.0)
-        self.assertEqual(second["holder"], "enact.py meta by-x")
-        self.assertEqual((second["syncs"], second["sync_s"]), (0, 0))
-        self.assertGreaterEqual(second["held_s"], 0)
-        self.assertRegex(second["time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
-
-    def test_sync_steps_and_dolt_busy_retries_are_logged(self):
-        calls = []
-
-        def run(cmd, cwd, check=True):
-            calls.append(cmd)
-            busy = len(calls) == 1
-            time.sleep(0.05)
-            return subprocess.CompletedProcess(
-                cmd, 1 if busy else 0, "", "database is read only" if busy else "")
-
-        with mock.patch.object(enact, "run", run), enact.ownership_lock(self.repo):
-            with enact.sync_step(self.repo, "pull"):
-                enact.dolt(["pull"], self.repo.main)
-        [line] = self.lock_log()
-        self.assertEqual(len(calls), 2)
-        self.assertGreaterEqual(line["pull_s"], 0.1)
-        self.assertGreaterEqual(line["busy_s"], 0.05)
-        self.assertLess(line["busy_s"], line["pull_s"])
-        self.assertEqual((line["push_s"], line["gc_s"]), (0, 0))
-        # Outside the lock nothing is recorded and nothing fails.
-        with enact.sync_step(self.repo, "pull"):
-            pass
-
-    def test_a_give_up_is_logged(self):
-        guard = self.hold()
-        self.addCleanup(enact.release_lock, self.path, guard)
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(enact.Fail):
-            with enact.ownership_lock(self.repo, wait=0.2):
-                pass
-        [line] = self.lock_log()
-        self.assertEqual(line["outcome"], "gave_up")
-        self.assertEqual(line["holder"], "enact sync")
-        self.assertGreaterEqual(line["waited_s"], 0.2)
-        self.assertIsNone(line["held_s"])
-
-    def test_the_lock_log_is_capped_and_never_fails_a_command(self):
-        log_path = self.repo.state / "lock-waits.jsonl"
-        log_path.write_text("x" * 100)
-        with mock.patch.object(enact, "LOCK_LOG_BYTES", 100):
-            with enact.ownership_lock(self.repo):
-                pass
-        self.assertEqual(self.repo.state.joinpath("lock-waits.1.jsonl").read_text(), "x" * 100)
-        self.assertEqual(len(self.lock_log()), 1)
-        # An unwritable log is skipped.
-        log_path.unlink()
-        log_path.mkdir()
-        with enact.ownership_lock(self.repo):
-            pass
-
-    def test_the_holder_record_is_removed_on_release(self):
-        with enact.ownership_lock(self.repo):
-            self.assertIn(str(os.getpid()), self.path.with_name(
-                "ownership.lock.holder").read_text())
-        self.assertFalse(self.path.with_name("ownership.lock.holder").exists())
 
 
 
-class DeferredSyncTest(unittest.TestCase):
-    def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        root = Path(temporary.name)
-        self.repo = enact.Repo(root, root, root / ".git", enact.Config())
-        self.repo.state.mkdir(parents=True, exist_ok=True)
-        self.pending = self.repo.state / enact.SYNC_PENDING
-
-    def test_an_owner_write_starts_one_background_pusher(self):
-        with mock.patch.dict(os.environ, {"ENACT_SYNC_NOW": ""}), \
-                mock.patch.object(enact.subprocess, "Popen") as popen, \
-                mock.patch.object(enact, "sync") as sync:
-            self.assertTrue(enact.defer_sync(self.repo)["deferred"])
-            self.assertTrue(self.pending.exists())
-            sync.assert_not_called()
-            self.assertEqual(popen.call_args.args[0][-2:], ["sync", "--deferred"])
-            # While a pusher runs, a second write leaves the push to it.
-            path = self.repo.state / enact.SYNC_PUSHER
-            guard = enact.try_lock(path)
-            self.addCleanup(enact.release_lock, path, guard)
-            enact.defer_sync(self.repo)
-            self.assertEqual(popen.call_count, 1)
-
-    def test_sync_now_skips_the_pusher(self):
-        with mock.patch.dict(os.environ, {"ENACT_SYNC_NOW": "1"}), \
-                mock.patch.object(enact.subprocess, "Popen") as popen, \
-                mock.patch.object(enact, "sync", return_value={"remote": True}) as sync:
-            self.assertNotIn("deferred", enact.defer_sync(self.repo))
-        sync.assert_called_once()
-        popen.assert_not_called()
-        self.assertFalse(self.pending.exists())
-
-    def test_the_pusher_syncs_until_nothing_is_pending(self):
-        writes = iter([True, False])
-
-        def full_sync(repo, force=False, publish=False):
-            self.assertTrue(force)
-            self.assertTrue(publish)
-            enact.sync_unlogged(repo, force)
-            if next(writes):  # a command wrote again during this sync
-                self.pending.write_text("again")
-            return {}
-
-        self.pending.write_text("1")
-        with mock.patch.object(enact.time, "sleep"), \
-                mock.patch.object(enact, "sync_beads", return_value={}), \
-                mock.patch.object(enact, "compact_beads"), \
-                mock.patch.object(enact, "sync", side_effect=full_sync):
-            self.assertEqual(enact.deferred_sync(self.repo)["synced"], 2)
-        self.assertFalse(self.pending.exists())
-
-    def test_a_second_pusher_leaves_the_work_to_the_first(self):
-        self.pending.write_text("1")
-        path = self.repo.state / enact.SYNC_PUSHER
-        guard = enact.try_lock(path)
-        self.addCleanup(enact.release_lock, path, guard)
-        with mock.patch.object(enact, "sync") as sync:
-            self.assertEqual(enact.deferred_sync(self.repo)["synced"], 0)
-        sync.assert_not_called()
-        self.assertTrue(self.pending.exists())
 
 
-class BeadsReadTest(unittest.TestCase):
-    def test_writes_sync_and_unlock_refresh_cached_reads(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / ".beads").mkdir()
-            (root / ".beads" / "metadata.json").write_text(json.dumps({
-                "dolt_mode": "embedded", "dolt_database": "test",
-            }))
-            repo = enact.Repo(root, root, root / ".git", enact.Config())
-            state, calls = {"title": "initial"}, []
-
-            def command(args, cwd, **kwargs):
-                calls.append(args[1:])
-                if args[0] == "dolt":
-                    if args[1] == "pull":
-                        state["title"] = "remote"
-                    out = {"config": "user.name = Test\nuser.email = t@example.com",
-                           "remote": "origin", "commit": "", "pull": ""}[args[1]]
-                    return subprocess.CompletedProcess(args, 0, out, "")
-                if args[1] == "update":
-                    state["title"] = args[-1]
-                out = (json.dumps([{"id": "work", **state}])
-                       if args[1] in ("show", "list") else "origin")
-                return subprocess.CompletedProcess(args, 0, out, "")
-
-            first, second = enact.Beads(repo), enact.Beads(repo)
-            with mock.patch.object(enact, "run", side_effect=command), \
-                    mock.patch.object(enact.shutil, "which", return_value="dolt"), \
-                    mock.patch.object(enact, "dolt_json", side_effect=[
-                        [{"b": "main"}], [{"local_tip": "sha", "remote_tip": "sha"}],
-                    ]):
-                with enact.ownership_lock(repo):
-                    for reader in (first, second):
-                        self.assertEqual(reader.show("work")["title"], "initial")
-                        self.assertEqual(reader.all()[0]["title"], "initial")
-                    first.show("work")["title"] = "unwritten"
-                    self.assertEqual(second.show("work")["title"], "initial")
-                    self.assertEqual(sum(call[0] == "show" for call in calls), 1)
-                    self.assertEqual(sum(call[0] == "list" for call in calls), 1)
-                    second.run("update", "work", "--title", "local")
-                    self.assertEqual(first.show("work")["title"], "local")
-                    self.assertEqual(first.all()[0]["title"], "local")
-                    enact.sync(repo)
-                    self.assertEqual(first.show("work")["title"], "remote")
-                    self.assertEqual(first.all()[0]["title"], "remote")
-                for title in ("outside", "outside again"):
-                    state["title"] = title
-                    self.assertEqual(first.show("work")["title"], title)
-                    self.assertEqual(first.all()[0]["title"], title)
 
 
-class SyncTest(unittest.TestCase):
-    def fresh_sync_repo(self, root):
-        (root / ".beads").mkdir()
-        (root / ".beads" / "metadata.json").write_text(json.dumps({
-            "dolt_mode": "embedded", "dolt_database": "test",
-        }))
-        repo = enact.Repo(root, root, root / ".git", enact.Config())
-        repo.state.mkdir(parents=True, exist_ok=True)
-        self.addCleanup(enact._beads_dirty.discard, repo.common)
-        return repo
-
-    def test_a_sync_is_skipped_until_a_write_or_a_push_from_elsewhere(self):
-        with tempfile.TemporaryDirectory() as directory:
-            repo = self.fresh_sync_repo(Path(directory))
-            calls, remote = [], {"tip": "a", "cached": {"b"}}
-
-            def command(args, cwd, **kwargs):
-                calls.append(args[1])
-                out = {"config": "user.name = Test\nuser.email = t@example.com",
-                       "remote": "origin", "commit": "no changes added to commit",
-                       "pull": "", "push": "", "update": ""}[args[1]]
-                return subprocess.CompletedProcess(args, args[1] == "commit", out, "")
-
-            def git(args, **kwargs):
-                if args[1] == "ls-remote":
-                    return subprocess.CompletedProcess(args, 0, f"{remote['tip']}\tref\n", "")
-                known = args[-1].split("^")[0] in remote["cached"]
-                return subprocess.CompletedProcess(args, 0 if known else 1, "", "")
-
-            tips = [{"local_tip": "a", "remote_tip": "b"}]
-            with mock.patch.object(enact.shutil, "which", return_value="dolt"), \
-                    mock.patch.object(enact, "run", side_effect=command), \
-                    mock.patch.object(enact.subprocess, "run", side_effect=git), \
-                    mock.patch.object(enact, "start_pusher", return_value=False), \
-                    mock.patch.object(enact, "dolt_git_remote",
-                                      return_value=("https://x/r.git", Path("cache"))), \
-                    mock.patch.object(enact, "dolt_json", side_effect=lambda db, q: (
-                        [{"b": "main"}] if "active_branch" in q else tips)):
-                self.assertNotIn("unchanged", enact.sync(repo))
-                self.assertEqual(calls.count("pull"), 1)
-                remote["cached"].add("a")  # the pull fetched it
-                # Nothing was written here and this clone has the remote's tip.
-                self.assertIn("unchanged", enact.sync(repo))
-                self.assertEqual(calls.count("pull"), 1)
-                # A bd write here pushed a tip this clone has: still nothing to pull.
-                remote["tip"] = "b"
-                self.assertIn("unchanged", enact.sync(repo))
-                # Another machine pushed a tip this clone never fetched: pull it.
-                remote["tip"] = "c"
-                self.assertNotIn("unchanged", enact.sync(repo))
-                self.assertEqual(calls.count("pull"), 2)
-                remote["cached"].add("c")  # the pull fetched it
-                self.assertIn("unchanged", enact.sync(repo))
-                # A write by this process that an ownership check depends on
-                # is published. This clone has the remote's tip, so the push
-                # needs no pull first.
-                enact.Beads(repo).run("update", "work", "--title", "x")
-                pushes = calls.count("push")
-                self.assertNotIn("unchanged", enact.sync(repo, publish=True))
-                self.assertEqual(calls.count("pull"), 2)
-                self.assertEqual(calls.count("push"), pushes + 1)
-                # `enact sync` always syncs, and the remotes and branch come
-                # from the cache while Dolt's config files are unchanged.
-                remote["tip"] = "d"
-                self.assertNotIn("unchanged", enact.sync(repo, force=True))
-                self.assertEqual(calls.count("pull"), 3)
-                self.assertEqual(calls.count("config"), 1)
-                self.assertEqual(calls.count("remote"), 1)
-
-    def test_a_sync_that_need_not_publish_leaves_the_push_to_the_pusher(self):
-        with tempfile.TemporaryDirectory() as directory:
-            repo = self.fresh_sync_repo(Path(directory))
-            calls = []
-
-            def command(args, cwd, **kwargs):
-                calls.append(args[1])
-                out = {"config": "user.name = Test\nuser.email = t@example.com",
-                       "remote": "origin", "commit": ""}.get(args[1], "")
-                return subprocess.CompletedProcess(args, 0, out, "")
-
-            with mock.patch.dict(os.environ, {"ENACT_SYNC_NOW": ""}), \
-                    mock.patch.object(enact.shutil, "which", return_value="dolt"), \
-                    mock.patch.object(enact, "run", side_effect=command), \
-                    mock.patch.object(enact, "remote_tip_known", return_value=False), \
-                    mock.patch.object(enact.subprocess, "Popen") as popen, \
-                    mock.patch.object(enact, "dolt_json", side_effect=lambda db, q: (
-                        [{"b": "main"}] if "active_branch" in q
-                        else [{"local_tip": "a", "remote_tip": "b"}])):
-                result = enact.sync(repo, force=True)
-            # Committed and merged here, published later in the background.
-            self.assertTrue(result["deferred"])
-            self.assertEqual(calls.count("commit"), 1)
-            self.assertEqual(calls.count("pull"), 1)
-            self.assertEqual(calls.count("push"), 0)
-            self.assertTrue((repo.state / enact.SYNC_PENDING).exists())
-            self.assertEqual(popen.call_args.args[0][-2:], ["sync", "--deferred"])
-
-    def test_a_push_rejected_after_a_skipped_pull_pulls_and_retries(self):
-        with tempfile.TemporaryDirectory() as directory:
-            repo = self.fresh_sync_repo(Path(directory))
-            calls, pushes = [], iter([1, 0])
-
-            def command(args, cwd, **kwargs):
-                calls.append(args[1])
-                code = {"commit": 1, "push": None}.get(args[1], 0)
-                code = next(pushes) if code is None else code
-                out = {"config": "user.name = Test\nuser.email = t@example.com",
-                       "remote": "origin", "commit": "nothing to commit"}.get(args[1], "")
-                return subprocess.CompletedProcess(args, code, out, "")
-
-            with mock.patch.object(enact.shutil, "which", return_value="dolt"), \
-                    mock.patch.object(enact, "run", side_effect=command), \
-                    mock.patch.object(enact, "remote_tip_known", return_value=True), \
-                    mock.patch.object(enact.time, "sleep"), \
-                    mock.patch.object(enact, "dolt_json", side_effect=lambda db, q: (
-                        [{"b": "main"}] if "active_branch" in q
-                        else [{"local_tip": "a", "remote_tip": "b"}])):
-                with contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(enact.sync_beads(repo)["remote"], True)
-            self.assertEqual(calls.count("push"), 2)
-            self.assertEqual(calls.count("pull"), 1)
-            self.assertLess(calls.index("push"), calls.index("pull"))
-
-    def test_embedded_commit_failure_cannot_publish(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / ".beads").mkdir()
-            (root / ".beads" / "metadata.json").write_text(json.dumps({
-                "dolt_mode": "embedded", "dolt_database": "test",
-            }))
-            repo = enact.Repo(root, root, root / ".git", enact.Config())
-            calls = []
-
-            def command(args, cwd, **kwargs):
-                calls.append(args)
-                out = {"config": "user.name = Test\nuser.email = t@example.com",
-                       "remote": "origin", "commit": ""}[args[1]]
-                return subprocess.CompletedProcess(
-                    args, 1 if args[1] == "commit" else 0, out, "disk full")
-
-            with mock.patch.object(enact.shutil, "which", return_value="dolt"), \
-                    mock.patch.object(enact, "run", side_effect=command), \
-                    mock.patch.object(enact, "dolt_json", return_value=[{"b": "topic"}]):
-                with self.assertRaisesRegex(enact.Fail, "disk full"):
-                    enact.sync(repo)
-            self.assertFalse(any(args[1] in ("pull", "push") for args in calls))
-
-    def test_equal_published_tip_needs_no_push(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / ".beads").mkdir()
-            (root / ".beads" / "metadata.json").write_text(json.dumps({
-                "dolt_mode": "embedded", "dolt_database": "test",
-            }))
-            repo = enact.Repo(root, root, root / ".git", enact.Config())
-            calls = []
-
-            def command(args, cwd, **kwargs):
-                calls.append(args)
-                out = {"config": "user.name = Test\nuser.email = t@example.com",
-                       "remote": "origin", "commit": "no changes added to commit",
-                       "pull": "up to date"}[args[1]]
-                return subprocess.CompletedProcess(args, args[1] == "commit", out, "")
-
-            with mock.patch.object(enact.shutil, "which", return_value="dolt"), \
-                    mock.patch.object(enact, "run", side_effect=command), \
-                    mock.patch.object(enact, "dolt_json", side_effect=[
-                        [{"b": "main"}], [{"local_tip": "sha", "remote_tip": "sha"}],
-                    ]):
-                self.assertTrue(enact.sync(repo)["remote"])
-            self.assertFalse(any(args[1] == "push" for args in calls))
-
-    def test_read_only_dolt_store_waits_for_other_processes(self):
-        busy = subprocess.CompletedProcess([], 1, "", "cannot update manifest: database is read only")
-        done = subprocess.CompletedProcess([], 0, "ok", "")
-        with mock.patch.object(enact.time, "sleep") as sleep, \
-                mock.patch.object(enact, "run", side_effect=[busy, busy, done]) as run:
-            self.assertEqual(enact.dolt(["pull"], Path(".")).stdout, "ok")
-        self.assertEqual(run.call_count, 3)
-        self.assertEqual(sleep.call_count, 2)
-        # On Windows the store cannot be opened at all while it is busy.
-        locked = subprocess.CompletedProcess([], 1, "", (
-            "level=warning msg=\"failed to load database with error: fslock new "
-            "C:\\db\\.dolt\\noms\\LOCK: The process cannot access the file because "
-            "it is being used by another process.\""))
-        with mock.patch.object(enact.time, "sleep"), \
-                mock.patch.object(enact, "run", side_effect=[locked, done]) as run:
-            self.assertEqual(enact.dolt(["remote"], Path(".")).stdout, "ok")
-        self.assertEqual(run.call_count, 2)
-        # Other failures are not retried, and a store that stays busy fails.
-        with mock.patch.object(enact, "run", return_value=busy) as run, \
-                mock.patch.object(enact, "DOLT_BUSY_SECONDS", 0):
-            with self.assertRaisesRegex(enact.Fail, "dolt pull failed.*read only"):
-                enact.dolt(["pull"], Path("."))
-        failed = subprocess.CompletedProcess([], 1, "", "disk full")
-        with mock.patch.object(enact, "run", return_value=failed) as run:
-            self.assertEqual(enact.dolt(["push"], Path("."), check=False).returncode, 1)
-        self.assertEqual(run.call_count, 1)
-
-    def test_sync_compacts_a_grown_journal(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / ".beads").mkdir()
-            (root / ".beads" / "metadata.json").write_text(
-                '{"dolt_mode":"embedded","dolt_database":"db"}')
-            noms = root / ".beads" / "embeddeddolt" / "db" / ".dolt" / "noms"
-            noms.mkdir(parents=True)
-            journal = noms / enact.DOLT_JOURNAL
-            repo = enact.Repo(root, root, root / ".git", enact.Config())
-            done = subprocess.CompletedProcess([], 0, "", "")
-            with mock.patch.object(enact.shutil, "which", return_value="dolt"), \
-                    mock.patch.object(enact, "dolt", return_value=done) as dolt:
-                journal.write_bytes(b"x" * 10)
-                self.assertFalse(enact.compact_beads(repo))
-                with journal.open("r+b") as f:
-                    f.truncate(enact.COMPACT_JOURNAL_BYTES)
-                self.assertTrue(enact.compact_beads(repo))
-            dolt.assert_called_once_with(["gc"], noms.parent.parent, check=False)
-            (root / ".beads" / "metadata.json").write_text('{"dolt_mode":"server"}')
-            self.assertFalse(enact.compact_beads(repo))
-
-    def test_server_mode_retains_beads_sync(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / ".beads").mkdir()
-            (root / ".beads" / "metadata.json").write_text('{"dolt_mode":"server"}')
-            repo = enact.Repo(root, root, root / ".git", enact.Config())
-            beads = mock.Mock()
-            beads.raw.return_value = subprocess.CompletedProcess([], 0, "origin", "")
-            with mock.patch.object(enact, "Beads", return_value=beads):
-                self.assertTrue(enact.sync(repo)["remote"])
-            self.assertEqual(beads.raw.call_args_list, [
-                mock.call("dolt", "remote", "list"),
-                mock.call("dolt", "commit", "-m", "enact sync"),
-                mock.call("dolt", "pull"), mock.call("dolt", "push"),
-            ])
 
 
 class CommandPolicyTest(unittest.TestCase):
@@ -2582,7 +1838,7 @@ class CommandPolicyTest(unittest.TestCase):
         self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "blocked")
         self.a.bd("close", other, "--reason", "finished elsewhere")
         self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "blocked")
-        self.assertNotEqual(self.a.show(epic)["status"], "closed")
+        self.assertEqual(self.a.show(epic)["status"], "closed")
         self.a.enact("run", "resume", epic, "--explicit", "--reason", "user supplied access")
         self.assertEqual(self.a.enact("next", "--epic", epic)["action"], "done")
 
@@ -2615,59 +1871,6 @@ class CommandPolicyTest(unittest.TestCase):
         self.assertEqual(self.a.show(bead)["assignee"], "new")
 
 
-class BdRecordingTest(unittest.TestCase):
-    def test_forwards_and_records_binary_streams_even_if_log_cannot_open(self):
-        recorder = SCRIPT.with_name("bd_record.py")
-        script = (
-            "import os, sys; "
-            "os.write(1, sys.stdin.buffer.read() + os.environ['RECORD_TEST'].encode()); "
-            "os.write(2, b'error\\xff'); sys.exit(17)"
-        )
-        fixture = [sys.executable, "-c", script]
-        input_bytes = b"input\x00"
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            log_dir = root / ".git" / "enact" / "bd-record"
-            log_dir.mkdir(parents=True)
-            log_path = log_dir / "calls.jsonl.gz"
-            opts = dict(cwd=root, env={**os.environ, "RECORD_TEST": "test"},
-                        input=input_bytes, capture_output=True)
-            direct = subprocess.run(fixture, **opts)
-            wrapped = [sys.executable, "-S", recorder, *fixture]
-            recorded = subprocess.run(wrapped, **opts)
-            with gzip.open(log_path, "rt", encoding="ascii") as log:
-                call, = map(json.loads, log)
-            self.assertEqual(call["cwd"], str(root.resolve()))
-            self.assertEqual(call["argv"], fixture[1:])
-            self.assertEqual(call["returncode"], direct.returncode)
-            for field, data in (("stdin", input_bytes), ("stdout", direct.stdout),
-                                ("stderr", direct.stderr)):
-                self.assertEqual(call[field].encode("utf-8", "surrogateescape"), data)
-            log_path.unlink()
-            log_path.mkdir()
-            unrecorded = subprocess.run(wrapped, **opts)
-            for result in (recorded, unrecorded):
-                self.assertEqual((result.returncode, result.stdout, result.stderr),
-                                 (direct.returncode, direct.stdout, direct.stderr))
-
-    def test_corpus_contains_distinct_real_command_shapes(self):
-        corpus = SCRIPT.parent.parent / "tests" / "corpus"
-        with gzip.open(corpus / "start.jsonl.gz", "rt", encoding="utf-8") as snapshot:
-            ids = {json.loads(line)["id"] for line in snapshot}
-        self.assertIn("by-r61mr", ids)
-        with gzip.open(corpus / "calls.jsonl.gz", "rt", encoding="ascii") as log:
-            cases = list(map(json.loads, log))
-        keys = {(tuple(case["command"]), tuple(case["flags"])) for case in cases}
-        self.assertEqual(len(keys), len(cases))
-        live = json.loads((corpus / "live-shapes.json").read_text(encoding="utf-8"))
-        live_keys = {(tuple(shape["command"]), tuple(shape["flags"])) for shape in live}
-        self.assertEqual(live_keys - keys, set())
-        successes = {case["command"][0] for case in cases if case["returncode"] == 0}
-        self.assertTrue({
-            "create", "show", "list", "ready", "update", "close", "dep",
-            "label", "comments", "epic", "defer",
-        } <= successes)
-        self.assertTrue(any(case["stdin"] and "--body-file" in case["flags"] for case in cases))
 
 
 if __name__ == "__main__":

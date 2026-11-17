@@ -4,16 +4,14 @@
   lives in `scripts/enact.py`. The ticket service is a TypeScript Cloudflare
   Worker in `server/`. Its ticket store and coordination APIs live in
   `server/src/`, its schema in `server/contract/` and simulator tests in
-  `server/tests/`. `cli/src/` builds both `tk` and the `bd` shim.
-  `scripts/cutover.py` runs the operator gates. `cli/tests/shim.rs` drives
-  the replay and isolated cutover tests.
+  `server/tests/`. `cli/src/` builds the native ticket client.
 - Skill and role files are markdown wrapped at 80 columns. Keep
   `skills/enact/SKILL.md` under ~500 lines and each role file around 100.
 - The helper must stay stdlib-only, Python 3.11+, and work on macOS, Linux
   and Windows (no shell-specific syntax, `pathlib` everywhere).
 - Fast and slow check commands live in `.enact.toml`. Both run the Worker
   and Rust tests. Fast CI compiles the Python helper and runs its unit tests.
-  Slow CI also exercises real git, bd and Dolt in temporary directories.
+  Slow CI exercises real Git and the isolated ticket Worker.
   Budget: 2-3 minutes for slow CI; cut or redesign scenarios to stay within it.
 - For focused Worker checks, run `npm ci` and `npm test` in `server/` with
   Node 22.12 or later. Run Wrangler there with `npx wrangler`. Worker tests
@@ -21,11 +19,9 @@
 - For focused Rust checks, run `npm ci` and `npm run pretest` in `server/`, then
   run `cargo test --locked` in `cli/`. The CLI tests launch Wrangler locally.
   Build the release executable with `cargo build --locked --release`.
-- Live Enact and Beryl use Beads. For simulator work, set
-  `[tickets].project` and `[tickets].url` to a local Worker in an isolated
-  Git checkout. Linked worktrees inherit enrollment from the main checkout.
-  See [local ticket verification](README.md#local-ticket-verification)
-  for the commands and slow-CI fixtures.
+- Set `[tickets].project` and `[tickets].url` in the main checkout's
+  `.enact.toml`. Linked worktrees inherit enrollment from the main checkout.
+  Use a local Worker in isolated fixtures.
 - Deliver through Enact's own flow, never by committing or pushing to
   `master`: `python3 scripts/enact.py worktree create <name>` from the main
   checkout, commit in the printed worktree, then

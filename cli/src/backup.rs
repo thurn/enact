@@ -1,16 +1,10 @@
-mod source;
-
 use crate::client::{Client, Failure, Result, usage};
 use crate::commands::export_pages;
 use serde_json::{Value, json};
-use source::{
-    FrozenBeads, Histories, Tickets, array, canonical_id, convert, field, legacy, lines,
-    lines_with, prefix,
-};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{BufReader, Cursor};
-use std::path::{Path, PathBuf};
+use std::io::{BufRead, BufReader, Cursor};
+use std::path::Path;
 
 const BATCH_SIZE: usize = 20;
 // A changed batch writes one sequence row, one feed row and one usage row.
@@ -18,52 +12,6 @@ const BATCH_OVERHEAD: u64 = 3;
 // The server caps writes at 90%. Leave room inside that cap for normal
 // operations, including the shared sequence writes in the budget table.
 const NORMAL_ROWS: u64 = 36_000;
-
-pub fn import(
-    client: &Client,
-    file: Option<PathBuf>,
-    frozen_beads: Option<PathBuf>,
-    history_dir: Option<PathBuf>,
-    row_budget: Option<u64>,
-    since_frozen_beads: Option<PathBuf>,
-    fence: Value,
-) -> Result<Value> {
-    let mut expected = if let Some(root) = frozen_beads {
-        frozen_snapshots(client, &root)?
-    } else {
-        let file = file
-            .as_deref()
-            .ok_or_else(|| usage("missing Beads export"))?;
-        let source = read_file(file)?;
-        cached_snapshots(&source, history_dir, &client.project)?
-    };
-    if let Some(baseline) = since_frozen_beads {
-        if state_snapshot(client)?["cutover"] != "after" {
-            return Err(usage("legacy reconciliation requires completed cutover"));
-        }
-        let baseline = frozen_snapshots(client, &baseline)?;
-        let removed: Vec<_> = baseline
-            .keys()
-            .filter(|id| !expected.contains_key(*id))
-            .collect();
-        if !removed.is_empty() {
-            return Err(usage(format!(
-                "Legacy tickets missing during reconciliation: {removed:?}"
-            )));
-        }
-        // Compare against the archive instead of updated_at: a write made
-        // before the pause may arrive after it, and audit-only edits can
-        // leave updated_at unchanged.
-        expected.retain(|id, ticket| baseline.get(id) != Some(ticket));
-    }
-    let actual = server_snapshots(client)?;
-    upload(client, expected, &actual, row_budget, &fence)
-}
-
-fn frozen_snapshots(client: &Client, root: &Path) -> Result<Tickets> {
-    let frozen = FrozenBeads::open(root, &client.project)?;
-    frozen.snapshots(&frozen.export()?)
-}
 
 pub fn restore(client: &Client, file: &Path, row_budget: Option<u64>) -> Result<Value> {
     let input = File::open(file).map_err(|error| usage(format!("{}: {error}", file.display())))?;
@@ -85,11 +33,6 @@ pub fn restore(client: &Client, file: &Path, row_budget: Option<u64>) -> Result<
         }
     }
     upload(client, expected, &actual, row_budget, &json!({}))
-}
-
-fn read_file(file: &Path) -> Result<Tickets> {
-    let input = File::open(file).map_err(|error| usage(format!("{}: {error}", file.display())))?;
-    lines(BufReader::new(input))
 }
 
 fn upload(
@@ -234,23 +177,6 @@ fn count(value: &Value, key: &str) -> Result<u64> {
         .ok_or_else(|| usage(format!("missing or invalid {key}")))
 }
 
-fn cached_snapshots(
-    source: &Tickets,
-    directory: Option<PathBuf>,
-    project: &str,
-) -> Result<Tickets> {
-    let prefix = prefix(source)?;
-    let mut converted = convert(source, &prefix)?;
-    let history = Histories::open(directory, project)?;
-    // Work serially at lower priority so the one-time history scan does not
-    // compete with concurrent Enact operations on the Dolt store.
-    for (legacy, row) in source {
-        let id = canonical_id(legacy, &prefix)?;
-        history.attach(row, converted.get_mut(&id).expect("converted source"))?;
-    }
-    Ok(converted)
-}
-
 fn server_snapshots(client: &Client) -> Result<Tickets> {
     let mut tickets = Tickets::new();
     export_pages(client, |page| {
@@ -341,149 +267,40 @@ fn estimate(ticket: &Value, previous: &Value) -> Result<u64> {
         + changed_rows(ticket, previous, "history", "seq")?)
 }
 
-pub fn compare(
-    client: &Client,
-    frozen_beads: Option<PathBuf>,
-    history_dir: Option<PathBuf>,
-) -> Result<Value> {
-    let ready_args = ["ready", "--json", "--brief", "--limit", "0"];
-    let (source, expected, ready) = if let Some(root) = frozen_beads {
-        let frozen = FrozenBeads::open(&root, &client.project)?;
-        let source = frozen.export()?;
-        let expected = frozen.snapshots(&source)?;
-        (source, expected, frozen.read(&ready_args)?)
-    } else {
-        let source = lines(Cursor::new(legacy(&["export"], false)?))?;
-        let expected = cached_snapshots(&source, history_dir, &client.project)?;
-        (source, expected, legacy(&ready_args, false)?)
-    };
-    let prefix = prefix(&source)?;
-    let actual = server_snapshots(client)?;
-    let ready: Vec<Value> = serde_json::from_slice(&ready).map_err(usage)?;
-    let ready = ready
-        .iter()
-        .map(|row| canonical_id(field(row, "id")?, &prefix))
-        .collect::<Result<BTreeSet<_>>>()?;
-    let graph = client
-        .get(&client.url(&["graph"], &[]), None, client.retry_for)?
-        .json()?;
-    compare_snapshots(&expected, &actual, &ready, array(&graph, "tickets")?)
+type Tickets = BTreeMap<String, Value>;
+
+fn lines(input: impl BufRead) -> Result<Tickets> {
+    lines_with(input, |_| {})
 }
 
-fn compare_snapshots(
-    expected: &Tickets,
-    actual: &Tickets,
-    ready: &BTreeSet<String>,
-    graph: &[Value],
-) -> Result<Value> {
-    let mut server_graph = BTreeMap::new();
-    for ticket in graph {
-        let id = field(ticket, "id")?.to_owned();
-        let is_ready = ticket["ready"]
-            .as_bool()
-            .ok_or_else(|| usage(format!("{id}: missing graph readiness")))?;
-        if server_graph
-            .insert(id.clone(), (is_ready, ticket))
-            .is_some()
-        {
-            return Err(usage(format!("server graph repeated ticket {id}")));
+fn lines_with(input: impl BufRead, prepare: impl Fn(&mut Value)) -> Result<Tickets> {
+    let mut tickets = BTreeMap::new();
+    for (index, line) in input.lines().enumerate() {
+        let line = line.map_err(usage)?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut ticket: Value = serde_json::from_str(&line)
+            .map_err(|error| usage(format!("line {}: {error}", index + 1)))?;
+        prepare(&mut ticket);
+        let id = field(&ticket, "id")?.to_owned();
+        if tickets.insert(id.clone(), ticket).is_some() {
+            return Err(usage(format!("duplicate ticket {id}")));
         }
     }
+    Ok(tickets)
+}
 
-    // Derive the expected rule 5 blockers from the source hierarchy. A
-    // reparented ticket can have a different parent from its dotted ID.
-    let mut live_children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for (id, ticket) in expected {
-        if ticket["status"] != "closed"
-            && let Some(parent) = ticket["parent"].as_str()
-        {
-            live_children.entry(parent).or_default().push(id);
-        }
-    }
+fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
+    value[key]
+        .as_str()
+        .ok_or_else(|| usage(format!("missing or invalid {key}")))
+}
 
-    let ids = expected
-        .keys()
-        .chain(actual.keys())
-        .chain(ready.iter())
-        .chain(server_graph.keys())
-        .collect::<BTreeSet<_>>();
-    let mut differences = Vec::new();
-    let mut expected_readiness_differences = Vec::new();
-    let mut output = Vec::new();
-    for id in ids {
-        let mut changes = match (expected.get(id), actual.get(id)) {
-            (Some(before), after) => difference(before, after.unwrap_or(&Value::Null)),
-            (None, _) => vec!["missing from Beads"],
-        };
-        let server_row = server_graph.get(id);
-        if actual
-            .get(id)
-            .is_some_and(|ticket| ticket["status"] != "closed")
-            != server_row.is_some()
-        {
-            changes.push("graph membership");
-        }
-        let beads = ready.contains(id);
-        let server = server_row.is_some_and(|(is_ready, _)| *is_ready);
-        let children = live_children
-            .get(id.as_str())
-            .map_or(&[][..], Vec::as_slice);
-        let projected = beads && children.is_empty();
-        // Only rule 5 may explain the difference. Any additional server
-        // blocker on a Beads-ready container still requires investigation.
-        let expected_blockers: Vec<_> = children
-            .iter()
-            .map(|child| json!({"id": child, "rule": 5}))
-            .collect();
-        let expected_difference = beads
-            && !server
-            && !children.is_empty()
-            && expected
-                .get(id)
-                .is_some_and(|ticket| ticket["status"] == "open")
-            && server_row.is_some_and(|(_, ticket)| {
-                ticket["blocked_by"].as_array() == Some(&expected_blockers)
-            });
-        if expected_difference {
-            expected_readiness_differences.push(json!({
-                "id": id, "beads": beads, "server": server, "live_children": children,
-            }));
-        }
-        let readiness_differs = (beads != server || projected != server) && !expected_difference;
-        if !changes.is_empty() || readiness_differs {
-            let mut description = changes.join(", ");
-            if readiness_differs {
-                if !description.is_empty() {
-                    description.push_str(", ");
-                }
-                description.push_str(&format!(
-                    "ready: Beads {beads}, projected {projected}, server {server}"
-                ));
-            }
-            output.push(format!("T{id}: {description}"));
-            differences.push(json!({
-                "id": id, "fields": changes,
-                "ready": readiness_differs.then(|| json!({
-                    "beads": beads, "projected": projected, "server": server,
-                    "blocked_by": server_row.and_then(|(_, ticket)| ticket.get("blocked_by")),
-                })),
-            }));
-        }
-    }
-    let result = json!({
-        "compared": expected.len(),
-        "differences": differences,
-        "expected_readiness_differences": expected_readiness_differences,
-    });
-    if output.is_empty() {
-        Ok(result)
-    } else {
-        let mut failure = usage(format!(
-            "{} ticket(s) differ\n{}",
-            output.len(),
-            output.join("\n")
-        ));
-        failure.body = Some(result);
-        Err(failure)
+fn array<'a>(value: &'a Value, key: &str) -> Result<&'a [Value]> {
+    match &value[key] {
+        Value::Null => Ok(&[]),
+        Value::Array(items) => Ok(items),
+        _ => Err(usage(format!("invalid {key}, expected a JSON array"))),
     }
 }

@@ -166,11 +166,8 @@
       "events": "[--kind K] [--since SEQ]",
       "wait": "ready [--ancestor ID] [--label L]... | ticket <id> [--status S] | lease <name> | change [--since SEQ] --timeout S",
       "state": "[--set-cutover before|paused|after [--pause-id ID]]",
-      "drain": "",
       "export": "",
-      "import": "(<bd-export.jsonl> [--history-dir D] | --frozen-beads CHECKOUT) [--row-budget N] [--before-cutover | --pause-id ID | --since-frozen-beads CHECKOUT]",
       "restore": "<tickets.jsonl> [--row-budget N]",
-      "compare": "[--history-dir D | --frozen-beads CHECKOUT]",
       "register": "",
       "bench": "",
       "version": ""
