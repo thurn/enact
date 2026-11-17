@@ -42,8 +42,12 @@ def read_gzip(path):
 
 
 def run(binary, args, directory, env, stdin=None):
-    return subprocess.run([binary, *args], cwd=directory, env=env, input=stdin,
-                          capture_output=True, text=True, encoding="utf-8")
+    # The recorded stdin is byte-exact, including line endings on Windows.
+    data = None if stdin is None else stdin.encode("utf-8", "surrogateescape")
+    reply = subprocess.run([binary, *args], cwd=directory, env=env, input=data, capture_output=True)
+    stdout, stderr = (stream.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+                      for stream in (reply.stdout, reply.stderr))
+    return subprocess.CompletedProcess(reply.args, reply.returncode, stdout, stderr)
 
 
 def ok(binary, args, directory, env):
@@ -546,15 +550,19 @@ def migration_compare(tk, fake, directory, env, address):
 
 @contextmanager
 def simulator(directory):
-    worker = subprocess.Popen(["node", HERE / "shim-simulator.mjs"], cwd=directory,
-                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-    try:
-        address = worker.stdout.readline().strip()
-        assert address.startswith("http://"), address
-        yield address
-    finally:
-        worker.stdin.close()
-        worker.wait(timeout=45)
+    with subprocess.Popen(["node", HERE / "shim-simulator.mjs"], cwd=directory,
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True) as worker:
+        try:
+            address = worker.stdout.readline().strip()
+            assert address.startswith("http://"), address
+            yield address
+        finally:
+            worker.stdin.close()
+            try:
+                worker.wait(timeout=45)
+            except subprocess.TimeoutExpired:
+                worker.kill()
+                raise
 
 
 def migration_audit(tk, directory, env):
@@ -563,7 +571,8 @@ def migration_audit(tk, directory, env):
     legacy = Path(os.environ.get("ENACT_REAL_BD") or (paired if paired.is_file() else on_path))
     assert legacy.is_file(), "the real Beads CLI is required for the audit regression"
     assert shutil.which("dolt"), "the Dolt CLI is required for the audit regression"
-    env = {**env, "ENACT_REAL_BD": str(legacy)}
+    env = {**env, "ENACT_REAL_BD": str(legacy), "DOLT_DISABLE_EVENT_FLUSH": "1",
+           "BD_DISABLE_METRICS": "1", "BD_DISABLE_EVENT_FLUSH": "1"}
     live = directory / "live"
     frozen = directory / "frozen"
     live.mkdir()
@@ -653,7 +662,8 @@ def main():
         help_output.mkdir()
         for case in read_gzip(args.corpus / "calls.jsonl.gz"):
             if case["argv"][-1:] == ["--help"] and case["command"] != ["export"]:
-                (help_output / "_".join(case["argv"][:-1])).write_text(case["stdout"], encoding="utf-8")
+                (help_output / "_".join(case["argv"][:-1])).write_text(
+                    case["stdout"], encoding="utf-8", newline="\n")
         source = directory / "legacy.rs"
         source.write_text("""
 use std::io::Read;

@@ -38,9 +38,12 @@ fn legacy_in(arguments: &[&str], low_priority: bool, root: Option<&Path>) -> Res
                 command.env_remove(key);
             }
         }
+        // Resolve from the child's working directory. On Windows, bd cannot
+        // open an embedded database through the verbatim path from canonicalize.
         command
             .current_dir(root)
-            .env("BEADS_DIR", root.join(".beads"));
+            .env("BEADS_DIR", ".beads")
+            .env("BD_DISABLE_EVENT_FLUSH", "1");
     }
     let output = command
         .args(["--readonly", "--sandbox"])
@@ -333,6 +336,8 @@ impl FrozenBeads {
         // adding and removing a label can leave the export byte-for-byte equal.
         let output = Command::new("dolt")
             .current_dir(&self.database)
+            // A detached uploader can keep the snapshot directory open on Windows.
+            .env("DOLT_DISABLE_EVENT_FLUSH", "1")
             .args([
                 "sql",
                 "--disable-auto-gc",

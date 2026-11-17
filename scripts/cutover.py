@@ -14,7 +14,7 @@ import time
 import uuid
 
 from enact import (ENACT_ROOT, Fail, Repo, dolt_db_dir, emit, find_repo, log,
-                   run, ticket_binary, ticket_process, write_json)
+                   rmtree, run, ticket_binary, ticket_process, write_json)
 
 MACHINE_WINDOW = dt.timedelta(minutes=10)
 REPLAY_WINDOW = dt.timedelta(days=3)
@@ -229,7 +229,7 @@ def reconcile(repo: Repo, archive: Path, receipt: dict, row_budget: int | None) 
     log(f"Reconciliation snapshot: {late}")
     freeze(repo, late)
     result = import_frozen(repo, late, row_budget, "--since-frozen-beads", str(archive / "frozen"))
-    shutil.rmtree(late)
+    rmtree(late)
     return result
 
 

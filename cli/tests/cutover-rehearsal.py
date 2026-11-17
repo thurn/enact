@@ -1,4 +1,4 @@
-"""Exercise the fleet switch with real Beads, Dolt Git remotes, and Wrangler."""
+"""Exercise the fleet switch with real Beads, Dolt Git remotes, and Miniflare."""
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
@@ -254,14 +254,17 @@ def main():
     with tempfile.TemporaryDirectory(prefix="enact-cutover-") as scratch:
         directory = Path(scratch)
         gitconfig = directory / "gitconfig"
-        gitconfig.write_text("[user]\nname = Rehearsal\nemail = rehearsal@example.com\n")
+        # Dolt's Git remote can create refs beyond MAX_PATH inside the fixture.
+        gitconfig.write_text("[user]\nname = Rehearsal\nemail = rehearsal@example.com\n"
+                             "[core]\nlongpaths = true\n")
         home = directory / "legacy-home"
         home.mkdir()
         env = {key: value for key, value in os.environ.items()
                if not key.upper().startswith(("BEADS_", "ENACT_"))}
         env.update({"GIT_CONFIG_GLOBAL": str(gitconfig), "GIT_CONFIG_NOSYSTEM": "1",
                     "HOME": str(home), "APPDATA": str(home), "USERPROFILE": str(home),
-                    "DOLT_ROOT_PATH": str(home), "BEADS_NO_METRICS": "1",
+                    "DOLT_ROOT_PATH": str(home), "DOLT_DISABLE_EVENT_FLUSH": "1",
+                    "BD_DISABLE_METRICS": "1", "BD_DISABLE_EVENT_FLUSH": "1",
                     "ENACT_TK": str(tk), "ENACT_NO_SELF_UPDATE": "1",
                     "ENACT_SHIM_HELPER": str(SCRIPTS / "enact.py"), "ENACT_SHIM_PYTHON": sys.executable,
                     "PYTHONPATH": str(SCRIPTS), "CUTOVER_LEGACY": str(legacy)})

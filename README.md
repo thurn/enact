@@ -228,7 +228,7 @@ with `npm ci` and `npm run pretest` in Enact's `server/` directory.
 2. Prepare a Beryl compatibility corpus with `start.jsonl.gz` and
    `calls.jsonl.gz` from the same recording window. Use it for both
    projects. See [recording Beads calls](docs/design.md#recording-beads-calls-for-the-ticket-cutover-2026-11-16).
-   The cutover runs the replay locally with Wrangler and requires a corpus
+   The cutover runs the replay locally with Miniflare and requires a corpus
    recorded within three days. Post a `tk event machine '{"enrolled":true}'`
    from each enrolled machine shortly before starting. For Beryl, move viewers
    to the ticket dashboard and stop the Scotty export pollers.

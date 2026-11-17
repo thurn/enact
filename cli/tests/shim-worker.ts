@@ -1,5 +1,5 @@
 // Provision only the test token here. Replay uses the production API, storage
-// and feed through Wrangler's HTTP server.
+// and feed through Miniflare's HTTP server.
 import worker, {ProjectTickets as Tickets} from "../../server/src/index";
 
 export class ProjectTickets extends Tickets {
