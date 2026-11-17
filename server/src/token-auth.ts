@@ -1,4 +1,3 @@
-import type {TicketStorage} from "./ticket-runtime";
 import type {UsageMeter} from "./project-usage";
 import type {TicketStore} from "./ticket-store";
 import {ApiError, bad} from "./ticket-types";
@@ -60,16 +59,14 @@ export class TokenRegistry {
   private lastAttempt?: number;
 
   constructor(
-    private readonly storage: TicketStorage,
     private readonly store: TicketStore,
     private readonly usage: () => UsageMeter,
     private readonly writable: () => boolean,
-    private readonly local: boolean,
   ) {}
 
   private machine(hash: string) {
-    const read = () => JSON.parse(this.store.meta("token_hashes") ?? "[]") as Tokens;
-    return registeredMachine(this.local ? this.accepted ??= read() : read(), hash);
+    this.accepted ??= JSON.parse(this.store.meta("token_hashes") ?? "[]") as Tokens;
+    return registeredMachine(this.accepted, hash);
   }
 
   async lookup(repository: string | undefined, hash: string): Promise<string | null | undefined> {
@@ -78,12 +75,9 @@ export class TokenRegistry {
 
     if (!this.pending) {
       const now = Date.now();
-      const lastAttempt = this.local ? this.lastAttempt : this.store.meta("token_fetched_at");
-      if (lastAttempt !== undefined && now - Number(lastAttempt) < refreshInterval) return;
-      // Record attempts before sending them so even errors or eviction cannot
-      // cause a burst of requests to GitHub.
-      if (this.local) this.lastAttempt = now;
-      else this.save("token_fetched_at", String(now));
+      if (this.lastAttempt !== undefined && now - this.lastAttempt < refreshInterval) return;
+      // Throttle failed refreshes as well as successful ones.
+      this.lastAttempt = now;
       this.pending = this.refresh(repository).finally(() => { this.pending = undefined; });
     }
     await this.pending;
@@ -93,7 +87,6 @@ export class TokenRegistry {
   private async refresh(repository: string): Promise<void> {
     let accepted: Map<string, string> | undefined;
     try {
-      // GitHub's anonymous REST quota is shared by Cloudflare's egress IP.
       const response = await fetch(`https://github.com/${repository}.git/info/refs?service=git-upload-pack`, {
         headers: {Accept: advertisementType},
         redirect: "manual",
@@ -104,18 +97,10 @@ export class TokenRegistry {
     } catch {
       return;
     }
-    if (accepted) this.save("token_hashes", JSON.stringify(Object.fromEntries(accepted)));
-  }
-
-  private save(key: string, value: string): void {
-    if (!this.writable()) return;
-    this.storage.transactionSync(() => {
-      const usage = this.usage();
-      usage.check(1);
-      this.store.sql.exec("INSERT OR REPLACE INTO meta VALUES (?, ?)", key, value);
-      // The route accounts for the request separately from the cache writes.
-      usage.record(1, 0);
-    });
-    if (this.local && key === "token_hashes") this.accepted = JSON.parse(value) as Tokens;
+    if (!accepted || !this.writable()) return;
+    const tokens = Object.fromEntries(accepted);
+    this.store.sql.exec("INSERT OR REPLACE INTO meta VALUES ('token_hashes', ?)", JSON.stringify(tokens));
+    this.usage().record(1, 0);
+    this.accepted = tokens;
   }
 }

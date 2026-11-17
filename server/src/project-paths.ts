@@ -1,4 +1,4 @@
-/** Public paths can change without moving a project's Durable Object or ticket IDs. */
+/** Public paths can change without moving a project's database or ticket IDs. */
 export function storedProject(slug: string): string {
   return slug === "beryl" ? "by" : slug;
 }

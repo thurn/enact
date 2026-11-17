@@ -5,7 +5,7 @@ master_branch = "master"
 
 [tickets]
 project = "en"
-url = "https://tickets.thurn.workers.dev"
+url = "https://jarvis.tail4b0774.ts.net:8443"
 
 [checks]
 fast = """
@@ -16,9 +16,9 @@ fast = """
   cargo test --locked --manifest-path cli/Cargo.toml
 """
 slow = """
-  python3 -m unittest -q tests.test_unit tests.test_integration && \
   npm --prefix server ci --prefer-offline --no-audit --no-fund && \
   npm --prefix server test && \
+  python3 -m unittest -q tests.test_unit tests.test_integration && \
   cargo test --locked --manifest-path cli/Cargo.toml -- --include-ignored
 """
 

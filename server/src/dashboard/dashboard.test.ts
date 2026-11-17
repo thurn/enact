@@ -1,23 +1,25 @@
-import {env, exports} from "cloudflare:workers";
-import {runInDurableObject} from "cloudflare:test";
+import {projectFixture} from "../project-fixture";
 import {expect, test} from "vitest";
 
-const request = (path: string, init?: RequestInit) => exports.default.fetch("https://example.com/beryl" + path, init);
-const stub = env.TICKETS.getByName("by");
 const token = "dashboard-test-token";
 
-async function batch(op: object) {
-  const response = await request("/api/batch", {
-    method: "POST", headers: {Authorization: `Bearer ${token}`, "X-Actor": "Derek"},
-    body: JSON.stringify({ops: [op]}),
-  });
-  expect(response.status, await response.text()).toBe(200);
+function fixture() {
+  const stub = projectFixture("by");
+  const request = (path: string, init?: RequestInit) => stub.fetch("https://example.com/beryl" + path, init);
+  const batch = async (op: object) => {
+    const response = await request("/api/batch", {
+      method: "POST", headers: {Authorization: `Bearer ${token}`, "X-Actor": "Derek"},
+      body: JSON.stringify({ops: [op]}),
+    });
+    expect(response.status, await response.text()).toBe(200);
+  };
+  return {stub, request, batch};
 }
 
-async function seed() {
+async function seed(stub: ReturnType<typeof projectFixture>) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   const hash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  await runInDurableObject(stub, ({store}, {storage}) => storage.transactionSync(() => {
+  stub.inspect(({store}) => stub.storage.transactionSync(() => {
     store.sql.exec("INSERT INTO meta VALUES ('token_hashes', ?)", JSON.stringify([hash]));
     store.sql.exec(`
       WITH RECURSIVE numbers(n) AS (VALUES (1) UNION ALL SELECT n + 1 FROM numbers WHERE n < 4992)
@@ -25,7 +27,8 @@ async function seed() {
       SELECT CASE WHEN n <= 200 THEN printf('root%04d', n) ELSE printf('q44s.%d', n + 20) END,
              CASE WHEN n > 200 THEN 'q44s' END, printf('Fixture ticket %d', n),
              CASE WHEN n <= 20 THEN 'in_progress' WHEN n <= 200 THEN 'open' ELSE 'closed' END,
-             'Fixture issue body', '2026-11-15T19:30:00Z', '2026-11-15T19:30:00Z', 'Sim actor', n FROM numbers;
+             'Fixture issue body', '2026-11-15T19:30:00Z', '2026-11-15T19:30:00Z', 'Sim actor', n FROM numbers`);
+    store.sql.exec(`
       INSERT INTO tickets (id, parent, title, type, status, labels, body, created_at, updated_at, created_by, version)
       VALUES
         ('q44s', NULL, 'Dashboard epic', 'epic', 'open', '[]', 'Collect all dashboard work',
@@ -43,25 +46,34 @@ async function seed() {
         ('wait', NULL, 'Wait for deployment', 'task', 'deferred', '[]', '',
          '2026-11-16T19:30:00Z', '2026-11-16T19:30:00Z', 'Derek', 4992),
         ('path', NULL, 'Validate the old path', 'task', 'open', '[]', '',
-         '2026-11-16T19:30:00Z', '2026-11-16T19:30:00Z', 'Derek', 4992);
-      UPDATE tickets SET assignee = 'local_ff743711' WHERE id = 'q44s.7.24';
+         '2026-11-16T19:30:00Z', '2026-11-16T19:30:00Z', 'Derek', 4992)`);
+    store.sql.exec(`
+      UPDATE tickets SET assignee = 'local_ff743711' WHERE id = 'q44s.7.24'`);
+    store.sql.exec(`
       UPDATE tickets SET metadata = '{"_enact_beads":{"owner":"Old owner","started_at":"2026-11-16T12:00:00Z",
-        "dependencies":[{"type":"blocks"}]},"enact_host":"test-mac"}' WHERE id = 'wait';
-      INSERT INTO edges VALUES ('q44s.7.24', 'erro', 'blocks'), ('path', 'q44s.7.24', 'waits-for');
-      INSERT INTO aliases VALUES ('old', 'q44s.7.24');
+        "dependencies":[{"type":"blocks"}]},"enact_host":"test-mac"}' WHERE id = 'wait'`);
+    store.sql.exec(`
+      INSERT INTO edges VALUES ('q44s.7.24', 'erro', 'blocks'), ('path', 'q44s.7.24', 'waits-for')`);
+    store.sql.exec(`
+      INSERT INTO aliases VALUES ('old', 'q44s.7.24')`);
+    store.sql.exec(`
       INSERT INTO comments (ticket, n, author, at, text)
-      VALUES ('q44s.7.24', 1, 'Derek', '2026-11-16T20:00:00Z', 'See by-path.');
+      VALUES ('q44s.7.24', 1, 'Derek', '2026-11-16T20:00:00Z', 'See by-path.')`);
+    store.sql.exec(`
       INSERT INTO history VALUES ('q44s.7.24', 4993, 'Derek', '2026-11-16T19:30:00Z',
-                                  '{"title":["Render tickets","Render live tickets <safely>"]}');
+                                  '{"title":["Render tickets","Render live tickets <safely>"]}')`);
+    store.sql.exec(`
       INSERT INTO history VALUES ('q44s.7.24', 0, 'Derek', '2026-11-16T19:30:00Z',
-        '[{"actor":"Derek","created_at":"2026-11-15T19:30:00Z","event_type":"created"}]');
+        '[{"actor":"Derek","created_at":"2026-11-15T19:30:00Z","event_type":"created"}]')`);
+    store.sql.exec(`
       INSERT INTO meta VALUES ('seq', '4993');
     `);
   }));
 }
 
 test("renders project pages from 5,000 tickets and revalidates them", async () => {
-  await seed();
+  const {stub, request, batch} = fixture();
+  await seed(stub);
   const home = await request("/");
   expect(home.status).toBe(200);
   const homeBody = await home.text();
@@ -140,9 +152,10 @@ test("renders project pages from 5,000 tickets and revalidates them", async () =
 });
 
 test("home fragments show current project status independently of the ticket board", async () => {
+  const {stub, request} = fixture();
   const board = await request("/");
   const tag = board.headers.get("etag")!;
-  await runInDurableObject(stub, ({store}) => {
+  stub.inspect(({store}) => {
     const sql = store.sql;
     const at = new Date().toISOString();
     sql.exec(`
@@ -166,11 +179,11 @@ test("home fragments show current project status independently of the ticket boa
   const html = await status.text();
   for (const value of [
     "Casey", 'href="/beryl/tickets/Tlive">Tlive</a>', "Windows", "Failed", "01234567", "macOS", "Passed", "abcdef12",
-    "Merge holder", "Queued merger", "Writes paused", "UTC day", "Requests", "Rows written", "/100000",
+    "Merge holder", "Queued merger", "Writes paused", "UTC day", "Requests", "Rows written",
   ]) expect(html).toContain(value);
   expect(html).not.toMatch(/>Pat<|obsolete|<main|<script/);
 
-  await runInDurableObject(stub, ({store}) => {
+  stub.inspect(({store}) => {
     store.sql.exec(
       "INSERT INTO events VALUES (7, ?, 'ci', 'Mac runner', 'ci', ?)",
       new Date().toISOString(), '{"os":"MACOS","passed":false,"tip":"a1b2c3d4e5"}',
@@ -189,8 +202,10 @@ test("home fragments show current project status independently of the ticket boa
 });
 
 test("Beryl bookmarks redirect while both API paths reach the existing project", async () => {
+  const {stub, request} = fixture();
+  await seed(stub);
   for (const prefix of ["by", "beryl"]) {
-    const get = (path: string, method = "GET") => exports.default.fetch(`https://example.com/${prefix}${path}`, {method, redirect: "manual"});
+    const get = (path: string, method = "GET") => stub.fetch(`https://example.com/${prefix}${path}`, {method, redirect: "manual"});
     for (const path of ["", "/"]) {
       if (prefix === "beryl" && path === "/") continue;
       for (const method of ["GET", "HEAD"]) {
@@ -208,18 +223,11 @@ test("Beryl bookmarks redirect while both API paths reach the existing project",
     const ticket = await get("/api/tickets/Tq44s.7.24");
     expect(ticket.status).toBe(200);
     expect(await ticket.text()).toContain("Render live tickets <safely>");
-    const feed = await exports.default.fetch(`https://example.com/${prefix}/api/feed`, {headers: {Upgrade: "websocket"}});
-    expect(feed.status).toBe(101);
-    feed.webSocket!.accept();
-    feed.webSocket!.close();
   }
   const home = await request("/");
   const html = await home.text();
   expect(html).toContain('<title>Tickets · Beryl</title>');
   expect(html).toContain('<meta name="cirrus-root" content="/beryl/">');
   expect(html).not.toContain('href="/by/');
-  const enact = await exports.default.fetch("https://example.com/en/");
-  expect(enact.status).toBe(200);
-  expect(await enact.text()).toContain('<meta name="cirrus-root" content="/en/">');
-  expect((await exports.default.fetch("https://example.com/unconfigured/")).status).toBe(404);
+
 });

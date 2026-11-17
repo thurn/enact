@@ -11,7 +11,6 @@ import { ApiError, integer, object } from "./ticket-types";
 import { authorizeWrite, TokenRegistry, type Identity } from "./token-auth";
 
 import type {FeedTransport, TicketStorage} from "./ticket-runtime";
-import {migrationKey, migrationRequest} from "./ticket-migration";
 
 export type ProjectRuntime = {
   storage: TicketStorage;
@@ -19,9 +18,7 @@ export type ProjectRuntime = {
   usage(now: number): UsageMeter;
   getAlarm(): Promise<number | null>;
   setAlarm(at: number): Promise<void>;
-  local?: boolean;
   readOnly?: boolean;
-  migrationToken?: string;
 };
 
 export function apiPath(pathname: string) {
@@ -36,7 +33,6 @@ export class TicketProject {
   private readonly dashboard: Dashboard;
   private readonly deadlines: ProjectDeadlines;
   private readonly tokens: TokenRegistry;
-  private frozen?: string;
 
   constructor(readonly name: string, private readonly repository: string | undefined,
     private readonly runtime: ProjectRuntime) {
@@ -44,13 +40,12 @@ export class TicketProject {
     this.dashboard = new Dashboard(this.store.sql);
     this.feed = new ChangeFeed(runtime.feed, this.store);
     this.deadlines = new ProjectDeadlines(this.store);
-    this.tokens = new TokenRegistry(runtime.storage, this.store, () => runtime.usage(Date.now()),
-      () => this.writable(), runtime.local ?? false);
-    this.frozen = this.store.meta(migrationKey);
+    this.tokens = new TokenRegistry(this.store, () => runtime.usage(Date.now()),
+      () => this.writable());
   }
 
   writable(): boolean {
-    return !this.frozen && !this.runtime.readOnly;
+    return !this.runtime.readOnly;
   }
 
   async start(): Promise<void> {
@@ -64,23 +59,6 @@ export class TicketProject {
     // Retention must also catch up after a cold start.
     const day = new Date(at).toISOString().slice(0, 10);
     await this.scheduleAlarm(due || this.store.meta("last_retention_day") !== day ? at : next);
-  }
-
-  private async setFrozen(fence: string | undefined): Promise<void> {
-    this.runtime.storage.transactionSync(() => {
-      if (fence) this.store.sql.exec("INSERT INTO meta VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", migrationKey, fence);
-      else this.store.sql.exec("DELETE FROM meta WHERE key = ?", migrationKey);
-    });
-    this.frozen = fence;
-    if (fence) {
-      for (const socket of this.runtime.feed.sockets()) {
-        try {
-          socket.close(1012, "Ticket project frozen");
-        } catch {
-          // The project remains fenced even if a subscriber disconnected.
-        }
-      }
-    } else await this.reschedule(Date.now());
   }
 
   private state(usage: UsageMeter) {
@@ -102,7 +80,6 @@ export class TicketProject {
   }
 
   private write(project: string, path: string, lease: string | undefined, identity: Identity, body: unknown, now: number, usage: UsageMeter) {
-    usage.check(0);
     if (path === "/batch") {
       const {cutover, cutover_id} = cutoverState(this.store.sql);
       if (cutover === "paused" && cutover_id !== null) {
@@ -139,7 +116,8 @@ export class TicketProject {
         change = {previous, seq: write.seq, tickets: write.tickets, leases: write.leases, events: write.events};
       }
       const ceiling = path === "/import" ? object(body, "import").daily_row_ceiling : undefined;
-      this.record(usage, write.rowsWritten, change, ceiling === undefined ? undefined : integer(ceiling, "daily_row_ceiling"));
+      if (ceiling !== undefined) integer(ceiling, "daily_row_ceiling");
+      this.record(usage, write.rowsWritten, change);
       return reply;
     });
     if (path === "/import" && change) {
@@ -153,9 +131,8 @@ export class TicketProject {
     return {...(result ?? {body: this.state(usage)}), armDeadlines};
   }
 
-  private record(usage: UsageMeter, rows: number, change?: FeedChange, ceiling?: number, requests = 1): void {
+  private record(usage: UsageMeter, rows: number, change?: FeedChange, requests = 1): void {
     const total = rows + (change ? this.feed.record(change) : 0);
-    usage.check(total, ceiling);
     usage.record(total, requests);
   }
 
@@ -189,12 +166,8 @@ export class TicketProject {
     const project = apiProject ?? dashboard?.project;
     if (!project || project !== this.name) return Response.json({error: "Unknown route"}, {status: 404});
 
-    if (path === "/_sqlite-migration") {
-      return migrationRequest(request, this.runtime.migrationToken, this.store, () => this.frozen,
-        (fence) => this.setFrozen(fence));
-    }
-    if (this.frozen || (this.runtime.readOnly && request.method !== "GET" && request.method !== "HEAD")) {
-      return Response.json({error: "Ticket project frozen for migration"}, {status: 503});
+    if (!this.writable() && request.method !== "GET" && request.method !== "HEAD") {
+      return Response.json({error: "Ticket service is read-only"}, {status: 503});
     }
 
     const lease = /^\/leases\/(.+)$/.exec(path)?.[1];
@@ -210,7 +183,6 @@ export class TicketProject {
           // strand events in a project that then receives no more requests.
           await this.scheduleAlarm();
         }
-        if (!this.writable()) throw new ApiError(503, {error: "Ticket project frozen for migration"});
         const now = Date.now();
         const result = this.write(project, path, lease, identity, body, now, this.runtime.usage(now));
         accounted = true;
@@ -252,17 +224,10 @@ export class TicketProject {
   private wakeSnoozes(project: string, now: number, usage: UsageMeter): boolean {
     const ids = this.deadlines.dueSnoozes(now);
     if (!ids.length) return false;
-    try {
-      this.write(project, "/batch", undefined, {actor: "ticket deadline", machine: ""}, {
-        ops: ids.map((id) => ({op: "update", id: `${project}-${id}`, set: {status: "open", defer_until: null}})),
-      }, now, usage);
-      return true;
-    } catch (error) {
-      // Keep reads available when the daily write limit has been reached.
-      // The alarm will try again after the budget resets.
-      if (error instanceof ApiError && error.status === 429) return false;
-      throw error;
-    }
+    this.write(project, "/batch", undefined, {actor: "ticket deadline", machine: ""}, {
+      ops: ids.map((id) => ({op: "update", id: `${project}-${id}`, set: {status: "open", defer_until: null}})),
+    }, now, usage);
+    return true;
   }
 
   async alarm(): Promise<void> {
@@ -274,26 +239,18 @@ export class TicketProject {
     const write = new ProjectWrite(this.store.sql, now);
     const day = usage.state().day;
     let change: FeedChange | undefined;
-    try {
-      this.runtime.storage.transactionSync(() => {
-        usage.check(0);
-        if (this.store.meta("last_retention_day") !== day) {
-          write.pruneEvents();
-          write.write("INSERT OR REPLACE INTO meta VALUES ('last_retention_day', ?)", day);
-        }
-        if (tickets.length || leases.length) {
-          const previous = write.seq;
-          change = {previous, seq: write.advance(), tickets, leases};
-          write.rowsWritten += this.deadlines.acknowledge(now);
-        }
-        this.record(usage, write.rowsWritten, change, undefined, woke ? 0 : 1);
-      });
-    } catch (error) {
-      if (!(error instanceof ApiError && error.status === 429)) throw error;
-      if (!woke) usage.record();
-      await this.scheduleAlarm();
-      return;
-    }
+    this.runtime.storage.transactionSync(() => {
+      if (this.store.meta("last_retention_day") !== day) {
+        write.pruneEvents();
+        write.write("INSERT OR REPLACE INTO meta VALUES ('last_retention_day', ?)", day);
+      }
+      if (tickets.length || leases.length) {
+        const previous = write.seq;
+        change = {previous, seq: write.advance(), tickets, leases};
+        write.rowsWritten += this.deadlines.acknowledge(now);
+      }
+      this.record(usage, write.rowsWritten, change, woke ? 0 : 1);
+    });
     if (change) {
       this.store.advanceSequence(change.seq);
       this.feed.publish(change);

@@ -20,19 +20,6 @@ export default {
     if (body !== null && (auth !== "Bearer simulator-token" || !actor)) {
       return Response.json({ error: "auth required" }, { status: 401 });
     }
-    if (route === "feed") {
-      const { 0: client, 1: server } = new WebSocketPair();
-      server.accept();
-      server.addEventListener("message", ({ data }) => {
-        const { since } = JSON.parse(data);
-        if (since === 99) return;
-        closedProjects.add(project);
-        server.send(JSON.stringify({
-          seq: since + 1, tickets: ["k7mq"], leases: ["vizier/epic/one"], events: [], cutover: "before",
-        }));
-      });
-      return new Response(null, { status: 101, webSocket: client });
-    }
     if (project === "unsafe" || project === "retry") {
       const attempts = requests.filter((entry) => entry.project === project);
       if (attempts.length === 1) return new Response(null, { status: 503 });
@@ -71,3 +58,15 @@ export default {
     return Response.json(trace);
   },
 };
+
+export function openFeed(socket, request) {
+  const [, project] = new URL(request.url).pathname.split("/");
+  socket.on("message", (data) => {
+    const {since} = JSON.parse(data.toString());
+    if (since === 99) return;
+    closedProjects.add(project);
+    socket.send(JSON.stringify({
+      seq: since + 1, tickets: ["k7mq"], leases: ["vizier/epic/one"], events: [], cutover: "before",
+    }));
+  });
+}

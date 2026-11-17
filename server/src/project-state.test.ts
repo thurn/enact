@@ -1,15 +1,14 @@
-import {env} from "cloudflare:workers";
-import {evictDurableObject, runDurableObjectAlarm, runInDurableObject} from "cloudflare:test";
+import {projectFixture} from "./project-fixture";
 import {expect, test} from "vitest";
 import type {TicketSql} from "./ticket-runtime";
 import type {Ticket} from "./ticket-types";
 
 async function fixture(project: string) {
-  const stub = env.TICKETS.getByName(project);
+  const stub = projectFixture(project);
   const token = "project-state-test-token";
   const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   const hash = [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  const sql = <T>(action: (sql: TicketSql) => T) => runInDurableObject(stub, ({store}) => action(store.sql));
+  const sql = <T>(action: (sql: TicketSql) => T) => stub.inspect(({store}) => action(store.sql));
   await sql((db) => { db.exec("INSERT INTO meta VALUES ('token_hashes', ?)", JSON.stringify({[hash]: "test-machine"})); });
   const get = (path: string) => stub.fetch(`https://example.com/${project}/api${path}`);
   const post = (path: string, body: unknown, authorization = `Bearer ${token}`) =>
@@ -19,7 +18,7 @@ async function fixture(project: string) {
   const json = async <T>(response: Promise<Response>, status = 200): Promise<T> => {
     const reply = await response;
     expect(reply.status, await reply.clone().text()).toBe(status);
-    return reply.json<T>();
+    return reply.json() as Promise<T>;
   };
   return {stub, sql, get, post, json};
 }
@@ -30,9 +29,9 @@ test("concurrent acquires have one winner and preserve the queue through expiry 
   const take = (holder: string) => post(lease, {op: "acquire", holder, ttl_s: 180, payload: {host: holder}});
   const initial = await Promise.all(Array.from({length: 12}, (_, index) => take(`worker-${index}`)));
   expect(initial.map((response) => response.status).sort()).toEqual([200, ...Array(11).fill(409)]);
-  const winner = await initial.find((response) => response.ok)!.json<{holder: string}>();
+  const winner = await initial.find((response) => response.ok)!.json() as {holder: string};
   const replies = await Promise.all(initial.filter((response) => !response.ok)
-    .map((response) => response.json<{holder: string; position: number}>()));
+    .map((response) => response.json() as Promise<{holder: string; position: number}>));
   expect(replies.map(({position}) => position).sort((a, b) => a - b)).toEqual(Array.from({length: 11}, (_, index) => index + 1));
   expect(replies.every(({holder}) => holder === winner.holder)).toBe(true);
   const [listed] = await json<{name: string; waiters: {holder: string}[]}[]>(get("/leases"));
@@ -106,9 +105,9 @@ test("events use the authenticated identity, support filtered cursors, and expir
   expect((await post("/events", {kind: "usage"})).status).toBe(400);
   expect((await post("/events", {kind: "unknown", data: 0})).status).toBe(400);
   await sql((db) => { db.exec("UPDATE events SET at = '2000-01-01T00:00:00.000Z' WHERE seq = 1"); });
-  expect(await runDurableObjectAlarm(stub)).toBe(true);
+  expect(await stub.alarm()).toBe(true);
   expect(await json(get("/events?since=0"))).toEqual([second, third]);
-  expect(await runInDurableObject(stub, (_object, state) => state.storage.getAlarm())).not.toBeNull();
+  expect(await stub.getAlarm()).not.toBeNull();
 });
 
 test("managed cutover fences stale operators, native writes and staged imports", async () => {
@@ -131,36 +130,6 @@ test("managed cutover fences stale operators, native writes and staged imports",
   expect(await json(set("after", "new"))).toMatchObject({cutover: "after", cutover_id: "new"});
   expect((await post("/import", {...final, pause_id: "new"})).status).toBe(409);
   expect((await post("/import", staged)).status).toBe(409);
-});
-
-test("counts committed rows, rejects quota-breaking batches atomically, and resets by UTC day", async () => {
-  const {get, post, json, sql} = await fixture("daily-quota");
-  const batch = (title: string) => post("/batch", {ops: [{op: "create", fields: {title}, request_key: title}]});
-  expect(await json(get("/state"))).toMatchObject({requests: 1, rows_written: 1, limits: {requests: 100_000, rows_written: 100_000}});
-  await json(batch("first"));
-  await json(post("/leases/staging", {op: "acquire", holder: "worker", ttl_s: 180}));
-  // The create writes five data rows including the sequence. The lease
-  // writes two. Both changes write one feed row and one usage row. The
-  // first read writes the request reservation and the second uses it.
-  expect(await json(get("/state"))).toMatchObject({requests: 4, rows_written: 12, seq: 2});
-  const seed = (rows: number, requests: number, day: string) => sql((db) => {
-    db.exec("UPDATE meta SET value = ? WHERE key = 'daily_usage'", JSON.stringify({rows_written: rows, requests, day}));
-  });
-  const today = new Date().toISOString().slice(0, 10);
-  await seed(89_994, 4, today);
-  expect(await json(batch("rolled back"), 429)).toEqual({limit: "rows_written"});
-  expect(await json<Ticket[]>(get("/tickets"))).toHaveLength(1);
-  expect(await json(get("/state"))).toMatchObject({requests: 7, rows_written: 89_995, seq: 2});
-  await seed(89_996, 7, today);
-  // A lease release can use the last four rows, including the feed row.
-  await json(post("/leases/staging", {op: "release", holder: "worker"}));
-  expect(await json(get("/state"))).toMatchObject({rows_written: 90_000, seq: 3});
-  expect(await json(batch("at limit"), 429)).toEqual({limit: "rows_written"});
-  await seed(100, 90_000, today);
-  expect(await json(batch("requests exhausted"), 429)).toEqual({limit: "requests"});
-  await seed(90_000, 90_000, "2000-01-01");
-  expect(await json(get("/state"))).toMatchObject({day: today, requests: 1, rows_written: 1, seq: 3});
-  await json(batch("new day"));
 });
 
 async function readNdjson(response: Response): Promise<string> {
@@ -191,7 +160,7 @@ test("whole ticket snapshots export, replay idempotently, and reconcile changed 
   expect(first).toMatchObject({seq: 1, imported: 3});
   expect(first.rows_written).toBeGreaterThan(3);
   expect(await json(send(child, parent, other))).toEqual({seq: 1, imported: 0, rows_written: 0});
-  expect(await json(get("/state"))).toMatchObject({seq: 1, requests: 3, rows_written: first.rows_written + 2});
+  expect(await json(get("/state"))).toMatchObject({seq: 1, requests: 3, rows_written: first.rows_written + 1});
   expect(await json(get("/tickets/transfer-old"))).toMatchObject({id: "parent", children: ["parent.3"]});
   expect(await json(get("/tickets/parent.3?comments=1&history=1"))).toMatchObject({
     id: child.id, edges: child.edges, comments: child.comments, history: child.history,
@@ -219,40 +188,6 @@ test("whole ticket snapshots export, replay idempotently, and reconcile changed 
     expect((await send(imported("bad", {aliases: [alias]}))).status).toBe(400);
   }
   expect((await send(...Array.from({length: 201}, (_, n) => imported(`row${n}`)))).status).toBe(400);
-});
-
-test("read requests consume durable reservations without writing on every call", async () => {
-  const {get, json, sql, stub} = await fixture("request-reservations");
-  const before = await json<{requests: number; rows_written: number}>(get("/state"));
-  for (let n = 0; n < 8; n++) await json(get("/leases"));
-  expect(await json(get("/state"))).toMatchObject({
-    requests: before.requests + 9, rows_written: before.rows_written,
-  });
-  const ceiling = await sql((db) => db.exec<{ceiling: number}>(
-    "SELECT json_extract(value, '$.requests') AS ceiling FROM meta WHERE key = 'daily_usage'",
-  ).one().ceiling);
-  await evictDurableObject(stub);
-  expect(await json(get("/state"))).toMatchObject({
-    requests: ceiling + 1, rows_written: before.rows_written + 1,
-  });
-});
-
-test("honors an import ceiling atomically and resumes on a later UTC day", async () => {
-  const {get, post, json, stub} = await fixture("migration-budget");
-  const archived = imported("ci-deadbeef", {status: "closed", aliases: ["by-ci-deadbeef"]});
-  const active = imported("active");
-  const send = (tickets: object[], daily_row_ceiling: number) => post("/import", {tickets, daily_row_ceiling});
-  expect(await json(send([archived], 6))).toMatchObject({seq: 1, imported: 1});
-  const limited = await send([active], 6);
-  expect(limited.status).toBe(429);
-  expect(await limited.json()).toEqual({limit: "rows_written"});
-  expect((await get("/tickets/active")).status).toBe(404);
-  await runInDurableObject(stub, ({store}) => {
-    store.sql.exec("UPDATE meta SET value = json_set(value, '$.day', '2000-01-01') WHERE key = 'daily_usage'");
-  });
-  expect(await json(send([archived, active], 6))).toMatchObject({seq: 2, imported: 1});
-  expect(await readNdjson(await get("/export?after=ci-deadbeef"))).toBe("");
-  expect(await json(get("/tickets/by-ci-deadbeef"))).toMatchObject({id: "ci-deadbeef", status: "closed"});
 });
 
 test("exports stop at the page boundary and resume after its final canonical ID", async () => {
@@ -323,10 +258,8 @@ test("coordination changes invalidate a cached graph's batch precondition", asyn
 });
 
 test("lease, event and cutover operations stay within their SQLite row budgets", async () => {
-  const {get, post, json, sql} = await fixture("coordination-row-budget");
-  const countedRows = () => sql((db) => db.exec<{value: string}>(
-    "SELECT value FROM meta WHERE key = 'daily_usage'",
-  ).toArray().map(({value}) => JSON.parse(value).rows_written as number)[0] ?? 0);
+  const {get, post, json} = await fixture("coordination-row-budget");
+  const countedRows = async () => (await json<{rows_written: number}>(get("/state"))).rows_written;
   const check = async (request: () => Promise<Response>, maximum: number, status = 200) => {
     const before = await countedRows();
     await json(request(), status);

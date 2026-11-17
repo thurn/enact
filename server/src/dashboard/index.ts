@@ -1,7 +1,7 @@
 import type {TicketSql} from "../ticket-runtime";
 import * as c from "../cirrus/components";
 import {dashboardRoot, storedProject} from "../project-paths";
-import {ProjectUsage, type UsageMeter} from "../project-usage";
+import type {UsageMeter} from "../project-usage";
 import {resolveId} from "../ticket-batch";
 import {ancestors, type BatchChanges} from "../ticket-index";
 import type {TicketRow} from "../ticket-types";
@@ -42,7 +42,7 @@ export class Dashboard {
     this.status = new ProjectStatus(sql);
   }
 
-  async fetch(request: Request, route: NonNullable<ReturnType<typeof dashboardRoute>>, now = Date.now(), usage: UsageMeter = new ProjectUsage(this.sql, now)): Promise<Response> {
+  async fetch(request: Request, route: NonNullable<ReturnType<typeof dashboardRoute>>, now: number, usage: UsageMeter): Promise<Response> {
     const {project, ticket, legacy} = route;
     const url = new URL(request.url);
     const root = dashboardRoot(project);

@@ -132,7 +132,7 @@ class TicketContractTests(unittest.TestCase):
     def test_schema_and_api_cover_the_design(self):
         root = SCRIPT.parents[1]
         contract = (root / "docs" / "design.md").read_text(encoding="utf-8").split(
-            "## Cloudflare ticket system contract", 1
+            "## Ticket service contract", 1
         )[1]
         files = root / "server" / "contract"
         schema = (files / "schema.sql").read_text(encoding="utf-8")

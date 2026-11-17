@@ -198,7 +198,7 @@ export class TicketIndex {
       });
       const key = `${project}-${all ? "all" : "live"}-${this.seq}${lastExpiry ? `-${lastExpiry}` : ""}`;
       // A revalidation should not load archived rows, even after the
-      // Durable Object has woken with an empty archive cache.
+      // service has restarted with an empty archive cache.
       if (matchesTag(ifNoneMatch, key)) return graphResponse(null, key, 304);
       const edges = live.flatMap(({id}) => [...this.edgesFrom(id).values()]
         .filter((edge) => all || this.live.has(edge.dst))

@@ -1,7 +1,6 @@
 /// <reference types="vite/client" />
 
-import {env} from "cloudflare:workers";
-import {evictDurableObject, runDurableObjectAlarm, runInDurableObject} from "cloudflare:test";
+import {projectFixture} from "./project-fixture";
 import {expect, test} from "vitest";
 import {ChangeFeed} from "./change-feed";
 import {ApiError, type Blocker, type Edge, type Ticket} from "./ticket-types";
@@ -19,10 +18,10 @@ type BatchReply = {seq: number; results: {id: string; closed?: string[]; ready?:
 const bearer = "ticket-store-test-token";
 
 async function fixture(project: string) {
-  const stub = env.TICKETS.getByName(project);
+  const stub = projectFixture(project);
   const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(bearer));
   const hash = [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  await runInDurableObject(stub, ({store}) => {
+  stub.inspect(({store}) => {
     store.sql.exec("INSERT INTO meta VALUES ('token_hashes', ?)", JSON.stringify([hash]));
   });
   const request = (path: string, init?: RequestInit) => stub.fetch(`https://example.com/${project}/api${path}`, init);
@@ -36,7 +35,7 @@ async function fixture(project: string) {
   const checked = async <T>(pending: Promise<Response>): Promise<T> => {
     const response = await pending;
     expect(response.status, await response.clone().text()).toBe(200);
-    return response.json<T>();
+    return response.json() as Promise<T>;
   };
   const batch = (ops: object[], conditions?: object[]) => checked<BatchReply>(post(ops, conditions));
   const show = (id: string, query = "") => checked<ShownTicket>(request(`/tickets/${id}${query}`));
@@ -84,7 +83,7 @@ test("creates nested IDs, resolves aliases, and lists using every filter", async
   expect(bug).toBe(`${milestone}.1`);
   expect(archived).toBe(`${epic}.2`);
 
-  await runInDurableObject(stub, ({store}) => {
+  stub.inspect(({store}) => {
     store.sql.exec("INSERT INTO aliases VALUES ('old', ?), ('lookup-legacy', ?)", epic, bug);
     store.invalidateIndex();
   });
@@ -162,7 +161,7 @@ test("reports each readiness rule across ancestors, late findings and parallel a
   await batch([{op: "update", id: finding, set: {defer_until: "2000-03-01"}}]);
   expect((await show(finding)).ready).toBe(true);
   await batch([{op: "close", id: milestone, reason: "Closed explicitly"}]);
-  await runInDurableObject(stub, ({store}) => store.invalidateIndex());
+  stub.inspect(({store}) => store.invalidateIndex());
   expect((await show(release)).blocked_by).toEqual([{id: milestone, rule: 2}]);
   const graph = await checked<{tickets: ShownTicket[]; edges: Edge[]}>(request("/graph"));
   expect(graph.edges.some(({src, dst}) => src === release && dst === milestone)).toBe(false);
@@ -293,7 +292,7 @@ test("a defer time passing invalidates graph readiness at the same sequence", as
   const {results: [{id}]} = await batch([create("Later")]);
   const {seq} = await batch([{op: "defer", id, until: deadline}]);
   const at = Date.parse(deadline);
-  const result = await runInDurableObject(stub, async ({store}) => {
+  const result = await stub.inspect(async ({store}) => {
     const first = store.tickets.graph("timed-readiness", null, false, at);
     const tag = first.headers.get("ETag");
     const unchanged = store.tickets.graph("timed-readiness", tag, false, at);
@@ -369,14 +368,14 @@ test("rolls back SQL, allocated IDs and the cached graph, and deduplicates creat
   const op = create("Child", parent, {}, {request_key: "child-1"});
   const accepted = await batch([op], [{seq}]);
   expect(accepted.results).toEqual([{id: `${parent}.1`}]);
-  await runInDurableObject(stub, ({store}) => store.invalidateIndex());
+  stub.inspect(({store}) => store.invalidateIndex());
   expect(await batch([op])).toEqual(accepted);
   expect((await show(parent)).children).toEqual([`${parent}.1`]);
 });
 
-test("one batch reports all rows to the transaction budget check", async () => {
+test("one batch reports the rows written in its transaction", async () => {
   const {stub} = await fixture("rows");
-  const rows = await runInDurableObject(stub, ({store}) => {
+  const rows = stub.inspect(({store}) => {
     const counts: Record<string, number> = {};
     const apply = (description: string, ...ops: object[]) => store.batch("rows", "worker", {ops}, (count) => {
       counts[description] = count;
@@ -400,14 +399,14 @@ test("one batch reports all rows to the transaction budget check", async () => {
     return counts;
   });
   expect(rows).toEqual({
-    create: 5, retry: 0, child: 9, update: 3, claim: 4, defer: 4, reopen: 0,
-    comment: 2, dep_remove: 2, dep_add: 3, close: 5,
+    create: 4, retry: 0, child: 6, update: 3, claim: 3, defer: 3, reopen: 0,
+    comment: 2, dep_remove: 2, dep_add: 2, close: 5,
   });
 });
 
 test("serves the live graph, listing and a conditional batch with 5,000 stored tickets", async () => {
   const {stub, checked, request, batch} = await fixture("volume");
-  await runInDurableObject(stub, ({store}) => {
+  stub.inspect(({store}) => {
     store.sql.exec(`
       WITH RECURSIVE ids(n) AS (VALUES (1) UNION ALL SELECT n + 1 FROM ids WHERE n < 5000)
       INSERT INTO tickets (id, parent, title, status, created_at, created_by, updated_at, version)
@@ -437,35 +436,29 @@ test("serves the live graph, listing and a conditional batch with 5,000 stored t
   expect((await checked<ShownTicket[]>(request("/tickets?ready=1")))).toEqual([]);
 });
 
-async function connectFeed(request: (path: string, init?: RequestInit) => Promise<Response>) {
-  const response = await request("/feed", {headers: {Upgrade: "websocket"}});
-  expect(response.status).toBe(101);
-  const socket = response.webSocket!;
-  socket.accept();
-  return socket;
-}
-
-function nextMessage(socket: WebSocket): Promise<unknown> {
+function nextMessage(socket: ReturnType<ReturnType<typeof projectFixture>["connectFeed"]>): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    socket.addEventListener("message", ({data}) => resolve(JSON.parse(data)), {once: true});
-    socket.addEventListener("close", ({code, reason}) => reject(new Error(`Feed closed: ${code} ${reason}`)), {once: true});
+    socket.addEventListener("message", event => resolve(JSON.parse((event as MessageEvent).data)), {once: true});
+    socket.addEventListener("close", event => {
+      const {code, reason} = (event as MessageEvent).data;
+      reject(new Error(`Feed closed: ${code} ${reason}`));
+    }, {once: true});
   });
 }
 
-test("a hibernated subscriber wakes to recheck readiness after a committed change", async () => {
-  const {stub, request, batch, post, list} = await fixture("wait-ready");
+test("a subscribed client wakes to recheck readiness after a committed change", async () => {
+  const {stub, batch, post, list} = await fixture("wait-ready");
   const {seq, results: [{id: blocker}, {id: waiting}]} = await batch([
     create("Prerequisite", undefined, {status: "in_progress"}),
     create("Waiting", undefined, {}, {deps: ["$0"]}),
   ]);
   expect(await list("?ready=1")).toEqual([]);
 
-  const socket = await connectFeed(request);
+  const socket = stub.connectFeed();
   try {
     const catchup = nextMessage(socket);
     socket.send('{"since":0}');
     expect(await catchup).toEqual({seq, tickets: [blocker, waiting], leases: [], events: [], cutover: "before"});
-    await evictDurableObject(stub);
 
     const wake = nextMessage(socket);
     const rejected = await post([{op: "comment", id: waiting, text: "This must roll back"}, {op: "claim", id: "missing"}]);
@@ -479,7 +472,7 @@ test("a hibernated subscriber wakes to recheck readiness after a committed chang
 });
 
 test("catch-up includes comment and dependency changes with unchanged ticket versions", async () => {
-  const {stub, request, batch, show} = await fixture("feed-catchup");
+  const {stub, batch, show} = await fixture("feed-catchup");
   const {seq, results: [{id: first}, {id: second}]} = await batch([create("First"), create("Second")]);
   const version = (await show(first)).version;
   const closed = await batch([
@@ -487,9 +480,9 @@ test("catch-up includes comment and dependency changes with unchanged ticket ver
     {op: "dep_add", id: first, on: second},
   ]);
   expect((await show(first)).version).toBe(version);
-  await evictDurableObject(stub);
+  stub.reload();
 
-  const socket = await connectFeed(request);
+  const socket = stub.connectFeed();
   try {
     const catchup = nextMessage(socket);
     socket.send(JSON.stringify({since: seq}));
@@ -502,9 +495,9 @@ test("catch-up includes comment and dependency changes with unchanged ticket ver
 });
 
 test("a reconnect with more than 500 changed tickets requests a resync", async () => {
-  const {request, batch} = await fixture("feed-resync");
+  const {stub, batch} = await fixture("feed-resync");
   await batch(Array.from({length: 501}, (_, index) => create(`Imported ticket ${index}`, undefined, {status: "closed"})));
-  const socket = await connectFeed(request);
+  const socket = stub.connectFeed();
   try {
     const catchup = nextMessage(socket);
     socket.send('{"since":0}');
@@ -518,7 +511,7 @@ test("a public feed stays inside its project and requires a WebSocket upgrade", 
   const first = await fixture("feed-first");
   const second = await fixture("feed-second");
   expect((await first.request("/feed")).status).toBe(400);
-  const socket = await connectFeed(first.request);
+  const socket = first.stub.connectFeed();
   try {
     const change = nextMessage(socket);
     socket.send('{"since":0}');
@@ -531,24 +524,24 @@ test("a public feed stays inside its project and requires a WebSocket upgrade", 
 });
 
 test("two commits in one turn share a frame with unique ticket IDs", async () => {
-  const {stub, request, batch} = await fixture("coalesce-feed");
+  const {stub, batch} = await fixture("coalesce-feed");
   const {seq, results: [{id}]} = await batch([create("Initial")]);
-  const socket = await connectFeed(request);
+  const socket = stub.connectFeed();
   try {
     const catchup = nextMessage(socket);
     socket.send('{"since":0}');
     await catchup;
     const message = nextMessage(socket);
-    const nextSeq = await runInDurableObject(stub, ({store}, state) => {
+    const nextSeq = stub.inspect(({store}) => {
       // Both commits happen in the same turn, regardless of simulator speed.
       const feed = new ChangeFeed({
-        sockets: () => state.getWebSockets("change-feed"),
+        sockets: stub.feed.sockets,
         upgrade: () => { throw new Error("Unexpected upgrade"); },
-        waitUntil: promise => state.waitUntil(promise),
+        waitUntil: stub.feed.waitUntil,
       }, store);
       for (const offset of [1, 2]) {
         const change = {previous: seq + offset - 1, seq: seq + offset, tickets: [id]};
-        state.storage.transactionSync(() => {
+        stub.storage.transactionSync(() => {
           store.sql.exec("UPDATE meta SET value = ? WHERE key = 'seq'", String(change.seq));
           feed.record(change);
         });
@@ -563,13 +556,13 @@ test("two commits in one turn share a frame with unique ticket IDs", async () =>
 });
 
 test("replay crosses the journal wrap in sequence order", async () => {
-  const {stub, request, batch} = await fixture("feed-journal-wrap");
-  await runInDurableObject(stub, ({store}) => {
+  const {stub, batch} = await fixture("feed-journal-wrap");
+  stub.inspect(({store}) => {
     store.sql.exec("INSERT INTO meta VALUES ('seq', '4094')");
   });
   const first = await batch([create("Before wrap")]);
   const second = await batch([create("After wrap")]);
-  const socket = await connectFeed(request);
+  const socket = stub.connectFeed();
   try {
     const message = nextMessage(socket);
     socket.send('{"since":4094}');
@@ -584,13 +577,13 @@ test("replay crosses the journal wrap in sequence order", async () => {
 
 
 test("feed replay includes lease names, event kinds and cutover state", async () => {
-  const {request, write, checked} = await fixture("feed-project-changes");
+  const {stub, write, checked} = await fixture("feed-project-changes");
   const lease = "vizier/epic/loop";
   await checked(write("/leases/vizier%2Fepic%2Floop", {op: "acquire", holder: "worker", ttl_s: 180}));
   await checked(write("/events", {kind: "machine", data: {drained: true}}));
   const {seq} = await checked<{seq: number}>(write("/state", {cutover: "paused"}));
 
-  const socket = await connectFeed(request);
+  const socket = stub.connectFeed();
   try {
     const catchup = nextMessage(socket);
     socket.send('{"since":0}');
@@ -601,29 +594,29 @@ test("feed replay includes lease names, event kinds and cutover state", async ()
 });
 
 test("the earliest lease expiry wakes a waiter and the alarm advances to the next deadline", async () => {
-  const {stub, request, write, checked} = await fixture("lease-feed-expiry");
+  const {stub, write, checked} = await fixture("lease-feed-expiry");
   const acquire = (name: string, ttl_s: number) =>
     checked<{expires_at: string}>(write(`/leases/${name}`, {op: "acquire", holder: "owner", ttl_s}));
   const late = await acquire("late", 600);
   const early = await acquire("early", 300);
   expect((await write("/leases/early", {op: "acquire", holder: "waiter", ttl_s: 300}, "waiter")).status).toBe(409);
-  const alarm = () => runInDurableObject(stub, (_instance, state) => state.storage.getAlarm());
+  const alarm = () => stub.getAlarm();
   const day = 86_400_000;
   const midnight = (Math.floor((Date.parse(early.expires_at) - 300_000) / day) + 1) * day;
   expect(await alarm()).toBe(Math.min(midnight, Date.parse(early.expires_at)));
 
-  const socket = await connectFeed(request);
+  const socket = stub.connectFeed();
   try {
     const catchup = nextMessage(socket);
     socket.send('{"since":0}');
     const {seq} = await catchup as {seq: number};
-    await runInDurableObject(stub, ({store}) => {
+    stub.inspect(({store}) => {
       const expired = new Date(Date.now() - 1).toISOString();
       store.sql.exec("UPDATE leases SET expires_at = ? WHERE name = 'early'", expired);
     });
 
     const wake = nextMessage(socket);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await stub.alarm()).toBe(true);
     expect(await wake).toEqual({seq: seq + 1, tickets: [], leases: ["early"], events: [], cutover: "before"});
     expect(await alarm()).toBe(Math.min(midnight, Date.parse(late.expires_at)));
     const reply = await checked<{holder: string}>(write("/leases/early", {op: "acquire", holder: "waiter", ttl_s: 300}, "waiter"));
@@ -636,7 +629,7 @@ test("the earliest lease expiry wakes a waiter and the alarm advances to the nex
 test("the feed names the staging lease when a waiter joins and expires", async () => {
   const {stub, request, write, checked} = await fixture("staging-waiter-feed");
   await checked(write("/leases/staging", {op: "acquire", holder: "owner", ttl_s: 180}));
-  const socket = await connectFeed(request);
+  const socket = stub.connectFeed();
   try {
     const catchup = nextMessage(socket);
     socket.send('{"since":0}');
@@ -644,12 +637,12 @@ test("the feed names the staging lease when a waiter joins and expires", async (
     const joined = nextMessage(socket);
     expect((await write("/leases/staging", {op: "acquire", holder: "waiter", ttl_s: 180}, "waiter")).status).toBe(409);
     expect(await joined).toMatchObject({seq: seq + 1, leases: ["staging"]});
-    await runInDurableObject(stub, ({store}) => {
+    stub.inspect(({store}) => {
       const since = new Date(Date.now() - 61_000).toISOString();
       store.sql.exec("UPDATE leases SET waiters = json_set(waiters, '$[0].since', ?) WHERE name = 'staging'", since);
     });
     const expired = nextMessage(socket);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await stub.alarm()).toBe(true);
     expect(await expired).toMatchObject({seq: seq + 2, leases: ["staging"]});
     expect(await checked(request("/leases"))).toMatchObject([{holder: "owner", waiters: []}]);
   } finally {
@@ -658,23 +651,23 @@ test("the feed names the staging lease when a waiter joins and expires", async (
 });
 
 test("an alarm wakes a ready waiter when an open ticket's defer time passes", async () => {
-  const {stub, request, batch, list} = await fixture("defer-feed-expiry");
+  const {stub, batch, list} = await fixture("defer-feed-expiry");
   const future = "2999-01-01T00:00:00.000Z";
   const {seq, results: [{id}]} = await batch([create("Timed task", undefined, {defer_until: future})]);
   expect(await list("?ready=1")).toEqual([]);
 
-  const socket = await connectFeed(request);
+  const socket = stub.connectFeed();
   try {
     const catchup = nextMessage(socket);
     socket.send('{"since":0}');
     await catchup;
-    await runInDurableObject(stub, ({store}) => {
+    stub.inspect(({store}) => {
       const passed = new Date(Date.now() - 2).toISOString();
       store.sql.exec("UPDATE tickets SET defer_until = ? WHERE id = ?", passed, id);
       store.invalidateIndex();
     });
     const wake = nextMessage(socket);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await stub.alarm()).toBe(true);
     expect(await wake).toEqual({seq: seq + 1, tickets: [id], leases: [], events: [], cutover: "before"});
     expect((await list("?ready=1")).map((ticket) => ticket.id)).toEqual([id]);
   } finally {
@@ -694,27 +687,27 @@ test("cutover arms imported snoozes and the alarm reopens them exactly once", as
   };
   await checked(write("/import", {tickets: [ticket, {...ticket, id: "undated", defer_until: null}]}));
   await checked(write("/state", {cutover: "paused"}));
-  expect(await runDurableObjectAlarm(stub)).toBe(true);
+  expect(await stub.alarm()).toBe(true);
   expect(await show("imported")).toMatchObject({status: "deferred", defer_until: until, ready: false});
 
   const {seq} = await checked<{seq: number}>(write("/state", {cutover: "after"}));
-  const alarm = await runInDurableObject(stub, (_object, state) => state.storage.getAlarm());
+  const alarm = await stub.getAlarm();
   const midnight = (Math.floor(now / 86_400_000) + 1) * 86_400_000;
   expect(alarm).toBe(Math.min(midnight, Date.parse(until) + 1));
   const graph = await request("/graph");
   const tag = graph.headers.get("ETag")!;
   expect(await list("?ready=1")).toEqual([]);
 
-  const socket = await connectFeed(request);
+  const socket = stub.connectFeed();
   try {
     socket.send(JSON.stringify({since: seq}));
-    await runInDurableObject(stub, ({store}) => {
+    stub.inspect(({store}) => {
       const expired = new Date(now - 60_000).toISOString();
       store.sql.exec("UPDATE tickets SET defer_until = ? WHERE id = 'imported'", expired);
       store.invalidateIndex();
     });
     const wake = nextMessage(socket);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await stub.alarm()).toBe(true);
     expect(await wake).toMatchObject({seq: seq + 1, tickets: ["imported"], cutover: "after"});
     expect(await list("?ready=1")).toMatchObject([{id: "imported", status: "open"}]);
     const current = await checked<{seq: number; tickets: ShownTicket[]}>(request(
@@ -724,7 +717,7 @@ test("cutover arms imported snoozes and the alarm reopens them exactly once", as
       {id: "imported", status: "open", ready: true, defer_until: null},
       {id: "undated", status: "deferred", ready: false},
     ]});
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await stub.alarm()).toBe(true);
     expect(await checked(request("/state"))).toMatchObject({seq: seq + 1});
   } finally {
     socket.close();
@@ -732,19 +725,19 @@ test("cutover arms imported snoozes and the alarm reopens them exactly once", as
 });
 
 test("the next waiter wakes when an abandoned head stops reserving an expired lease", async () => {
-  const {stub, request, write, checked} = await fixture("lease-feed-abandoned");
+  const {stub, write, checked} = await fixture("lease-feed-abandoned");
   const acquire = (holder: string) =>
     write("/leases/staging", {op: "acquire", holder, ttl_s: 300}, holder);
   await checked(acquire("owner"));
   expect((await acquire("abandoned")).status).toBe(409);
   expect((await acquire("waiting")).status).toBe(409);
 
-  const socket = await connectFeed(request);
+  const socket = stub.connectFeed();
   try {
     const catchup = nextMessage(socket);
     socket.send('{"since":0}');
     const {seq} = await catchup as {seq: number};
-    const headDeadline = await runInDurableObject(stub, ({store}) => {
+    const headDeadline = stub.inspect(({store}) => {
       const now = Date.now();
       const expired = new Date(now - 100).toISOString();
       const since = new Date(now - 30_000).toISOString();
@@ -754,14 +747,14 @@ test("the next waiter wakes when an abandoned head stops reserving an expired le
       return now + 30_000;
     });
     const expiration = nextMessage(socket);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await stub.alarm()).toBe(true);
     expect(await expiration).toMatchObject({seq: seq + 1, leases: ["staging"]});
-    const nextAlarm = await runInDurableObject(stub, (_object, state) => state.storage.getAlarm());
+    const nextAlarm = await stub.getAlarm();
     const day = 86_400_000;
     expect(nextAlarm).toBe(Math.min((Math.floor((headDeadline - 30_000) / day) + 1) * day, headDeadline));
 
     expect(await (await acquire("waiting")).json()).toMatchObject({position: 2});
-    await runInDurableObject(stub, ({store}) => {
+    stub.inspect(({store}) => {
       const now = Date.now();
       // Simulate the elapsed time since the first wake without waiting 30 seconds.
       store.sql.exec("UPDATE meta SET value = ? WHERE key = 'feed_deadline_cursor'", now - 30_000);
@@ -771,7 +764,7 @@ test("the next waiter wakes when an abandoned head stops reserving an expired le
       );
     });
     const available = nextMessage(socket);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await stub.alarm()).toBe(true);
     expect(await available).toMatchObject({seq: seq + 2, leases: ["staging"]});
     expect(await checked(acquire("waiting"))).toMatchObject({holder: "waiting"});
   } finally {
@@ -798,16 +791,16 @@ test("a dependent stays blocked when child creation races the closing of its pre
 });
 
 test("a queued acquirer can replay a release that happened before it subscribed", async () => {
-  const {request, write, checked} = await fixture("lease-feed-gap");
+  const {stub, write, checked} = await fixture("lease-feed-gap");
   const path = "/leases/staging";
   await checked(write(path, {op: "acquire", holder: "owner", ttl_s: 300}));
   const conflict = await write(path, {op: "acquire", holder: "waiter", ttl_s: 300}, "waiter");
   expect(conflict.status).toBe(409);
-  const {seq} = await conflict.json<{seq: number}>();
+  const {seq} = await conflict.json() as {seq: number};
   expect(Number.isInteger(seq)).toBe(true);
   await checked(write(path, {op: "release", holder: "owner"}));
 
-  const socket = await connectFeed(request);
+  const socket = stub.connectFeed();
   try {
     const released = nextMessage(socket);
     socket.send(JSON.stringify({since: seq}));

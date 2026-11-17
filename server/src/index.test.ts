@@ -1,42 +1,47 @@
-import { env, exports } from "cloudflare:workers";
-import { listDurableObjectIds, runInDurableObject } from "cloudflare:test";
-import { expect, test } from "vitest";
-import { version } from "../package.json";
+import {join} from "node:path";
+import {access} from "node:fs/promises";
+import {afterAll, beforeAll, expect, test} from "vitest";
+import {WebSocket} from "ws";
+import {version} from "../package.json";
+import {startTestServer} from "../tests/test-server";
 
-test("the Worker serves its package version", async () => {
-  const response = await exports.default.fetch("https://example.com/version");
+let server: Awaited<ReturnType<typeof startTestServer>>;
+beforeAll(async () => { server = await startTestServer(); });
+afterAll(async () => { await server?.close(); });
 
+test("the service serves its package version", async () => {
+  const response = await fetch(server.url + "/version");
   expect(response.status).toBe(200);
   expect(await response.text()).toBe(version);
 });
 
 test.each(["typo-project", "constructor"])("rejects %s without opening ticket storage", async (project) => {
-  const root = `https://example.com/${project}`;
-  expect((await exports.default.fetch(`${root}/api/state`)).status).toBe(404);
-  expect((await exports.default.fetch(`${root}/`)).status).toBe(404);
-  expect((await exports.default.fetch(`${root}/`, {method: "HEAD"})).status).toBe(404);
-
-  const id = env.TICKETS.idFromName(project);
-  const opened = await listDurableObjectIds(env.TICKETS);
-  expect(opened.some((object) => object.equals(id))).toBe(false);
+  const root = `${server.url}/${project}`;
+  expect((await fetch(`${root}/api/state`)).status).toBe(404);
+  expect((await fetch(`${root}/`)).status).toBe(404);
+  expect((await fetch(`${root}/`, {method: "HEAD"})).status).toBe(404);
+  await expect(access(join(server.data_dir, `${project}.db`))).rejects.toMatchObject({code: "ENOENT"});
 });
 
-test.each(["by", "en"])("serves API and dashboard reads for %s", async (project) => {
-  const root = `https://example.com/${project}`;
-  const state = await exports.default.fetch(`${root}/api/state`);
+test.each(["beryl", "en"])("serves API and dashboard reads for %s", async (project) => {
+  const root = `${server.url}/${project}`;
+  const state = await fetch(`${root}/api/state`);
   expect(state.status).toBe(200);
-  expect(await state.json()).toMatchObject({cutover: "before"});
-
-  const dashboard = await exports.default.fetch(`${root}/`);
+  expect(await state.json()).toMatchObject({cutover: "before", quota_enforced: false});
+  const dashboard = await fetch(`${root}/`);
   expect(dashboard.status).toBe(200);
   expect(dashboard.headers.get("Content-Type")).toContain("text/html");
+  expect(await dashboard.text()).toContain(`<meta name="cirrus-root" content="/${project}/">`);
 });
 
-test("a project's Durable Object has SQLite storage", async () => {
-  const project = env.TICKETS.getByName("test");
-  const result = await runInDurableObject(project, (_instance, state) =>
-    state.storage.sql.exec<{ value: number }>("SELECT 1 AS value").one(),
-  );
-
-  expect(result.value).toBe(1);
+test.each(["by", "beryl"])("opens the Beryl change feed at /%s", async (path) => {
+  const socket = new WebSocket(server.url.replace(/^http/, "ws") + `/${path}/api/feed`);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+  } finally {
+    socket.terminate();
+  }
 });

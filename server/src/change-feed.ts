@@ -76,8 +76,8 @@ export class ChangeFeed {
     this.send(socket, reply ? JSON.stringify(reply) : resync, seq);
   }
 
-  // Call inside the same transaction that advances meta.seq, and include
-  // this row in its quota. A reconnect can replay even after eviction.
+  // Record the change in the same transaction that advances meta.seq so
+  // reconnecting clients can replay it after a restart.
   record({seq, previous, ...items}: FeedChange): number {
     const changes = (items.tickets?.length ?? 0) > replayTicketLimit ? resync : JSON.stringify(items);
     return this.store.sql.exec(`

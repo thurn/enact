@@ -73,3 +73,11 @@ export class SqliteStorage implements TicketStorage {
 
   close(): void { this.database.close(); }
 }
+
+export function checkDatabase(db: SqliteStorage, thorough = false) {
+  const check = thorough ? "integrity_check" : "quick_check";
+  const rows = db.sql.exec(`PRAGMA ${check}`).toArray();
+  if (rows.length !== 1 || rows[0][check] !== "ok") {
+    throw new Error(`SQLite ${check} failed: ${JSON.stringify(rows)}`);
+  }
+}

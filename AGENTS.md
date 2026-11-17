@@ -2,7 +2,7 @@
 
 - Enact's skills live in `skills/` and the stdlib-only orchestration helper
   lives in `scripts/enact.py`. The TypeScript ticket service in `server/`
-  has Cloudflare Worker and local SQLite runtimes. Its ticket store and
+  runs on Node with local SQLite. Its ticket store and
   coordination APIs live in `server/src/`, its schema in `server/contract/`
   and server tests in `server/tests/`. `cli/src/` builds the native client.
 - Skill and role files are markdown wrapped at 80 columns. Keep
@@ -13,12 +13,11 @@
   and Rust tests. Fast CI compiles the Python helper and runs its unit tests.
   Slow CI exercises real Git and the isolated SQLite ticket service.
   Budget: 2-3 minutes for slow CI; cut or redesign scenarios to stay within it.
-- For focused Worker checks, run `npm ci` and `npm test` in `server/` with
-  Node 24.22.3 or later. Run Wrangler there with `npx wrangler`. Worker tests
-  use the local simulator and require no Cloudflare login. The SQLite
+- For focused ticket service checks, run `npm ci` and `npm test` in `server/`
+  with Node 24.22.3 or later. The tests use isolated SQLite databases. The
   operator guide is in `docs/sqlite-tickets.md`.
 - For focused Rust checks, run `npm ci` and `npm run pretest` in `server/`, then
-  run `cargo test --locked` in `cli/`. The CLI tests launch Wrangler locally.
+  run `cargo test --locked` in `cli/`. The CLI tests use local HTTP and SQLite.
   Build the release executable with `cargo build --locked --release`.
 - Set `[tickets].project` and `[tickets].url` in the main checkout's
   `.enact.toml`. Linked worktrees inherit enrollment from the main checkout.

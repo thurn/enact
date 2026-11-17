@@ -79,8 +79,7 @@ export class ProjectDeadlines {
   scan(now: number) {
     const due = {tickets: new Set<string>(), leases: new Set<string>()};
     let next = Infinity;
-    // Overdue snoozes are consumed by wakeSnoozes. A quota failure should
-    // retry at the next deadline or daily reset, without spinning.
+    // wakeSnoozes handles overdue entries before the next deadline is scheduled.
     for (const at of this.legacySnoozes.values()) {
       if (at > now) next = Math.min(next, at);
     }

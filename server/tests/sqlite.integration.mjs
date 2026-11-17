@@ -1,27 +1,30 @@
 import assert from "node:assert/strict";
+import {createHash} from "node:crypto";
 import {copyFile, mkdir, mkdtemp, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {test} from "node:test";
 import {setTimeout as delay} from "node:timers/promises";
-import {fileURLToPath} from "node:url";
 import WebSocket from "ws";
-import {unstable_dev} from "wrangler";
-import {backupProjects, migrate, setSourceFreeze, startServer, verifyRecentBackup, verifySnapshot} from "../.local/tickets.mjs";
+import {backupProjects, startServer, verifyRecentBackup, verifySnapshot} from "../.local/tickets.mjs";
 
-test("freeze and resume a Worker export, then restore a live SQLite backup", {timeout: 30_000}, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "enact-sqlite-migration-"));
-  const secret = "fixture-migration-token";
-  const id = "sqlite-migration-0001";
-  const bearer = {"Authorization": "Bearer dashboard-test-token", "X-Actor": "Operator", "Content-Type": "application/json"};
-  const serverPath = fileURLToPath(new URL("../", import.meta.url));
-  let worker, local, socket;
+test("restart the SQLite service and restore a live backup", {timeout: 30_000}, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "enact-sqlite-backup-"));
+  const token = "dashboard-test-token";
+  const bearer = {"Authorization": `Bearer ${token}`, "X-Actor": "Operator", "Content-Type": "application/json"};
+  const data_dir = join(directory, "source");
+  await mkdir(data_dir);
+  const config = {data_dir, projects: {by: "thurn/beryl"}, port: 0};
+  let local, socket;
   try {
-    worker = await unstable_dev(join(serverPath, "tests/dashboard-worker.ts"), {
-      config: join(serverPath, "wrangler.toml"), ip: "127.0.0.1", port: 0, logLevel: "error",
-      vars: {TICKET_MIGRATION_TOKEN: secret}, experimental: {disableExperimentalWarning: true}, persist: false,
+    local = await startServer(config, {
+      async fixture(_request, mounted) {
+        const hash = createHash("sha256").update(token).digest("hex");
+        mounted.get("by").storage.sql.exec("INSERT INTO meta VALUES ('token_hashes', ?)", JSON.stringify({[hash]: "test-mac"}));
+        return new Response(null, {status: 204});
+      },
     });
-    const source = `http://${worker.address}:${worker.port}`;
+    const source = local.url;
     const api = (origin, path, body) => {
       const init = body === undefined ? undefined : {method: "POST", headers: bearer, body: JSON.stringify(body)};
       return fetch(origin + "/by/api/" + path, init);
@@ -31,7 +34,7 @@ test("freeze and resume a Worker export, then restore a live SQLite backup", {ti
       assert.equal(reply.status, 200, await reply.clone().text());
       return reply.json();
     };
-    assert.equal((await api(source, "test-token", {})).status, 204);
+    assert.equal((await fetch(source + "/__coordination/seed", {method: "POST"})).status, 204);
     await post(source, "state", {cutover: "paused"});
     await post(source, "state", {cutover: "after"});
     const receipt = await post(source, "batch", {ops: [
@@ -43,34 +46,11 @@ test("freeze and resume a Worker export, then restore a live SQLite backup", {ti
     const [parent, child] = receipt.results.map(result => result.id);
     const lease = await post(source, "leases/staging", {op: "acquire", holder: "Holder", ttl_s: 180});
     const original = await (await api(source, `tickets/${child}?comments=1&history=1`)).json();
-    await assert.rejects(setSourceFreeze(source, "by", id, "wrong", true), /HTTP 404/);
-    const freeze = await setSourceFreeze(source, "by", id, secret, true);
-    assert.equal(freeze.frozen, true);
-    assert.equal((await api(source, "leases/staging", {op: "release", holder: "Holder"})).status, 503);
-    assert.equal((await api(source, "tickets?ready=1")).status, 503);
-    await assert.rejects(setSourceFreeze(source, "by", "another-migration-id", secret, false), /HTTP 409/);
-
-    // Fail a later table request after earlier tables committed. Reuse the
-    // same partially populated database on the next invocation.
-    const destination = join(directory, "by.db");
-    const fetchSource = globalThis.fetch;
-    globalThis.fetch = (url, init) => url.searchParams.get("table") === "events"
-      ? Promise.reject(new Error("Interrupted export")) : fetchSource(url, init);
-    try {
-      await assert.rejects(migrate(source, "by", id, secret, destination), /Interrupted export/);
-    } finally {
-      globalThis.fetch = fetchSource;
-    }
-    const migrated = await migrate(source, "by", id, secret, destination);
-    assert.equal(migrated.seq, freeze.seq);
-    assert.equal(migrated.rows.tickets, 2);
-    assert.equal(migrated.rows.comments, 1);
-    assert.equal(migrated.rows.leases, 1);
-
-    const config = {data_dir: directory, projects: {by: ""}, port: 0};
+    const state = await (await api(source, "state")).json();
+    await local.close();
     local = await startServer({...config, read_only: true}, {});
     assert.equal((await api(local.url, "batch", {ops: []})).status, 503);
-    assert.equal((await (await api(local.url, "state")).json()).seq, freeze.seq);
+    assert.equal((await (await api(local.url, "state")).json()).seq, state.seq);
     await local.close();
     local = await startServer(config, {});
     const actual = await (await api(local.url, `tickets/${child}?comments=1&history=1`)).json();
@@ -90,7 +70,7 @@ test("freeze and resume a Worker export, then restore a live SQLite backup", {ti
         socket.once("error", error => { clearTimeout(timeout); reject(error); });
       });
     }
-    assert.equal((await nextFeed(freeze.seq - 1)).seq, freeze.seq);
+    assert.equal((await nextFeed(state.seq - 1)).seq, state.seq);
 
     const deadline = Date.now() + 500;
     const deferred = await post(local.url, "batch", {ops: [
@@ -122,12 +102,9 @@ test("freeze and resume a Worker export, then restore a live SQLite backup", {ti
     assert.equal(restored.title, "Child");
     assert.equal(restored.comments[0].text, "Preserved comment");
     assert.equal((await (await api(local.url, "state")).json()).seq, snapshot.projects.by.seq);
-    assert.equal((await setSourceFreeze(source, "by", id, secret, false)).frozen, false);
-    assert.equal((await api(source, "state")).status, 200);
   } finally {
     socket?.terminate();
     await local?.close();
-    await worker?.stop();
     await rm(directory, {recursive: true, force: true});
   }
 });

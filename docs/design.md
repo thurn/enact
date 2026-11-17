@@ -696,7 +696,7 @@ blindly recreate jobs or hand-edit scheduler databases.
 ## Slow-check runtime
 
 The fast suite uses policy fixtures for scheduling and refusal matrices.
-Slow CI also runs real Git clones with the local Worker simulator, native
+Slow CI also runs real Git clones with the isolated ticket service, native
 CLI protocol checks, registration, backup and restore, and coordinator
 crash recovery. The fixtures isolate authentication and ticket storage from
 production. Run the commands in `.enact.toml` to exercise the configured
@@ -1549,7 +1549,7 @@ instead of adopting it needs the plan's context.
 - When a run is blocked, the vizier gives the user two answers: meet the
   need, or drop the requirement and resume.
 
-## Cloudflare ticket system contract
+## Ticket service contract
 
 The ticket service owns the graph, scheduling, leases, and feed. Every
 project supplies an active `[tickets]` configuration. Both production projects
@@ -1559,14 +1559,13 @@ for the simulator and isolated Git tests.
 
 ### 1. Storage
 
-One Durable Object per project, named by the project key (`by`, `en`). Its
-SQLite database is `server/contract/schema.sql`:
+One SQLite database per project (`by.db`, `en.db`). The base schema is
+`server/contract/schema.sql`:
 
 ```sql
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 -- keys: seq (global change counter), cutover (before|paused|after),
--- cutover_at, cutover_seq, daily_usage ({day, requests, rows_written}),
--- token_hashes (hash to machine), token_fetched_at
+-- cutover_at, cutover_seq, token_hashes (hash to machine)
 
 CREATE TABLE tickets (
   id          TEXT PRIMARY KEY,          -- 'q44s.7.24', no project prefix
@@ -1637,9 +1636,7 @@ CREATE INDEX aliases_id ON aliases(id);
   and the edges among them, into memory. `graph`, `ready` and readiness are
   answered from memory; writes go to SQLite and memory in one transaction.
 - An imported ticket's whole changelog is one `history` row (`seq` 0, `change`
-  a JSON array of the old events). This keeps a full import near 40,000 rows
-  written, inside one day's limit; the importer ticket measures the real
-  figure.
+  a JSON array of the old events).
 - Events older than 30 days are deleted by a daily alarm.
 
 ### 2. IDs
@@ -1655,7 +1652,7 @@ CREATE INDEX aliases_id ON aliases(id);
   imported roots and dots before child numbers. Dashboard links and labels
   and all native `tk` output display an uppercase `T` before the ID. Ticket
   lookups with that prefix use the suffix as the canonical ID. Other lookups
-  strip a leading `<project>-` and consult `aliases`. The Worker API sends
+  strip a leading `<project>-` and consult `aliases`. The HTTP API sends
   canonical IDs. The importer sets each parent's `next_child` to one past
   its highest child, and `tk restore` accepts exports with or without the
   display prefix.
@@ -1668,7 +1665,7 @@ All routes are under `/<project>/api`. Reads need no token. Writes need
 
 | Route | Does |
 | --- | --- |
-| `GET /state` | `{cutover, cutover_at, cutover_id, seq, day, requests, rows_written, limits}` |
+| `GET /state` | `{cutover, cutover_at, cutover_id, seq, day, requests, rows_written, quota_enforced, limits}` |
 | `GET /tickets/<id>?comments=1&history=1` | One ticket with its edges in both directions, children, `ready` and `blocked_by` |
 | `GET /tickets?status=&type=&parent=&ancestor=&label=&assignee=&ready=1&all=1&limit=` | A list; closed tickets only with `all=1` or `status=closed` |
 | `GET /graph?all=1` | Live tickets by default, or all tickets with `all=1`. Includes `ready`, edges within the selected graph, and `seq`. Omits `body`, `design` and `notes`. Matching the projection's `ETag` returns 304. |
@@ -1696,9 +1693,8 @@ ticket by `updated_at`. Import returns `{seq, imported, rows_written}`, where
 `imported` counts changed tickets and `rows_written` counts their data and
 the shared sequence write.
 
-An import can supply `daily_row_ceiling` to lower its own quota. The Worker
-checks it against current usage in the import transaction. Imported comments
-keep their original IDs in `legacy_id`. `metadata._enact_beads` retains
+The legacy `daily_row_ceiling` import field is accepted for client
+compatibility. Imported comments keep their original IDs in `legacy_id`. `metadata._enact_beads` retains
 source-only fields and the original dependency records as archival metadata.
 
 `POST /batch` takes `{if: [...], ops: [...]}` and applies all of it in one
@@ -1732,11 +1728,10 @@ projection and changes when deferred readiness changes. Use the numeric
 `seq` for batch preconditions and `wait change --since SEQ`. Starting the
 feed at that sequence catches changes between the read and subscription.
 
-Status codes: 200; 304; 400 malformed; 401 missing or unknown token; 404 no
-such ticket; 409 precondition failed, claim or lease lost, or late import
-conflict; 429 with
-`{limit: requests|rows_written}` when the object's own count says the write
-would pass 90 percent of a daily limit.
+Requests can return 200 for success or 304 for a matching validator.
+The service returns 400 for malformed input, 401 for a missing or unknown
+token, 404 for an unknown route or ticket, and 409 for a failed precondition,
+claim or lease conflict, or overlapping import.
 
 There are no endpoints written specially for Enact. Its scheduler stays in
 Python. For tickets, `enact next` is one `GET /graph` (usually a 304 against the copy the
@@ -1828,7 +1823,7 @@ idle connection costs nothing.
 
 ### 7. Authority and recovery
 
-The Worker is authoritative for production tickets. Enact uses the native
+The SQLite databases on JARVIS are authoritative for production tickets. Enact uses the native
 client for every tracker operation. A service outage preserves the queued
 operation or returns an error. Daily native exports can be restored with
 `tk restore` in a fresh project. The archived migration used authenticated
@@ -1844,9 +1839,8 @@ state transitions to verify ticket parity before activating each project.
 - On a write whose token hash is not in `meta.token_hashes`, the server
   reads the project's public Git upload-pack ref advertisement at most once
   a minute. It replaces the stored set with the advertised token refs and
-  checks the request again. GitHub's anonymous REST quota was exhausted on
-  the production Worker's egress IP. The repository for each project is a
-  Worker variable.
+  checks the request again. The service configuration maps each project key
+  to its GitHub repository.
 
 ### 9. The `tk` command line
 
@@ -1937,7 +1931,7 @@ retired tracker or writing to it.
 | Readable details       | `show` includes body, acceptance, design, notes, metadata, dependencies and requested comments/history. Lists stay compact.                                                        |
 | Context size           | `--brief` removes long text and nested comments/history/payloads without changing ticket selection, IDs, blockers or versions. Full exports ignore it.                             |
 | Non-interactive writes | Body, design and comment files accept `-` for stdin. Description text and body files are mutually exclusive. No editor or pager is launched.                                       |
-| Core task workflow     | Isolated Worker tests cover create, show, list, search, children, update, claim, close/reopen, defer, comments, labels, metadata, dependencies, export, leases and waits.          |
+| Core task workflow     | Isolated ticket service tests cover create, show, list, search, children, update, claim, close/reopen, defer, comments, labels, metadata, dependencies, export, leases and waits.          |
 | Concurrent agents      | Claims are atomic. Updates can require a version or assignee. Batches are atomic; version conflicts return exit 3. Creates use request keys during retries.                        |
 
 This is task-workflow parity, not a promise that every `bd` command or flag
@@ -1982,8 +1976,8 @@ backup. Git accepts the push only if the branch tip still matches the one
 the exporter read. If the server sequence changes during pagination, retry
 the export so all pages come from the same project state.
 
-To restore, configure a checkout to reach an isolated Worker with a fresh
-project key in its `TICKET_REPOSITORIES` allowlist. Give the client a write
+To restore, configure a checkout to reach an isolated SQLite service with a
+fresh project database. Give the client a write
 token registered for that project and keep other writers out until
 verification finishes. Use the allowlisted key in place of `recovery` below.
 With `origin` as the backup remote, run:
@@ -1996,69 +1990,17 @@ tk --project recovery export > restored.jsonl
 ```
 
 Use a byte-preserving shell for the Git redirect, such as Git Bash on
-Windows. Repeat `restore` with the same file if it exits 5 for the daily
-write budget. Compare the exported tickets and their related records by ID.
-The destination assigns new ticket versions. The backup covers ticket data,
-including dependencies, comments, history and aliases. Leases, events,
-tokens and cutover state are maintained separately by the Worker.
+Windows. Compare the exported tickets and their related records by ID. The
+destination assigns new ticket versions. The export includes dependencies,
+comments, history and aliases. Use a full SQLite snapshot to preserve
+versions, leases, events, tokens and cutover state.
 
-### 10. Budget
+### 10. Deployment
 
-SQLite reports the rows and index entries written. A changed batch writes
-the shared `meta.seq` row once. Excluding that row:
-
-- A keyed root `create` writes 4 rows (ticket, live index, history and request
-  key). A child writes 2 more (parent index and the parent's allocation
-  counter). A newly added dependency writes 2. An unkeyed or closed creation
-  omits its request-key or live-index row, respectively. A keyed retry
-  writes zero.
-- A ticket update writes 2 rows for the ticket and history. An insert or
-  update of a live status adds 1, and a new parent adds 1. In the simulator
-  a close writes 2 rows per closed ticket, including any closed ancestors.
-- A comment writes 1 row. Removing a dependency writes 1. Comments and
-  dependency changes advance graph `seq`; they have their own tables and
-  leave the ticket's field `version` unchanged. The allocation counter
-  also leaves the parent's field `version` unchanged.
-- An event writes 2 rows and a lease operation writes 1, before shared
-  bookkeeping.
-
-| A normal day | Count | Requests | Rows written |
-| --- | --- | --- | --- |
-| Ticket writes (create, update, claim, close) | 6,000 | 6,000 | 20,000 |
-| Comments | 1,000 | 1,000 | 1,000 |
-| Reads by sessions (`show`, `list`, `graph`, `state`) | 15,000 | 15,000 | 0 |
-| Lease operations, staging renewals included | 4,000 | 4,000 | 4,000 |
-| Session, CI and machine events | 2,000 | 2,000 | 4,000 |
-| Dashboard pages and fragments | 3,000 | 3,000 | 0 |
-| Feed connections and messages | | 500 | 0 |
-| **Total** | | **31,500 of 100,000** | **29,000 of 100,000** |
-
-The table estimates operation rows. Each changed request can also write
-one sequence row and one feed journal row. Each project counts requests
-against a durable reservation of 32 requests at a time. A read spends a
-reserved request in memory. A mutation still persists its written-row
-count with the data change. After eviction the object assumes any unspent
-requests in the prior reservation were used. The counters reset at 00:00
-UTC. The usage row itself counts toward the limit. When the per-project row
-counter reaches its 90 percent threshold, accounting stops writing and
-public reads remain available.
-
-The combined Beryl and Enact replay model puts a busy day at 4,849,700
-SQLite rows read and 94,429 billed rows written. These are estimates for the
-account. The Worker's write guard and dashboard counters are per project.
-The estimate assumes viewers use the live dashboard and Beryl's legacy
-export pollers have stopped. See the budget evidence in Beryl's
-`by-r61mr.36`.
-
-
-### 11. Deployment target
-
-`server/wrangler.toml` names the existing `tickets` Worker on the
-`thurn.workers.dev` account subdomain and allowlists Beryl (`by`) and Enact
-(`en`). The Worker rejects unconfigured project routes before it opens
-Durable Object storage. Production activation is tracked in Beryl epic
-`by-vaexw`. The [operator steps](../README.md#ticket-enrollment-and-cutover)
-describe the deployment and enrollment gates.
+The service listens on loopback on JARVIS. Tailscale Serve publishes the
+same HTTP and WebSocket routes within the tailnet. The service opens only
+the databases listed in its configuration. Its daily request and write
+counts are process-local metrics.
 
 ## Ticket server coordination (2026-11-16)
 
@@ -2133,7 +2075,7 @@ behind staging and its incremental caches stay valid.
 
 Beryl's dashboard now uses `/beryl/`. Its old `/by/` home and ticket
 bookmarks redirect permanently, preserving query parameters. The public
-slug maps to the existing `by` Durable Object, repository authorization and
+slug maps to the existing `by` project database, repository authorization and
 ticket prefixes. Both API paths reach that same project so existing clients
 and the dashboard's live feed keep working without migrating ticket data.
 
@@ -2161,32 +2103,20 @@ both icon URLs and layouts at 375 px and 1280 px in light and dark modes.
 
 ## SQLite hosting on JARVIS
 
-The ticket logic runs in a long-lived Node service with one writer connection
-and one local SQLite WAL database per project. The Worker and the Node service
-share ticket operations, SQL and the change journal. JARVIS clients connect over
-loopback. Tailscale Serve terminates HTTPS for the other clients and proxies
-their existing API and feed. Ticket IDs, optimistic preconditions, lease
-ownership and machine-token registration use the same contracts.
+The ticket service keeps one writer connection and one SQLite WAL database
+per project. SQLite commits use FULL synchronization. The hot path keeps
+the live ticket index, prepared statements and known machine tokens in
+memory. Readiness and lease timers restart from SQLite state.
 
-SQLite commits use FULL synchronization. The hot path keeps the live index,
-prepared statements and known machine tokens in memory. Node usage reporting
-uses process-local counters. Quota enforcement remains specific to Cloudflare.
-Online backups use a separate process and versioned SQLite files on the NAS.
-The existing Git export also retains ticket history.
+The cutover tool in release `6bdae1c` freezes the hosted source and resumes
+a paged raw-table import. It verifies row counts and digests so the move
+preserves versions, idempotency keys, coordination state and the change
+journal. The service, dependency manifest and test suites now run entirely
+on Node and SQLite. Both projects use HTTPS on JARVIS’s tailnet port 8443.
+This leaves the host’s existing HTTPS service on port 443 available.
 
-A source freeze and a resumable raw-table import preserve versions, request
-keys, coordination state and the feed journal. A project stays fenced on the
-Worker once JARVIS takes writes. Readiness and lease timers restart from the
-SQLite state. See [SQLite ticket operations](sqlite-tickets.md) for cutover,
-verification, backup and recovery.
+Online SQLite snapshots run in a separate process. The daily Git export
+also retains portable ticket history. See [SQLite ticket operations][sqlite]
+for the service configuration and restore procedure.
 
-An isolated M1 Max rehearsal with 4,000 synthetic tickets and release
-`tk` recorded p95 loopback times of 10.6 ms for show, 17.6 ms for ready,
-12.7 ms for graph revalidation, 14.6 ms for update and 15.0 ms for lease
-renewal across 100 samples each. The full graph was 69.5 ms and
-`enact brief` was 288.9 ms. With four concurrent writers, ready reached
-23.8 ms p95 and graph revalidation often returned a full graph. The small
-dashboard fixture rendered in 3.6 ms cold and 1.2 ms warm over SQLite,
-versus 16.6 ms and 7.8 ms in the local Worker simulator. These measurements
-are from a development machine. Cutover requires measurements on JARVIS with
-a scratch copy of the production dataset and a tailnet peer.
+[sqlite]: sqlite-tickets.md

@@ -139,8 +139,10 @@ Configure `[tickets].project` and `[tickets].url` in the main checkout's
 `.enact.toml`. Use the ticket service root URL. Linked worktrees inherit
 the project and URL and keep their own check commands. Run `enact setup` from each project
 to register this machine. Run `enact backend` for the managed `tk` path and
-effective URL. The database host can set `ENACT_TICKETS_URL` to use loopback.
-See [the SQLite operator guide](docs/sqlite-tickets.md) for cutover and recovery.
+effective URL. JARVIS hosts Enact and Beryl’s SQLite databases and serves
+clients over [Tailscale](https://jarvis.tail4b0774.ts.net:8443/en/). The host can
+set `ENACT_TICKETS_URL=http://127.0.0.1:7345` to use loopback. See the
+[SQLite operator guide](docs/sqlite-tickets.md) for backup and recovery.
 
 Ticket writes publish immediately. Use `enact claim`, `start`, `meta`,
 `release` and `close` for assignment and ownership. The CLI and dashboard
@@ -157,7 +159,7 @@ differences from the retired client.
 ### Local ticket verification
 
 Use Node 24.22.3+, Cargo and Python 3.11+ from an Enact checkout. The
-server and CLI tests use isolated fixtures and require no Cloudflare login.
+server and CLI tests use isolated SQLite and HTTP fixtures.
 
 ```sh
 npm --prefix server ci

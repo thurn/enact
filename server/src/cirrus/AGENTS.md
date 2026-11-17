@@ -43,12 +43,12 @@ Every dashboard change serves two priorities, in this order.
 pass trusted HTML only to arguments intended for fragments. `markdown.ts`
 renders the subset used in ticket descriptions and comments.
 
-Wrangler builds the files in `server/static/` into static assets. The page
+The server build fingerprints the files in `server/static/`. The page
 component's `root` sets the project home and navigation base. Use
 `assetRoot: "/"` for pages under a project prefix, since the fingerprinted
-files are served at the Worker origin. The service worker keeps the fixed
+files are served at the ticket service origin. The service worker keeps the fixed
 URL `/sw.js`.
 
-Run `npm test` in `server/` for the HTML parity tests and the local Worker
+Run `npm test` in `server/` for the HTML parity tests and the local HTTP
 asset tests. For changes that affect rendering, check a page in the browser
 at desktop and 375 px widths in light and dark modes.

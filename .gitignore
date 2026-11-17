@@ -3,7 +3,6 @@ __pycache__/
 /.worktrees/
 
 /server/node_modules/
-/server/.wrangler/
 /server/.cirrus/
 /server/.local/
 /server/.dev.vars*

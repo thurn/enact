@@ -1,7 +1,6 @@
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 -- keys: seq (global change counter), cutover (before|paused|after),
--- cutover_at, cutover_seq, daily_usage ({day, requests, rows_written}),
--- token_hashes (hash to machine), token_fetched_at
+-- cutover_at, cutover_seq, token_hashes (hash to machine)
 
 CREATE TABLE tickets (
   id          TEXT PRIMARY KEY,          -- 'q44s.7.24', no project prefix

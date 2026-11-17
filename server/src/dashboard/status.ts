@@ -143,8 +143,8 @@ export class ProjectStatus {
       + c.subsection("Cutover", state + (cutover_at ? c.muted(" · ") + c.time(cutover_at) : ""))
       + c.subsection("Daily usage", c.meta([
         ["UTC day", c.esc(usage.day)],
-        ["Requests", usage.quota_enforced === false ? c.esc(String(usage.requests)) : c.progress(usage.requests, usage.limits.requests)],
-        ["Rows written", usage.quota_enforced === false ? c.esc(String(usage.rows_written)) : c.progress(usage.rows_written, usage.limits.rows_written)],
+        ["Requests", c.esc(String(usage.requests))],
+        ["Rows written", c.esc(String(usage.rows_written))],
       ]));
   }
 }

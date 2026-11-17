@@ -1,12 +1,17 @@
-import { exports } from "cloudflare:workers";
+import {afterAll, beforeAll} from "vitest";
+import {startTestServer} from "../../tests/test-server";
 import { expect, test } from "vitest";
 import { assets } from "./assets";
 import { siteIcons } from "../dashboard/common";
 import { page } from "./components";
 
+let server: Awaited<ReturnType<typeof startTestServer>>;
+beforeAll(async () => { server = await startTestServer(); });
+afterAll(async () => { await server?.close(); });
+
 for (const [name, path] of Object.entries(assets)) {
-  test(`${name} is served by the local Worker under an immutable content hash`, async () => {
-    const response = await exports.default.fetch(`https://example.com/${path}`);
+  test(`${name} is served by the local ticket service under an immutable content hash`, async () => {
+    const response = await fetch(`${server.url}/${path}`);
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe(
       "public, max-age=31536000, immutable",
@@ -23,15 +28,15 @@ for (const [name, path] of Object.entries(assets)) {
 }
 
 test("the service worker keeps a stable URL and revalidates", async () => {
-  const response = await exports.default.fetch("https://example.com/sw.js");
+  const response = await fetch(server.url + "/sw.js");
   expect(response.status).toBe(200);
   expect(response.headers.get("cache-control")).toBe(
-    "public, max-age=0, must-revalidate",
+    "no-cache",
   );
   expect(await response.text()).toContain('addEventListener("fetch"');
 });
 
-test("project pages link to the Worker assets and keep their own navigation root", () => {
+test("project pages link to service assets and keep their own navigation root", () => {
   const html = page({
     title: "Tickets",
     body: "",
@@ -51,7 +56,7 @@ test("project pages link to the Worker assets and keep their own navigation root
 
 for (const [path, size] of [[siteIcons.png, 32], [siteIcons.apple, 180]] as const) {
   test(`${path} serves a square PNG at the required size`, async () => {
-    const response = await exports.default.fetch(`https://example.com${path}`);
+    const response = await fetch(`${server.url}${path}`);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("image/png");
     const bytes = await response.arrayBuffer();
@@ -63,7 +68,7 @@ for (const [path, size] of [[siteIcons.png, 32], [siteIcons.apple, 180]] as cons
 }
 
 test("the scalable purple gem favicon is served as SVG", async () => {
-  const response = await exports.default.fetch(`https://example.com${siteIcons.svg}`);
+  const response = await fetch(`${server.url}${siteIcons.svg}`);
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toContain("image/svg+xml");
   expect(await response.text()).toContain('viewBox="0 0 256 256"');

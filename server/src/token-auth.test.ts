@@ -1,5 +1,4 @@
-import {env, exports} from "cloudflare:workers";
-import {runInDurableObject} from "cloudflare:test";
+import {projectFixture} from "./project-fixture";
 import {expect, test, vi} from "vitest";
 
 async function tokenRef(machine: string, token: string) {
@@ -23,17 +22,17 @@ function advertisement(refs: string[]): string {
 test.each([
   {project: "by", repository: "thurn/beryl"},
   {project: "en", repository: "thurn/enact"},
-])("$project discovers Git token refs and keeps a durable cooldown for failed lookups", async ({project, repository}) => {
+])("$project discovers Git token refs and keeps a cooldown for failed lookups", async ({project, repository}) => {
   const original = "original-bearer";
   const rotated = "rotated-bearer";
   const machine = "test-machine";
   const url = `https://github.com/${repository}.git/info/refs?service=git-upload-pack`;
-  const stub = env.TICKETS.getByName(project);
+  const stub = projectFixture(project, repository);
   let body = advertisement([await tokenRef(machine, original)]);
   let status = 200;
   const realFetch = globalThis.fetch;
   const github = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    // Let the Worker runtime validate the outbound options before returning fixture refs.
+    // Let the platform validate the outbound options before returning fixture refs.
     new Request(input, init);
     return new Response(body, {status, headers: {"Content-Type": "application/x-git-upload-pack-advertisement"}});
   });
@@ -42,14 +41,14 @@ test.each([
     return address === url ? github(input, init) : realFetch(input, init);
   });
 
-  const write = (token?: string) => exports.default.fetch(`https://example.com/${project}/api/events`, {
+  const write = (token?: string) => stub.fetch(`https://example.com/${project}/api/events`, {
     method: "POST",
     headers: token ? {Authorization: `Bearer ${token}`, "X-Actor": "test-actor"} : {},
     body: JSON.stringify({kind: "machine", data: {enrolled: true}}),
   });
-  const allowRefresh = () => runInDurableObject(stub, ({store}) => {
-    store.sql.exec("UPDATE meta SET value = ? WHERE key = 'token_fetched_at'", String(Date.now() - 60_000));
-  });
+  let time = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => time);
+  const allowRefresh = () => { time += 60_000; };
 
   try {
     expect((await write()).status).toBe(401);
@@ -57,9 +56,8 @@ test.each([
     const writes = await Promise.all([write(original), write("unknown"), write("also-unknown")]);
     expect(writes.map((write) => write.status)).toEqual([200, 401, 401]);
     expect(await writes[0].json()).toMatchObject({kind: "machine", machine, data: {enrolled: true}});
-    await runInDurableObject(stub, ({store}) => {
+    stub.inspect(({store}) => {
       expect(Object.values(JSON.parse(store.meta("token_hashes")!))).toEqual([machine]);
-      expect(Number(store.meta("token_fetched_at"))).toBeGreaterThan(0);
     });
     expect(github).toHaveBeenCalledExactlyOnceWith(url, expect.objectContaining({redirect: "manual"}));
 
@@ -67,7 +65,7 @@ test.each([
     expect((await write(original)).status).toBe(200);
     expect(github).toHaveBeenCalledTimes(1);
 
-    await allowRefresh();
+    allowRefresh();
     status = 302;
     body = advertisement([await tokenRef(machine, rotated)]);
     expect((await write(rotated)).status).toBe(401);
@@ -75,18 +73,19 @@ test.each([
     expect((await write(original)).status).toBe(200);
     expect(github).toHaveBeenCalledTimes(2);
 
-    await allowRefresh();
+    allowRefresh();
     status = 200;
     body = body.slice(0, -4);
     expect((await write(rotated)).status).toBe(401);
     expect((await write(original)).status).toBe(200);
 
-    await allowRefresh();
+    allowRefresh();
     body = advertisement([await tokenRef(machine, rotated), `${await tokenRef(machine, original)}/extra`]);
     expect((await write(rotated)).status).toBe(200);
     expect((await write(original)).status).toBe(401);
     expect(github).toHaveBeenCalledTimes(4);
   } finally {
+    clock.mockRestore();
     vi.unstubAllGlobals();
   }
 });

@@ -7,7 +7,7 @@ description: Install Enact and connect the current project to its ticket service
 2. Run `python3 scripts/enact.py install` from the Enact checkout to link the
    skills and install the managed `tk` executable.
 3. Configure `[tickets].project` and `[tickets].url` in the project's main
-   `.enact.toml`. Use the Worker root URL. For an existing project, retain its
+   `.enact.toml`. Use the ticket service root URL. For an existing project, retain its
    check commands, branch names, and worktree settings.
 4. Run `enact setup` from the project to register this machine's write token.
 5. Run `enact backend` for the executable path, then `tk list --json` from the

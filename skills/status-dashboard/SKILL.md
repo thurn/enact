@@ -5,12 +5,12 @@ description: Work on Enact's live ticket dashboard and its cirrus design system 
 
 # Working on the ticket dashboard
 
-Read Enact's root `AGENTS.md`. The Worker serves the dashboard from
+Read Enact's root `AGENTS.md`. The ticket service serves the dashboard from
 `server/src/dashboard/`. Shared components live in `server/src/cirrus/`,
 and their browser assets live in `server/static/`.
 
 Run the server's configured tests with `npm --prefix server test`. Use an
-isolated local Worker and inspect the changed pages in a headless browser at
+isolated SQLite service and inspect the changed pages in a headless browser at
 desktop and 375 px widths, in both colour schemes. Pick a free local port
 and keep fixture data isolated from production.
 

@@ -1,4 +1,4 @@
-// Run against the Worker simulator, or set DASHBOARD_BACKEND=sqlite. Build tk first with
+// Run against an isolated SQLite service. Build tk first with
 // cargo build --manifest-path ../cli/Cargo.toml --locked --bin tk.
 // Set PLAYWRIGHT_MODULE to the installed Playwright entry point if needed.
 import assert from "node:assert/strict";
@@ -9,37 +9,25 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
 import {promisify} from "node:util";
-import {unstable_dev} from "wrangler";
+import {startServer} from "../.local/tickets.mjs";
 
 const {chromium} = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
 const serverPath = fileURLToPath(new URL("../", import.meta.url));
 const tkPath = process.env.TK_PATH ?? join(serverPath, "../cli/target/debug", process.platform === "win32" ? "tk.exe" : "tk");
 const scratch = await mkdtemp(join(tmpdir(), "enact-dashboard-live-"));
 const token = "dashboard-test-token";
-const sqlite = process.env.DASHBOARD_BACKEND === "sqlite";
-let worker, browser;
+let server, browser;
 
 try {
-  let origin;
-  if (sqlite) {
-    const {startServer} = await import("../.local/tickets.mjs");
-    const server = await startServer({data_dir: scratch, projects: {by: ""}, port: 0}, {
-      async fixture(_request, mounted) {
-        const hash = createHash("sha256").update(token).digest("hex");
-        mounted.get("by").storage.sql.exec("INSERT INTO meta VALUES ('token_hashes', ?)", JSON.stringify({[hash]: "test-mac"}));
-        return new Response(null, {status: 204});
-      },
-    });
-    worker = {stop: () => server.close()};
-    origin = server.url;
-    assert.equal((await fetch(origin + "/__coordination/seed", {method: "POST"})).status, 204);
-  } else {
-    worker = await unstable_dev(join(serverPath, "tests/dashboard-worker.ts"), {
-      config: join(serverPath, "wrangler.toml"), ip: "127.0.0.1", port: 0, local: true, logLevel: "error",
-      experimental: {disableExperimentalWarning: true}, persist: false,
-    });
-    origin = `http://${worker.address}:${worker.port}`;
-  }
+  server = await startServer({data_dir: scratch, projects: {by: ""}, port: 0}, {
+    async fixture(_request, mounted) {
+      const hash = createHash("sha256").update(token).digest("hex");
+      mounted.get("by").storage.sql.exec("INSERT INTO meta VALUES ('token_hashes', ?)", JSON.stringify({[hash]: "test-mac"}));
+      return new Response(null, {status: 204});
+    },
+  });
+  const origin = server.url;
+  assert.equal((await fetch(origin + "/__coordination/seed", {method: "POST"})).status, 204);
   const tokenDirectory = process.platform === "win32" ? ["appdata", "enact"] : ["home", ".config", "enact"];
   await mkdir(join(scratch, ...tokenDirectory), {recursive: true});
   await writeFile(join(scratch, ...tokenDirectory, "token"), token + "\n");
@@ -60,7 +48,6 @@ try {
       headers: {"Authorization": `Bearer ${token}`, "X-Actor": actor, "Content-Type": "application/json"},
     });
   }
-  if (!sqlite) assert.equal((await api("test-token", {})).status, 204);
   const body = join(scratch, "body.txt");
   await writeFile(body, Array.from({length: 60}, (_, n) => `Reading position, paragraph ${n}.`).join("\n\n"));
   const {results: [{id}]} = await tk("create", "--title", "Live dashboard fixture", "--body-file", body);
@@ -109,9 +96,7 @@ try {
   await status.getByText(/^macOS/).waitFor();
   await status.getByText(/^Windows/).waitFor();
   assert.match(await status.textContent(), /Passed.*Failed/s);
-  assert.match(await status.textContent(), sqlite
-    ? /HolderOwner.*Requests\d+Rows written\d+/s
-    : /HolderOwner.*Requests\d+\/100000.*Rows written\d+\/100000/s);
+  assert.match(await status.textContent(), /HolderOwner.*Requests\d+Rows written\d+/s);
 
   await home.bringToFront();
   const untouchedCard = home.getByRole("link").filter({has: home.getByRole("heading", {name: "Scroll fixture 0", exact: true})});
@@ -185,6 +170,6 @@ try {
   console.log(`Both open pages updated in ${elapsed.toFixed(1)} ms with scroll preserved and zero idle requests.`);
 } finally {
   await browser?.close();
-  await worker?.stop();
+  await server?.close();
   await rm(scratch, {recursive: true, force: true});
 }

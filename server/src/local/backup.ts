@@ -3,9 +3,8 @@ import {createReadStream} from "node:fs";
 import {mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile} from "node:fs/promises";
 import {join} from "node:path";
 import {backup, DatabaseSync} from "node:sqlite";
-import {checkDatabase} from "./migrate";
 import {projectFile, type Config} from "./http";
-import {SqliteStorage} from "./sqlite";
+import {checkDatabase, SqliteStorage} from "./sqlite";
 
 const snapshotPattern = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/;
 const hour = 60 * 60 * 1000;

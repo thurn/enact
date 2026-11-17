@@ -35,14 +35,14 @@ impl Simulator {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
-            .expect("start Workers simulator (run npm ci in server/ first)");
+            .expect("start ticket protocol simulator (run npm ci in server/ first)");
         let mut address = String::new();
         BufReader::new(child.stdout.take().unwrap())
             .read_line(&mut address)
             .unwrap();
         assert!(
             address.starts_with("http://"),
-            "Workers simulator did not start"
+            "ticket protocol simulator did not start"
         );
         std::fs::write(
             path.join("repo/.enact.toml"),
@@ -103,7 +103,7 @@ fn decode(args: &[&str], output: &Output, code: i32) -> Value {
 }
 
 #[test]
-fn commands_use_the_worker_protocol() {
+fn commands_use_the_ticket_protocol() {
     let sim = Simulator::start();
     for (args, expected) in [
         (&["show", "Tk7mq"][..], "Tk7mq  open  Simulator ticket"),

@@ -7,11 +7,7 @@
     "400": "Malformed request",
     "401": "Missing or unknown token",
     "404": "Ticket not found",
-    "409": "Precondition failed, or claim or lease lost",
-    "429": "Daily write threshold reached"
-  },
-  "error_bodies": {
-    "429": {"limit": "requests|rows_written"}
+    "409": "Precondition failed, or claim or lease lost"
   },
   "types": {
     "Ticket input fields": {
@@ -35,7 +31,7 @@
   "routes": [
     {
       "method": "GET", "path": "/state", "request": {},
-      "response": {"cutover": "before|paused|after", "cutover_at": "timestamp|null", "cutover_id": "string|null", "seq": "integer", "day": "date", "requests": "integer", "rows_written": "integer", "limits": "object"},
+      "response": {"cutover": "before|paused|after", "cutover_at": "timestamp|null", "cutover_id": "string|null", "seq": "integer", "day": "date", "requests": "integer", "rows_written": "integer", "quota_enforced": false, "limits": "object"},
       "statuses": [200]
     },
     {
@@ -61,13 +57,13 @@
       "request": {"body": {"if": "Precondition[]", "ops": "Operation[]"}},
       "response": {"seq": "integer", "results": "OperationResult[]"},
       "conflict": {"failed": "zero-based precondition or operation index", "current": "Ticket|null"},
-      "statuses": [200, 400, 401, 404, 409, 429]
+      "statuses": [200, 400, 401, 404, 409]
     },
     {
       "method": "POST", "path": "/leases/<name>",
       "request": {"path": {"name": "lease name"}, "body": {"op": "acquire|renew|release", "holder": "string", "ttl_s": "integer?", "payload": "object?", "no_queue": "boolean? (acquire)", "if_revision": "string? (renew or release)"}},
       "response": {"body": "Lease", "busy": "{holder, expires_at, position?, seq}"},
-      "statuses": [200, 400, 401, 409, 429]
+      "statuses": [200, 400, 401, 409]
     },
     {
       "method": "GET", "path": "/leases", "request": {},
@@ -78,7 +74,7 @@
       "method": "POST", "path": "/events",
       "request": {"body": {"kind": "session|ci|machine|cutover|usage", "data": "JSON"}},
       "response": {"body": "Event"},
-      "statuses": [200, 400, 401, 429]
+      "statuses": [200, 400, 401]
     },
     {
       "method": "GET", "path": "/events",
@@ -94,9 +90,9 @@
     },
     {
       "method": "POST", "path": "/import",
-      "request": {"body": {"tickets": "up to 200 flat Whole ticket objects", "daily_row_ceiling": "optional maximum daily rows including existing usage", "pause_id": "optional ID of the active managed pause", "before_cutover": "optional bool requiring before"}},
+      "request": {"body": {"tickets": "up to 200 flat Whole ticket objects", "daily_row_ceiling": "deprecated compatibility field, ignored by SQLite", "pause_id": "optional ID of the active managed pause", "before_cutover": "optional bool requiring before"}},
       "response": {"seq": "integer", "imported": "number of changed tickets", "rows_written": "SQLite writes for data and shared sequence", "conflict": "{error, conflicts: ticket IDs}"},
-      "statuses": [200, 400, 401, 409, 429]
+      "statuses": [200, 400, 401, 409]
     },
     {
       "method": "GET", "path": "/export",
@@ -107,8 +103,8 @@
     {
       "method": "POST", "path": "/state",
       "request": {"body": {"cutover": "before|paused|after", "pause_id": "optional ID for a managed pause and its subsequent transitions"}},
-      "response": {"cutover": "before|paused|after", "cutover_at": "timestamp|null", "cutover_id": "string|null", "seq": "integer", "day": "date", "requests": "integer", "rows_written": "integer", "limits": "object"},
-      "statuses": [200, 400, 401, 409, 429]
+      "response": {"cutover": "before|paused|after", "cutover_at": "timestamp|null", "cutover_id": "string|null", "seq": "integer", "day": "date", "requests": "integer", "rows_written": "integer", "quota_enforced": false, "limits": "object"},
+      "statuses": [200, 400, 401, 409]
     }
   ],
   "batch": {

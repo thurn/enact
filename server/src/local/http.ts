@@ -8,7 +8,7 @@ import {WebSocket, WebSocketServer} from "ws";
 import {version} from "../../package.json";
 import {dashboardRoute} from "../dashboard";
 import {TicketProject, apiPath} from "../project";
-import type {Counts, UsageMeter} from "../project-usage";
+import {localUsage} from "../project-usage";
 import type {FeedSocket} from "../ticket-runtime";
 import {SqliteStorage} from "./sqlite";
 
@@ -55,23 +55,6 @@ export function validateConfig(config: Config): void {
   }
 }
 
-function localUsage(): (now: number) => UsageMeter {
-  let counts: Counts = {day: "", requests: 0, rows_written: 0};
-  const unbounded = Number.MAX_SAFE_INTEGER;
-  return (now) => {
-    const day = new Date(now).toISOString().slice(0, 10);
-    if (day !== counts.day) counts = {day, requests: 0, rows_written: 0};
-    return {
-      check() {},
-      record(rows = 0, requests = 1) {
-        counts.requests += requests;
-        counts.rows_written += rows;
-      },
-      state: () => ({...counts, quota_enforced: false, limits: {requests: unbounded, rows_written: unbounded}}),
-    };
-  };
-}
-
 function mount(name: string, repository: string, storage: SqliteStorage, readOnly: boolean) {
   let alarm: {at: number; timer: ReturnType<typeof setTimeout>} | undefined;
   let stopped = false;
@@ -88,7 +71,7 @@ function mount(name: string, repository: string, storage: SqliteStorage, readOnl
     }, Math.max(0, at - Date.now()))};
   }
   const project = new TicketProject(name, repository, {
-    storage, readOnly, local: true, usage: localUsage(),
+    storage, readOnly, usage: localUsage(),
     getAlarm: async () => alarm?.at ?? null,
     setAlarm: async at => { if (!alarm || at < alarm.at) schedule(at); },
     feed: {
@@ -127,9 +110,8 @@ function mount(name: string, repository: string, storage: SqliteStorage, readOnl
   };
 }
 
-async function readAssets() {
+async function readAssets(root: URL) {
   const assets = new Map<string, {body: Uint8Array; headers: Record<string, string>}>();
-  const root = new FileURL("../.cirrus/public/", import.meta.url);
   for (const pathname of await readdir(root, {recursive: true})) {
     const name = pathname.replaceAll("\\", "/");
     const type = contentTypes[extname(name)];
@@ -152,7 +134,7 @@ function requestUrl(request: IncomingMessage, loopback: string, publicUrl?: stri
 }
 
 async function asRequest(request: IncomingMessage, url: URL): Promise<Request> {
-  let body: Uint8Array | undefined;
+  let body: Uint8Array<ArrayBuffer> | undefined;
   if (request.method === "POST") {
     const chunks: Buffer[] = [];
     let bytes = 0;
@@ -179,10 +161,11 @@ async function send(output: ServerResponse, response: Response) {
 }
 
 export async function startServer(config: Config, test?: {
+  assetRoot?: URL;
   fixture?(request: Request, projects: Map<string, ReturnType<typeof mount>>): Promise<Response | undefined>;
 }) {
   if (!test) validateConfig(config);
-  const assets = await readAssets();
+  const assets = await readAssets(test?.assetRoot ?? new FileURL("../.cirrus/public/", import.meta.url));
   const projects = new Map<string, ReturnType<typeof mount>>();
   const websocket = new WebSocketServer({noServer: true, maxPayload: 128});
   let loopback = "";
