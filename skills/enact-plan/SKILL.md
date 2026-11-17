@@ -252,7 +252,7 @@ agent can run.
 
 Read enough of the codebase to decompose well. On the server, file the graph
 with `tk create --json --title <title>` and add edges with `tk dep add`.
-Use `--body-file` for the description and repeat `--dep` for prerequisites
+Use `--body-file` for the description and `--deps a,b` for prerequisites
 known at creation. On the beads backend, use `bd create` and `bd dep add`
 with `--json` (see `bd create --help`).
 

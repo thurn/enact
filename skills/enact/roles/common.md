@@ -133,7 +133,7 @@ so a stale session cannot bypass a fence.
 | Read | `tk show ID --json` | `bd show ID --json` |
 | List open work | `tk list --ancestor EPIC --json` | `bd list --parent EPIC --limit 0 --json` (recurse through child epics) |
 | Create | `tk create --title "..." --body-file FILE --json` | `bd create --title "..." --description "..." --json` |
-| Comment | `tk comment ID "..." --json` | `bd comments add ID "..." --json` |
+| Comment | `tk comments add ID "..." --json` | `bd comments add ID "..." --json` |
 | Move or detach | `tk update ID --parent EPIC --json` (empty string to detach) | `bd update ID --parent EPIC --json` (empty string to detach) |
 | Add or remove a label | `tk update ID --add-label LABEL --json` or `--remove-label LABEL` | `bd label add ID LABEL --json` or `bd label remove ID LABEL --json` |
 | Add or remove an edge | `tk dep add ID ON --json` or `tk dep remove ID ON --json` | `bd dep add ID ON --json` or `bd dep remove ID ON --json` |

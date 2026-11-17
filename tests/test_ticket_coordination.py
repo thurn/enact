@@ -110,7 +110,7 @@ if sys.argv[1] == "slow" and (os.environ.get("TEST_FAIL_SLOW") or Path("SLOW").e
              "fields": {"title": "Ticket", "labels": ["test"]}},
         ]})["results"])
         self.tk(a, "close", closed, "--reason", "Verified")
-        self.tk(a, "comment", changed, "Résumé\nSecond line")
+        self.tk(a, "comments", "add", changed, "Résumé\nSecond line")
 
         def on_day(host, day, command):
             driver = """from scripts import enact

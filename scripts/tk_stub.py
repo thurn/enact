@@ -143,16 +143,26 @@ class Store:
         return {"ready": not blockers, "blocked_by": blockers}
 
     def show(self, args):
-        ticket = self.ticket(args.id)
+        tickets = [self.show_ticket(id, args.comments, args.history) for id in args.ids]
+        return tickets[0] if len(tickets) == 1 else tickets
+
+    def comments(self, args):
+        return self.comments_for(self.ticket(args.id)["id"])
+
+    def comments_for(self, id):
+        return [dict(row) for row in self.db.execute(
+            "SELECT * FROM comments WHERE ticket = ? ORDER BY n", (id,)
+        )]
+
+    def show_ticket(self, id, comments, history):
+        ticket = self.ticket(id)
         name = ticket["id"]
         ticket["edges"] = [edge for edge in self.edges() if name in (edge["src"], edge["dst"])]
         ticket["children"] = [child["id"] for child in self.children(name)]
         ticket.update(self.readiness(ticket))
-        if args.comments:
-            ticket["comments"] = [dict(row) for row in self.db.execute(
-                "SELECT * FROM comments WHERE ticket = ? ORDER BY n", (name,)
-            )]
-        if args.history:
+        if comments:
+            ticket["comments"] = self.comments_for(name)
+        if history:
             ticket["history"] = [decoded(row) for row in self.db.execute(
                 "SELECT * FROM history WHERE ticket = ? ORDER BY seq", (name,)
             )]
@@ -177,7 +187,7 @@ class Store:
             readiness = self.readiness(ticket)
             if not args.ready or readiness["ready"]:
                 results.append({**ticket, **readiness})
-        return results[:args.limit]
+        return results[:args.limit or None]
 
     def graph(self, args):
         if args.if_none_match == self.seq():
@@ -469,9 +479,12 @@ def parse_args():
     commands = parser.add_subparsers(dest="command", required=True)
 
     show = commands.add_parser("show")
-    show.add_argument("id")
+    show.add_argument("ids", nargs="+")
     show.add_argument("--comments", action="store_true")
     show.add_argument("--history", action="store_true")
+
+    comments = commands.add_parser("comments")
+    comments.add_argument("id")
 
     for name in ("list", "ready"):
         listing = commands.add_parser(name)
@@ -480,7 +493,7 @@ def parse_args():
         listing.add_argument("--label", action="append", default=[])
         listing.add_argument("--all", action="store_true")
         listing.add_argument("--ready", action="store_true", default=name == "ready")
-        listing.add_argument("--limit", type=int)
+        listing.add_argument("-n", "--limit", type=int)
 
     graph = commands.add_parser("graph")
     graph.add_argument("--all", action="store_true")

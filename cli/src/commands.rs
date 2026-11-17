@@ -1,9 +1,12 @@
 use crate::args::{
-    Command, Create, Cutover, EdgeOperation, LeaseOperation, List, Ready, Search, Update,
+    Command, CommentOperation, Create, Cutover, Edge, EdgeOperation, LeaseOperation, List, Ready,
+    Search, Update,
 };
 use crate::client::{Client, Result, usage};
 use serde_json::{Map, Value, json};
-use std::io::{self, Write};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
 
 type Fields = Map<String, Value>;
 type Query = Vec<(&'static str, String)>;
@@ -11,19 +14,30 @@ type Query = Vec<(&'static str, String)>;
 pub fn run(client: &Client, command: Command) -> Result<Value> {
     match command {
         Command::Show {
-            id,
+            ids,
             comments,
             history,
         } => {
             let mut query = Query::new();
             flag(&mut query, "comments", comments);
             flag(&mut query, "history", history);
-            read(client, &["tickets", &id], &query)
+            if let [id] = ids.as_slice() {
+                return read(client, &["tickets", id], &query);
+            }
+            let tickets = ids
+                .iter()
+                .map(|id| read(client, &["tickets", id], &query))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(json!(tickets))
+        }
+        Command::Children { id } => {
+            read(client, &["tickets"], &[("parent", id), ("all", "1".into())])
         }
         Command::List(List {
             ready_filters,
             status,
             ticket_type,
+            label_any,
             parent,
             assignee,
             all,
@@ -36,10 +50,11 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
                 ("type", ticket_type),
                 ("parent", parent),
                 ("assignee", assignee),
-                ("limit", limit.map(|n| n.to_string())),
+                ("limit", limit.filter(|&n| n != 0).map(|n| n.to_string())),
             ] {
                 query.extend(value.map(|value| (name, value)));
             }
+            query.extend(label_any.into_iter().map(|value| ("label_any", value)));
             flag(&mut query, "all", all);
             flag(&mut query, "ready", ready);
             read(client, &["tickets"], &query)
@@ -87,36 +102,37 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
             json!({"op": "defer", "id": id, "until": until}),
             vec![],
         ),
-        Command::Comment {
-            id,
-            text,
-            body_file,
-        } => {
-            let text = file_contents(body_file)?
-                .or(text)
-                .expect("comment text validated by parser");
-            single(
-                client,
-                json!({"op": "comment", "id": id, "text": text}),
-                vec![],
-            )
-        }
-        Command::Dep {
-            operation,
-            id,
-            on,
-            kind,
-        } => {
-            let operation = match operation {
-                EdgeOperation::Add => "dep_add",
-                EdgeOperation::Remove => "dep_remove",
-            };
-            let mut op = json!({"op": operation, "id": id, "on": on});
-            if let Some(kind) = kind {
-                op["kind"] = json!(kind);
+        Command::Comments { id, operation } => match operation {
+            Some(CommentOperation::Add {
+                id,
+                text,
+                body_file,
+            }) => {
+                let text = file_contents(body_file)?
+                    .or(text)
+                    .expect("comment text validated by parser");
+                single(
+                    client,
+                    json!({"op": "comment", "id": id, "text": text}),
+                    vec![],
+                )
             }
-            single(client, op, vec![])
-        }
+            None => {
+                let id = id.expect("ticket ID validated by parser");
+                let mut ticket = read(client, &["tickets", &id], &[("comments", "1".into())])?;
+                Ok(ticket["comments"].take())
+            }
+        },
+        Command::Dep { operation } => match operation {
+            EdgeOperation::Add(edge) => edge_change(client, "dep_add", edge),
+            EdgeOperation::Remove(edge) => edge_change(client, "dep_remove", edge),
+            EdgeOperation::Cycles => {
+                let graph = read(client, &["graph"], &[("all", "1".into())])?;
+                Ok(json!(blocking_cycles(
+                    graph["edges"].as_array().map_or(&[], Vec::as_slice)
+                )))
+            }
+        },
         Command::Batch => batch(
             client,
             serde_json::from_reader(io::stdin().lock()).map_err(usage)?,
@@ -296,10 +312,14 @@ pub fn export_pages(client: &Client, mut visit: impl FnMut(&str) -> Result<()>) 
 }
 
 fn create(client: &Client, args: Create) -> Result<Value> {
-    let mut fields = Fields::from_iter([("title".into(), json!(args.title))]);
+    let mut fields = Fields::from_iter([("title".into(), json!(args.title.into_text()))]);
     put(&mut fields, "type", args.ticket_type);
     put(&mut fields, "priority", args.priority);
-    put(&mut fields, "body", file_contents(args.body_file)?);
+    put(
+        &mut fields,
+        "body",
+        file_contents(args.body_file)?.or(args.description),
+    );
     put(&mut fields, "acceptance", args.acceptance);
     put(&mut fields, "design", file_contents(args.design_file)?);
     if !args.labels.is_empty() {
@@ -308,7 +328,12 @@ fn create(client: &Client, args: Create) -> Result<Value> {
     if args.last {
         fields.insert("last".into(), json!(1));
     }
-    let mut op = json!({"op": "create", "fields": fields, "deps": args.dep});
+    let deps: Vec<_> = args
+        .deps
+        .iter()
+        .map(|spec| create_dependency(spec))
+        .collect();
+    let mut op = json!({"op": "create", "fields": fields, "deps": deps});
     if let Some(parent) = args.parent {
         op["parent"] = json!(parent);
     }
@@ -328,14 +353,7 @@ fn update(client: &Client, args: Update) -> Result<Value> {
     if args.last || args.no_last {
         fields.insert("last".into(), json!(u8::from(args.last)));
     }
-    let mut metadata = Fields::new();
-    for setting in args.set {
-        let (key, value) = setting
-            .split_once('=')
-            .filter(|(key, _)| !key.is_empty())
-            .ok_or_else(|| usage("--set expects key=value"))?;
-        metadata.insert(key.into(), json!(value));
-    }
+    let metadata = metadata_changes(&args.set_metadata, &args.unset_metadata)?;
     let mut conditions = Vec::new();
     if let Some(version) = args.if_version {
         conditions.push(json!({"id": args.id, "version": version}));
@@ -344,19 +362,116 @@ fn update(client: &Client, args: Update) -> Result<Value> {
         conditions.push(json!({"id": args.id, "assignee": nullable(assignee)}));
     }
     let mut operation = json!({"op": "update", "id": args.id, "set": fields});
+    let mut has_update = !fields.is_empty();
     for (field, values) in [
         ("add_labels", args.add_label),
         ("remove_labels", args.remove_label),
-        ("unset_meta", args.unset),
+        ("unset_meta", args.unset_metadata),
     ] {
         if !values.is_empty() {
             operation[field] = json!(values);
+            has_update = true;
         }
     }
     if !metadata.is_empty() {
         operation["set_meta"] = json!(metadata);
+        has_update = true;
+    }
+    if args.claim {
+        let mut operations = vec![json!({"op": "claim", "id": args.id})];
+        if has_update {
+            operations.push(operation);
+        }
+        return batch(client, json!({"if": conditions, "ops": operations}));
     }
     single(client, operation, conditions)
+}
+
+pub(crate) fn metadata_changes(assignments: &[String], removals: &[String]) -> Result<Fields> {
+    let valid_key = |key: &str| !key.is_empty() && key != "_enact_beads";
+    let mut metadata = Fields::new();
+    for assignment in assignments {
+        let (key, value) = assignment
+            .split_once('=')
+            .ok_or_else(|| usage("--set-metadata expects key=value"))?;
+        if !valid_key(key) {
+            return Err(usage("invalid metadata key"));
+        }
+        let value = match serde_json::from_str::<Value>(value) {
+            Ok(value) if value.is_boolean() || value.is_number() || value.is_null() => value,
+            _ => json!(value),
+        };
+        metadata.insert(key.to_owned(), value);
+    }
+    if removals.iter().any(|key| !valid_key(key)) {
+        return Err(usage("invalid metadata key"));
+    }
+    Ok(metadata)
+}
+
+pub(crate) fn create_dependency(spec: &str) -> Value {
+    let Some((kind, id)) = spec.split_once(':') else {
+        return json!(spec);
+    };
+    // Beads create uses "blocks" for an edge pointing at the new ticket.
+    match kind {
+        "blocks" => json!({"on": id, "kind": "blocks", "reverse": true}),
+        "blocked-by" | "depends-on" => json!({"on": id, "kind": "blocks"}),
+        "relates-to" => json!({"on": id, "kind": "related"}),
+        _ => json!({"on": id, "kind": kind}),
+    }
+}
+
+pub(crate) fn blocking_cycles(edges: &[Value]) -> Vec<Vec<&str>> {
+    let mut outgoing = BTreeMap::<&str, Vec<&str>>::new();
+    for edge in edges {
+        if matches!(
+            edge["kind"].as_str().unwrap_or_default(),
+            "blocks" | "conditional-blocks"
+        ) {
+            outgoing
+                .entry(edge["src"].as_str().unwrap_or_default())
+                .or_default()
+                .push(edge["dst"].as_str().unwrap_or_default());
+        }
+    }
+    let mut visited = HashSet::new();
+    let mut cycles = Vec::new();
+    for &root in outgoing.keys() {
+        if !visited.insert(root) {
+            continue;
+        }
+        let mut stack = vec![(root, outgoing[&root].iter())];
+        let mut active = HashMap::from([(root, 0)]);
+        while let Some((id, neighbors)) = stack.last_mut() {
+            if let Some(&target) = neighbors.next() {
+                if let Some(&start) = active.get(target) {
+                    cycles.push(stack[start..].iter().map(|(id, _)| *id).collect());
+                } else if visited.insert(target)
+                    && let Some(next) = outgoing.get(target)
+                {
+                    active.insert(target, stack.len());
+                    stack.push((target, next.iter()));
+                }
+            } else {
+                active.remove(id);
+                stack.pop();
+            }
+        }
+    }
+    cycles
+}
+
+fn edge_change(client: &Client, op: &str, Edge { id, on, kind }: Edge) -> Result<Value> {
+    let mut action = json!({"op": op, "id": id, "on": on});
+    if let Some(kind) = kind {
+        action["kind"] = json!(if kind == "relates-to" {
+            "related"
+        } else {
+            &kind
+        });
+    }
+    single(client, action, vec![])
 }
 
 fn nullable(value: String) -> Value {
@@ -373,12 +488,19 @@ fn put(fields: &mut Fields, name: &str, value: Option<impl Into<Value>>) {
     }
 }
 
-fn file_contents(path: Option<std::path::PathBuf>) -> Result<Option<String>> {
-    path.map(|path| {
-        std::fs::read_to_string(&path)
-            .map_err(|error| usage(format!("{}: {error}", path.display())))
-    })
-    .transpose()
+fn file_contents(path: Option<PathBuf>) -> Result<Option<String>> {
+    path.map(|path| read_text(&path).map_err(|error| usage(format!("{}: {error}", path.display()))))
+        .transpose()
+}
+
+pub(crate) fn read_text(path: &Path) -> io::Result<String> {
+    if path == Path::new("-") {
+        let mut text = String::new();
+        io::stdin().read_to_string(&mut text)?;
+        Ok(text)
+    } else {
+        std::fs::read_to_string(path)
+    }
 }
 
 pub(crate) fn single(client: &Client, op: Value, conditions: Vec<Value>) -> Result<Value> {

@@ -719,13 +719,12 @@ class Beads:
         if self.server:
             command, *fields = args
             if command == "comments":
-                return self.ticket("show", fields[0], "--comments").get("comments", [])
+                return self.ticket("comments", fields[0])
             if command == "ready":
                 return [ticket_as_bead(self.repo, t) for t in self.ticket("ready")
                         if t["type"] != "epic" and not t.get("assignee")]
             if command == "list":
-                filters = fields[:-2] if fields[-2:] == ["-n", "0"] else fields
-                return [ticket_as_bead(self.repo, t) for t in self.ticket("list", *filters)]
+                return [ticket_as_bead(self.repo, t) for t in self.ticket("list", *fields)]
             raise Fail(f"unsupported ticket read: {command}")
         out = self.run(*args, "--json", actor=actor)
         return json.loads(out) if out.strip() else None

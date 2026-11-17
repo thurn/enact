@@ -200,7 +200,7 @@ fn commands_use_the_worker_protocol() {
         "../body.txt",
         "--acceptance",
         "passes",
-        "--dep",
+        "--deps",
         "bbbb",
         "--last",
     ]);
@@ -236,9 +236,9 @@ fn commands_use_the_worker_protocol() {
         "old",
         "--notes",
         "some notes",
-        "--set",
+        "--set-metadata",
         "a=b=c",
-        "--unset",
+        "--unset-metadata",
         "unused",
         "--no-last",
         "--if-version",
@@ -271,15 +271,15 @@ fn commands_use_the_worker_protocol() {
             json!({"op":"defer","id":"k7mq","until":"2026-11-17"}),
         ),
         (
-            vec!["comment", "k7mq", "--body-file", "../body.txt"],
+            vec!["comments", "add", "k7mq", "-f", "../body.txt"],
             json!({"op":"comment","id":"k7mq","text":"body on disk\n"}),
         ),
         (
-            vec!["comment", "k7mq", "a comment"],
+            vec!["comments", "add", "k7mq", "a comment"],
             json!({"op":"comment","id":"k7mq","text":"a comment"}),
         ),
         (
-            vec!["dep", "add", "k7mq", "bbbb", "--kind", "related"],
+            vec!["dep", "add", "k7mq", "bbbb", "-t", "related"],
             json!({"op":"dep_add","id":"k7mq","on":"bbbb","kind":"related"}),
         ),
         (
@@ -402,7 +402,8 @@ fn commands_use_the_worker_protocol() {
     let args = [
         "--project",
         "unsafe",
-        "comment",
+        "comments",
+        "add",
         "k7mq",
         "never replay this",
         "--retry-for",

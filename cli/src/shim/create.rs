@@ -1,4 +1,5 @@
 use super::{defer_until, git_config, output, string, ticket};
+use crate::args::{CreateTitle, priority};
 use crate::client::{Client, Result, usage};
 use crate::commands;
 use clap::Args;
@@ -12,12 +13,11 @@ pub(super) struct Create {
     id: Option<String>,
     #[arg(long)]
     parent: Option<String>,
-    #[arg(long, required_unless_present = "positional_title")]
-    title: Option<String>,
-    positional_title: Option<String>,
+    #[command(flatten)]
+    title: CreateTitle,
     #[arg(long = "type", short = 't', default_value = "task")]
     kind: String,
-    #[arg(short = 'p', long, default_value_t = 2)]
+    #[arg(short = 'p', long, default_value_t = 2, value_parser = priority)]
     priority: u8,
     #[arg(long, short = 'd')]
     description: Option<String>,
@@ -44,10 +44,7 @@ impl Create {
         if self.id.is_some() && self.parent.is_some() {
             return Err(usage("Error: cannot specify both --id and --parent flags"));
         }
-        let title = self
-            .title
-            .or(self.positional_title)
-            .expect("title validated by parser");
+        let title = self.title.into_text();
         let body = match self.body_file.as_deref() {
             Some("-") => {
                 let mut text = String::new();
@@ -78,7 +75,11 @@ impl Create {
         } else {
             "open"
         });
-        let deps: Vec<_> = self.deps.iter().map(|spec| dependency(spec)).collect();
+        let deps: Vec<_> = self
+            .deps
+            .iter()
+            .map(|spec| commands::create_dependency(spec))
+            .collect();
         let mut operation = json!({
             "op": "create", "parent": self.parent, "deps": deps,
             "fields": {
@@ -105,17 +106,5 @@ impl Create {
             }
         }
         Ok(0)
-    }
-}
-
-fn dependency(spec: &str) -> Value {
-    let (kind, id) = spec.split_once(':').unwrap_or(("blocked-by", spec));
-    // In `bd create --deps`, `blocks` describes what the new ticket blocks.
-    // In `bd dep add` and the server API, the source is the blocked ticket.
-    match kind {
-        "blocks" => json!({"on": id, "kind": "blocks", "reverse": true}),
-        "blocked-by" | "depends-on" => json!({"on": id, "kind": "blocks"}),
-        "relates-to" => json!({"on": id, "kind": "related"}),
-        _ => json!({"on": id, "kind": kind}),
     }
 }

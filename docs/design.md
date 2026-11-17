@@ -2176,24 +2176,28 @@ Global options: `--project`, `--actor`, `--json`, `--retry-for <seconds>`
 in `.enact.toml`.
 
 ```
-tk show <id> [--comments] [--history]
+tk show <id>... [--comments] [--history]
 tk list [--status S] [--type T] [--parent ID] [--ancestor ID] [--label L]...
-        [--assignee A] [--all] [--limit N]
-tk search <words> [--status S] [--limit N]
+        [--label-any a,b] [--assignee A] [--all] [-n|--limit N]
+tk children <id>
+tk search <words> [--status S] [-n|--limit N]
 tk ready [--ancestor ID] [--label L]...
 tk graph [--all] [--if-none-match ETAG]
-tk create --title T [--type T] [-p N] [--parent ID] [--labels a,b]
-          [--body-file F] [--acceptance A] [--design-file F] [--dep ID]... [--last]
+tk create [TITLE | --title T] [-t|--type T] [-p N] [--parent ID] [-l|--labels a,b]
+          [--body-file F] [--description D] [--acceptance A] [--design-file F]
+          [--deps a,b] [--last] [--silent]
 tk update <id> [--title T] [--status S] [-p N] [--assignee A] [--parent ID]
           [--body-file F] [--acceptance A] [--notes N] [--add-label L]...
-          [--remove-label L]... [--set k=v]... [--unset k]... [--last|--no-last]
-          [--if-version N] [--if-assignee A]
+          [--remove-label L]... [--set-metadata k=v]... [--unset-metadata k]...
+          [--claim] [--last|--no-last] [--if-version N] [--if-assignee A]
 tk claim <id>
 tk close <id> --reason R
 tk reopen <id>
 tk defer <id> --until DATE
-tk comment <id> [TEXT | --body-file F]
-tk dep add|remove <id> <on> [--kind K]
+tk comments <id>
+tk comments add <id> [TEXT | -f|--body-file F]
+tk dep add|remove <id> <on> [-t|--type K]
+tk dep cycles
 tk batch                      # the /batch JSON on stdin
 tk lease acquire|renew|release <name> [--ttl S] [--holder H] [--payload JSON]
          [--no-queue] [--if-revision REV]
@@ -2231,6 +2235,12 @@ within `--retry-for`; 6 `tk wait` timed out. Retries back off from 0.2 s to
 asking the server whether the first attempt landed; a `create` carries a
 client-chosen request key that the server remembers for a day, so a retry
 never creates twice.
+
+Commands with Beads counterparts use the same names and flags. A JSON
+`show` with one ID returns a ticket object. With multiple IDs it returns an
+array in the requested order. `comments <id>` returns the ticket's comments
+array. `dep cycles` returns arrays of ticket IDs. `create --silent` prints
+only the canonical ID when called without `--json`.
 
 Search accepts a quoted phrase or separate words. It returns up to 50 tickets
 by default. Pass `--limit 0` to return every match.

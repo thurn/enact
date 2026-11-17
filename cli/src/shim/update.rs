@@ -88,7 +88,7 @@ impl Update {
             };
             fields.insert("defer_until".into(), value);
         }
-        let metadata = self.metadata()?;
+        let metadata = crate::commands::metadata_changes(&self.set_metadata, &self.unset_metadata)?;
         let updates_fields = fields.keys().any(|field| field != "parent")
             || !metadata.is_empty()
             || !self.unset_metadata.is_empty()
@@ -149,31 +149,6 @@ impl Update {
             println!("✓ Updated issue: {id} — {title}");
         }
         Ok(0)
-    }
-
-    fn metadata(&self) -> Result<Map<String, Value>> {
-        let mut metadata = Map::new();
-        for assignment in &self.set_metadata {
-            let (key, value) = assignment
-                .split_once('=')
-                .ok_or_else(|| usage("--set-metadata expects key=value"))?;
-            if key.is_empty() || key == "_enact_beads" {
-                return Err(usage("invalid metadata key"));
-            }
-            let value = match serde_json::from_str::<Value>(value) {
-                Ok(value) if value.is_boolean() || value.is_number() || value.is_null() => value,
-                _ => json!(value),
-            };
-            metadata.insert(key.to_owned(), value);
-        }
-        if self
-            .unset_metadata
-            .iter()
-            .any(|key| key.is_empty() || key == "_enact_beads")
-        {
-            return Err(usage("invalid metadata key"));
-        }
-        Ok(metadata)
     }
 
     fn check(&self, client: &Client, before: &Value, json_output: bool) -> Result<()> {

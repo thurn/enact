@@ -223,7 +223,7 @@ def exercise(tk, legacy, bd, directory, project, address, env, corpus, scenario)
     checked(legacy, ["--sandbox", "label", "add", tickets[1], "late"], source, env)
     checked(legacy, ["--sandbox", "label", "remove", tickets[1], "late"], source, env)
     checked("dolt", ["push", "origin", "main"], database, env)
-    native(tk, source, operator, "comment", tickets[2], "Native edit")
+    native(tk, source, operator, "comments", "add", tickets[2], "Native edit")
     reconcile = ["reconcile", "--archive", str(archive)]
     too_soon = shim.run(sys.executable, [*command, *reconcile], source, operator)
     assert too_soon.returncode == 1 and "Reconcile after" in too_soon.stdout, too_soon
@@ -231,7 +231,7 @@ def exercise(tk, legacy, bd, directory, project, address, env, corpus, scenario)
                            "raise SystemExit(cutover.main())", *reconcile]
     assert shim.ok(sys.executable, virtual_hour, source, operator)["imported"] == 1
     assert shim.ok(sys.executable, virtual_hour, source, operator)["imported"] == 0
-    assert native(tk, source, operator, "show", tickets[2], "--comments")["comments"][0]["text"] == "Native edit"
+    assert native(tk, source, operator, "comments", tickets[2])[0]["text"] == "Native edit"
     found = native(tk, source, operator, "show", tickets[1], "--history")
     events = {event["event_type"] for change in found["history"] for event in change["change"]}
     assert {"label_added", "label_removed"} <= events

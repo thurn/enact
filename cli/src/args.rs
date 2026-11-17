@@ -1,4 +1,5 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(about = "Read and update Enact tickets")]
@@ -26,13 +27,17 @@ fn seconds(value: &str) -> Result<f64, String> {
 #[derive(Subcommand)]
 pub enum Command {
     Show {
-        id: String,
+        #[arg(required = true)]
+        ids: Vec<String>,
         #[arg(long)]
         comments: bool,
         #[arg(long)]
         history: bool,
     },
     List(List),
+    Children {
+        id: String,
+    },
     /// Search ticket titles and ID prefixes, including closed tickets.
     Search(Search),
     Ready(Ready),
@@ -60,19 +65,16 @@ pub enum Command {
         #[arg(long)]
         until: String,
     },
-    Comment {
-        id: String,
-        #[arg(required_unless_present = "body_file")]
-        text: Option<String>,
-        #[arg(long, conflicts_with = "text")]
-        body_file: Option<std::path::PathBuf>,
+    #[command(subcommand_negates_reqs = true, args_conflicts_with_subcommands = true)]
+    Comments {
+        #[arg(required = true)]
+        id: Option<String>,
+        #[command(subcommand)]
+        operation: Option<CommentOperation>,
     },
     Dep {
+        #[command(subcommand)]
         operation: EdgeOperation,
-        id: String,
-        on: String,
-        #[arg(long)]
-        kind: Option<String>,
     },
     /// Send a batch from standard input.
     Batch,
@@ -170,7 +172,7 @@ pub enum Command {
 pub struct Ready {
     #[arg(long)]
     pub ancestor: Option<String>,
-    #[arg(long)]
+    #[arg(long, short = 'l', value_delimiter = ',')]
     pub label: Vec<String>,
 }
 
@@ -178,19 +180,21 @@ pub struct Ready {
 pub struct List {
     #[command(flatten)]
     pub ready_filters: Ready,
-    #[arg(long)]
+    #[arg(long, short = 's')]
     pub status: Option<String>,
-    #[arg(long = "type")]
+    #[arg(long = "type", short = 't')]
     pub ticket_type: Option<String>,
+    #[arg(long, value_delimiter = ',')]
+    pub label_any: Vec<String>,
     #[arg(long)]
     pub parent: Option<String>,
-    #[arg(long)]
+    #[arg(long, short = 'a')]
     pub assignee: Option<String>,
     #[arg(long)]
     pub all: bool,
     #[arg(long)]
     pub ready: bool,
-    #[arg(long)]
+    #[arg(long, short = 'n')]
     pub limit: Option<u64>,
 }
 
@@ -205,27 +209,57 @@ pub struct Search {
 }
 
 #[derive(Args)]
+pub struct CreateTitle {
+    #[arg(long, required_unless_present = "positional_title")]
+    title: Option<String>,
+    #[arg(value_name = "TITLE")]
+    positional_title: Option<String>,
+}
+
+impl CreateTitle {
+    pub fn into_text(self) -> String {
+        self.title
+            .or(self.positional_title)
+            .expect("title validated by parser")
+    }
+}
+
+#[derive(Args)]
 pub struct Create {
-    #[arg(long)]
-    pub title: String,
-    #[arg(long = "type")]
+    #[command(flatten)]
+    pub title: CreateTitle,
+    #[arg(long = "type", short = 't')]
     pub ticket_type: Option<String>,
-    #[arg(short = 'p', long, value_parser = clap::value_parser!(u8).range(0..=4))]
+    #[arg(short = 'p', long, value_parser = priority)]
     pub priority: Option<u8>,
     #[arg(long)]
     pub parent: Option<String>,
-    #[arg(long, value_delimiter = ',')]
+    #[arg(long, short = 'l', value_delimiter = ',')]
     pub labels: Vec<String>,
     #[arg(long)]
-    pub body_file: Option<std::path::PathBuf>,
+    pub body_file: Option<PathBuf>,
+    #[arg(long, short = 'd')]
+    pub description: Option<String>,
     #[arg(long)]
     pub acceptance: Option<String>,
     #[arg(long)]
     pub design_file: Option<std::path::PathBuf>,
-    #[arg(long)]
-    pub dep: Vec<String>,
+    #[arg(long, value_delimiter = ',')]
+    pub deps: Vec<String>,
     #[arg(long)]
     pub last: bool,
+    #[arg(long)]
+    pub silent: bool,
+}
+
+pub(crate) fn priority(value: &str) -> Result<u8, String> {
+    value
+        .strip_prefix(['P', 'p'])
+        .unwrap_or(value)
+        .parse::<u8>()
+        .ok()
+        .filter(|value| *value <= 4)
+        .ok_or_else(|| "expected priority 0–4 or P0–P4".into())
 }
 
 #[derive(Args)]
@@ -233,11 +267,11 @@ pub struct Update {
     pub id: String,
     #[arg(long)]
     pub title: Option<String>,
-    #[arg(long)]
+    #[arg(long, short = 's')]
     pub status: Option<String>,
-    #[arg(short = 'p', long, value_parser = clap::value_parser!(u8).range(0..=4))]
+    #[arg(short = 'p', long, value_parser = priority)]
     pub priority: Option<u8>,
-    #[arg(long)]
+    #[arg(long, short = 'a')]
     pub assignee: Option<String>,
     #[arg(long)]
     pub parent: Option<String>,
@@ -247,14 +281,16 @@ pub struct Update {
     pub acceptance: Option<String>,
     #[arg(long)]
     pub notes: Option<String>,
-    #[arg(long)]
+    #[arg(long, value_delimiter = ',')]
     pub add_label: Vec<String>,
-    #[arg(long)]
+    #[arg(long, value_delimiter = ',')]
     pub remove_label: Vec<String>,
     #[arg(long)]
-    pub set: Vec<String>,
+    pub set_metadata: Vec<String>,
     #[arg(long)]
-    pub unset: Vec<String>,
+    pub unset_metadata: Vec<String>,
+    #[arg(long, conflicts_with_all = ["assignee", "status"])]
+    pub claim: bool,
     #[arg(long, conflicts_with = "no_last")]
     pub last: bool,
     #[arg(long)]
@@ -265,10 +301,30 @@ pub struct Update {
     pub if_assignee: Option<String>,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Subcommand)]
+pub enum CommentOperation {
+    Add {
+        id: String,
+        #[arg(required_unless_present = "body_file")]
+        text: Option<String>,
+        #[arg(long, short = 'f', visible_alias = "file", conflicts_with = "text")]
+        body_file: Option<PathBuf>,
+    },
+}
+
+#[derive(Args)]
+pub struct Edge {
+    pub id: String,
+    pub on: String,
+    #[arg(long = "type", short = 't')]
+    pub kind: Option<String>,
+}
+
+#[derive(Subcommand)]
 pub enum EdgeOperation {
-    Add,
-    Remove,
+    Add(Edge),
+    Remove(Edge),
+    Cycles,
 }
 
 #[derive(Clone, Copy, ValueEnum)]

@@ -78,8 +78,8 @@ ask whether the requirement is real:
   DLL, its disk, its credentials) is that machine's problem, not the
   project's. Pin the bead to that host and record why. Use `enact meta`
   on a bead you own. For unassigned work, use
-  `tk update ID --set enact_host=HOST --if-assignee "" --json` on the
-  server or `bd update ID --set-metadata enact_host=HOST --json` on Beads.
+  `tk update ID --set-metadata enact_host=HOST --if-assignee "" --json`
+  on the server or `bd update ID --set-metadata enact_host=HOST --json` on Beads.
 - **Work only another machine can do or check** (its OS, a device, its
   local logs): pin the bead to that host.
 - **Access or a decision only the user has**: no pin.

@@ -422,6 +422,52 @@ def expanded_commands(tk, bd, directory, env, address):
     assert [row["id"] for row in ok(tk, ["search", "Tcorpus.1.1", "--json"], directory, env)] == ["corpus.1.1"]
     print(f"{len(fixture['calls'])} expanded commands match {fixture['bd_version']}.")
 
+    created = run(tk, ["create", "Native positional title", "-t", "bug", "-p", "P1", "-l", "alpha,beta",
+                       "--parent", "corpus", "--description", "Inline description", "--deps",
+                       "corpus.3,blocks:corpus.2", "--silent"], directory, env)
+    assert (created.returncode, created.stdout, created.stderr) == (0, "corpus.5\n", ""), created
+    shown = ok(tk, ["show", "Tcorpus.5", "corpus.3", "--json"], directory, env)
+    assert [row["id"] for row in shown] == ["corpus.5", "corpus.3"], shown
+    child = shown[0]
+    assert (child["title"], child["type"], child["priority"], child["labels"], child["body"]) == (
+        "Native positional title", "bug", 1, ["alpha", "beta"], "Inline description",
+    )
+    assert child["edges"] == [
+        {"src": "corpus.2", "dst": "corpus.5", "kind": "blocks"},
+        {"src": "corpus.5", "dst": "corpus.3", "kind": "blocks"},
+    ]
+    children = ok(tk, ["children", "Tcorpus", "--json"], directory, env)
+    assert {row["id"] for row in children} == {f"corpus.{number}" for number in range(1, 6)}
+    flagged = ok(tk, ["list", "--label-any", "alpha,other", "-n", "1", "--json"], directory, env)
+    assert [row["id"] for row in flagged] == ["corpus.5"]
+
+    def claim(actor, *args):
+        return run(tk, ["--actor", actor, "update", "corpus.5", "--claim", "--json", *args], directory, env)
+
+    winner = claim("Ada", "--set-metadata", "attempt=1", "--set-metadata", "temporary=yes")
+    assert winner.returncode == 0, winner
+    loser = claim("Grace", "--unset-metadata", "temporary", "--set-metadata", "attempt=2")
+    assert loser.returncode == 3, loser
+    saved = ok(tk, ["show", "corpus.5", "--json"], directory, env)
+    assert (saved["assignee"], saved["status"], saved["metadata"]) == (
+        "Ada", "in_progress", {"attempt": 1, "temporary": "yes"},
+    ), saved
+    ok(tk, ["update", "corpus.5", "--unset-metadata", "temporary", "--json"], directory, env)
+    assert ok(tk, ["show", "corpus.5", "--json"], directory, env)["metadata"] == {"attempt": 1}
+
+    ok(tk, ["comments", "add", "corpus.5", "-f", "comment.txt", "--json"], directory, env)
+    ok(tk, ["--json", "comments", "add", "corpus.5", "--", "--literal text"], directory, env)
+    comments = ok(tk, ["comments", "corpus.5", "--json"], directory, env)
+    assert [row["text"] for row in comments] == ["  First\r\nsecond\t雪\n", "--literal text"], comments
+    assert ok(tk, ["dep", "cycles", "--json"], directory, env) == [["corpus.1", "corpus.2"]]
+    ok(tk, ["dep", "remove", "corpus.2", "corpus.1", "-t", "conditional-blocks", "--json"], directory, env)
+    assert ok(tk, ["dep", "cycles", "--json"], directory, env) == []
+    ok(tk, ["dep", "add", "corpus.5", "corpus.2", "--type", "relates-to", "--json"], directory, env)
+    edges = ok(tk, ["show", "corpus.5", "--json"], directory, env)["edges"]
+    assert {"src": "corpus.5", "dst": "corpus.2", "kind": "related"} in edges, edges
+    print("Native Beads-style commands verified against the ticket Worker.")
+
+
 
 def cutover(bd, directory, env, address):
     config = directory / ".enact.toml"

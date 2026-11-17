@@ -7,7 +7,7 @@ mod migration;
 mod register;
 mod shim;
 
-use args::{Command, Options};
+use args::{Command, EdgeOperation, Options};
 use clap::Parser;
 use client::{Client, Result, usage};
 use serde_json::{Value, json};
@@ -41,6 +41,13 @@ fn main() -> ExitCode {
 }
 
 fn run(options: Options) -> Result<()> {
+    let silent_create = matches!(&options.command, Command::Create(args) if args.silent);
+    let dep_cycles = matches!(
+        &options.command,
+        Command::Dep {
+            operation: EdgeOperation::Cycles
+        }
+    );
     let value = match options.command {
         Command::Version => {
             let version = env!("CARGO_PKG_VERSION");
@@ -73,9 +80,37 @@ fn run(options: Options) -> Result<()> {
     let mut output = io::stdout().lock();
     if options.json {
         writeln!(output, "{value}").map_err(usage)
+    } else if silent_create {
+        let id = value["results"][0]["id"]
+            .as_str()
+            .ok_or_else(|| usage("create response has no ticket ID"))?;
+        writeln!(output, "{id}").map_err(usage)
+    } else if dep_cycles {
+        human_cycles(&mut output, &value).map_err(usage)
     } else {
         human(&mut output, &value).map_err(usage)
     }
+}
+
+fn human_cycles(output: &mut impl Write, value: &Value) -> io::Result<()> {
+    let cycles = value.as_array().expect("dependency cycles array");
+    if cycles.is_empty() {
+        return writeln!(output, "No dependency cycles detected.");
+    }
+    for cycle in cycles {
+        let mut ids: Vec<_> = cycle
+            .as_array()
+            .expect("cycle members array")
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|id| format!("T{id}"))
+            .collect();
+        if let Some(first) = ids.first() {
+            ids.push(first.clone());
+            writeln!(output, "{}", ids.join(" → "))?;
+        }
+    }
+    Ok(())
 }
 
 fn human(output: &mut impl Write, value: &Value) -> io::Result<()> {
@@ -101,6 +136,9 @@ fn human(output: &mut impl Write, value: &Value) -> io::Result<()> {
             "T{id}  {}  {title}",
             value["status"].as_str().unwrap_or("")
         );
+    }
+    if let (Some(author), Some(text)) = (value["author"].as_str(), value["text"].as_str()) {
+        return writeln!(output, "{author}: {text}");
     }
     if let Some(results) = value["results"].as_array() {
         for result in results {

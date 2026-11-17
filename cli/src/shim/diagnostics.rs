@@ -72,7 +72,16 @@ pub fn explain(client: &Client, as_json: bool) -> Result<u8> {
     }
     output::sort_rows(&mut ready, true);
     output::sort_rows(&mut blocked, false);
-    let cycles = blocking_cycles(client, array(&graph["edges"]));
+    let cycles = commands::blocking_cycles(array(&graph["edges"]));
+    let cycles: Vec<Vec<_>> = cycles
+        .into_iter()
+        .map(|cycle| {
+            cycle
+                .into_iter()
+                .map(|id| output::legacy_id(client, id))
+                .collect()
+        })
+        .collect();
     if as_json {
         let mut answer = json!({"ready": ready, "blocked": blocked, "schema_version": 1,
             "summary": {"total_ready": ready.len(), "total_blocked": blocked.len(), "cycle_count": cycles.len()}});
@@ -88,7 +97,7 @@ pub fn explain(client: &Client, as_json: bool) -> Result<u8> {
 
 pub fn cycles(client: &Client, as_json: bool) -> Result<u8> {
     let graph = commands::read(client, &["graph"], &[("all", "1".into())])?;
-    let cycles = blocking_cycles(client, array(&graph["edges"]));
+    let cycles = commands::blocking_cycles(array(&graph["edges"]));
     let mut issues = HashMap::new();
     let mut rows = Vec::new();
     for cycle in cycles {
@@ -234,48 +243,6 @@ fn issue_branch(
             issue_branch(child, &prefix, branch, groups);
         }
     }
-}
-
-fn blocking_cycles(client: &Client, edges: &[Value]) -> Vec<Vec<String>> {
-    let mut outgoing = BTreeMap::<&str, Vec<&str>>::new();
-    for edge in edges {
-        if matches!(string(&edge["kind"]), "blocks" | "conditional-blocks") {
-            outgoing
-                .entry(string(&edge["src"]))
-                .or_default()
-                .push(string(&edge["dst"]));
-        }
-    }
-    let mut visited = HashSet::new();
-    let mut cycles = Vec::new();
-    for &root in outgoing.keys() {
-        if !visited.insert(root) {
-            continue;
-        }
-        let mut stack = vec![(root, outgoing[&root].iter())];
-        let mut active = HashMap::from([(root, 0)]);
-        while let Some((id, neighbors)) = stack.last_mut() {
-            if let Some(&target) = neighbors.next() {
-                if let Some(&start) = active.get(target) {
-                    cycles.push(
-                        stack[start..]
-                            .iter()
-                            .map(|(id, _)| output::legacy_id(client, id))
-                            .collect(),
-                    );
-                } else if visited.insert(target)
-                    && let Some(next) = outgoing.get(target)
-                {
-                    active.insert(target, stack.len());
-                    stack.push((target, next.iter()));
-                }
-            } else {
-                active.remove(id);
-                stack.pop();
-            }
-        }
-    }
-    cycles
 }
 
 fn explain_text(ready: &[Value], blocked: &[Value], cycles: &[Vec<String>]) {

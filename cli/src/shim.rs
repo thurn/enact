@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 use std::env;
 use std::ffi::OsString;
-use std::io::{self, Read};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -149,12 +149,7 @@ enum Action {
 
 #[derive(Subcommand)]
 enum Dependency {
-    Add {
-        id: String,
-        on: String,
-        #[arg(long = "type", default_value = "blocks")]
-        kind: String,
-    },
+    Add(crate::args::Edge),
     Remove {
         id: String,
         on: String,
@@ -305,7 +300,7 @@ fn unsupported(args: &[OsString]) -> Failure {
         "dep" => "dep",
         "children" => "list --parent",
         "label" | "undefer" => "update",
-        "comments" => "comment",
+        "comments" => "comments",
         "epic" => "list --type epic",
         "init" | "dolt" => "state",
         "list" | "ready" | "show" | "create" | "update" | "close" | "defer" | "reopen"
@@ -562,9 +557,7 @@ fn run(client: &Client, options: Options) -> Result<u8> {
                     row
                 }
                 _ => {
-                    return Err(usage(
-                        "bd: unsupported comments arguments; use tk comment or tk show --comments",
-                    ));
+                    return Err(usage("bd: unsupported comments arguments; use tk comments"));
                 }
             }
         }
@@ -613,23 +606,17 @@ fn comment_text(text: Option<&String>, file: Option<&Path>) -> Result<String> {
             "cannot combine positional text {text:?} with --file"
         )));
     }
-    let mut text = String::new();
-    if file == Path::new("-") {
-        io::stdin().read_to_string(&mut text).map_err(usage)?;
-    } else {
-        text = std::fs::read_to_string(file).map_err(|error| {
-            let reason = match error.kind() {
-                io::ErrorKind::NotFound => "no such file or directory".into(),
-                io::ErrorKind::PermissionDenied => "permission denied".into(),
-                _ => error.to_string(),
-            };
-            usage(format!(
-                "failed to open file: open {}: {reason}",
-                file.display()
-            ))
-        })?;
-    }
-    Ok(text)
+    commands::read_text(file).map_err(|error| {
+        let reason = match error.kind() {
+            io::ErrorKind::NotFound => "no such file or directory".into(),
+            io::ErrorKind::PermissionDenied => "permission denied".into(),
+            _ => error.to_string(),
+        };
+        usage(format!(
+            "failed to open file: open {}: {reason}",
+            file.display()
+        ))
+    })
 }
 
 fn dependency(client: &Client, operation: Dependency) -> Result<Value> {
@@ -653,7 +640,9 @@ fn dependency(client: &Client, operation: Dependency) -> Result<Value> {
         }
         Dependency::Tree { id } => return output::tree(client, &id),
         Dependency::Cycles => unreachable!("cycles render separately"),
-        Dependency::Add { id, on, kind } => (id, on, Some(kind)),
+        Dependency::Add(crate::args::Edge { id, on, kind }) => {
+            (id, on, Some(kind.unwrap_or_else(|| "blocks".into())))
+        }
         Dependency::Remove { id, on } => (id, on, None),
     };
     let mut op =
