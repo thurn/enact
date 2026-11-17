@@ -35,8 +35,7 @@
   summary>`. Enact users read session state from these emojis; the host's
   activity indicator is not accessible enough to rely on.
 - Slow-CI failures file one Steward task per OS in the active tracker.
-  Run `enact backend` to identify it. The live Enact project's Beads
-  prefix is `en`.
+  Run `enact backend` to identify it. The live Enact ticket project is `en`.
 - Projects and live sessions on every machine use this repository directly,
   so keep changes backward compatible.
 - Record design decisions in `docs/design.md`.

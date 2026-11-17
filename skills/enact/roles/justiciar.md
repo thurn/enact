@@ -38,7 +38,7 @@ and finish.
 To end the emergency you may:
 
 - fix external systems and OS-level problems: free disk space, reinstall or
-  upgrade tools, repair git or Dolt state, fix remotes and credentials files
+  upgrade tools, repair Git state or ticket-service access, fix remotes and credentials files
   you already have access to;
 - bypass normal rules: push directly to `staging` or `master`, skip checks,
   force-reset a broken ref (record the old SHA first);

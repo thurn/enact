@@ -29,7 +29,7 @@ stores the task graph and coordinates claims and leases.
 | `skills/enact-setup/SKILL.md` | Machine and project setup: `/enact-setup` |
 | `skills/enact-sweep/SKILL.md` | Close stale beads, run the rest: `/enact-sweep` |
 | `scripts/enact.py` | Helper: claims, sync, push, slow CI, locks |
-| `cli/`, `server/` | Native `tk` client, compatibility shim and ticket Worker |
+| `cli/`, `server/` | Native `tk` client and ticket Worker |
 | `templates/AGENTS.md` | Sample AGENTS.md section |
 | `docs/design.md` | Design decisions and rationale |
 

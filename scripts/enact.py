@@ -4738,28 +4738,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     add("backend", cmd_backend, "Show the active ticket backend and its client path.")
 
-    p = add("claim", cmd_claim, "Claim a bead fleet-wide (pull, claim, push).")
-    p.add_argument("bead")
+    p = add("claim", cmd_claim, "Claim a ticket fleet-wide.")
+    p.add_argument("bead", metavar="TICKET")
     p.add_argument("--actor")
 
-    p = add("start", cmd_start, "Take over a bead reserved for this session by the vizier.")
-    p.add_argument("bead")
+    p = add("start", cmd_start, "Take over a ticket reserved for this session by the vizier.")
+    p.add_argument("bead", metavar="TICKET")
     p.add_argument("--actor")
     p.add_argument("--reservation", help="token from the spawn prompt")
 
-    p = add("close", cmd_close, "Close a bead, auto-close finished epics, sync.")
-    p.add_argument("bead")
+    p = add("close", cmd_close, "Close a ticket and auto-close finished epics.")
+    p.add_argument("bead", metavar="TICKET")
     p.add_argument("--reason", required=True)
     p.add_argument("--actor")
     p.add_argument("--continue", dest="continue_lane", action="store_true",
-                   help="then claim the next ready bead in this bead's lane")
+                   help="then claim the next ready ticket in this ticket's lane")
 
-    p = add("brief", cmd_brief, "Print one bead's working context: bead, epics, "
+    p = add("brief", cmd_brief, "Print one ticket's working context: ticket, epics, "
             "dependency handoffs and lane.")
-    p.add_argument("bead")
+    p.add_argument("bead", metavar="TICKET")
 
-    p = add("meta", cmd_meta, "Set metadata key=value pairs on a bead and sync.")
-    p.add_argument("bead")
+    p = add("meta", cmd_meta, "Publish metadata key=value pairs on a ticket.")
+    p.add_argument("bead", metavar="TICKET")
     p.add_argument("pairs", nargs="+")
     p.add_argument("--actor")
     p.add_argument("--expected-session", help="archive target session")
@@ -4774,13 +4774,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--explicit", action="store_true", help="user explicitly requested resume")
     p.add_argument("--exhausted", action="store_true", help="Justiciar exhausted recovery")
 
-    p = add("next", cmd_next, "Vizier step: reserve the next bead to spawn, or wait.")
+    p = add("next", cmd_next, "Vizier step: reserve the next ticket to spawn, or wait.")
     p.add_argument("--epic", required=True)
     p.add_argument("--parallel", type=int, default=1)
     p.add_argument("--vizier", help="vizier identity (default: this session)")
     p.add_argument("--wait", type=int, default=0, help="block up to N seconds for an action")
     p.add_argument("--interval", type=int, default=60)
-    p.add_argument("--running", action="append", metavar="BEAD",
+    p.add_argument("--running", action="append", metavar="TICKET",
                    help="a stalled bead whose worker's turn you saw still running")
 
     p = add("pool", cmd_pool, "Track the sessions a Claude Desktop vizier reuses.")
@@ -4789,8 +4789,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true", help="drop every member")
     p.add_argument("--vizier", help="vizier identity (default: this session)")
 
-    p = add("wait", cmd_wait, "Block until every named bead is closed.")
-    p.add_argument("beads", nargs="+")
+    p = add("wait", cmd_wait, "Block until every named ticket is closed.")
+    p.add_argument("beads", nargs="+", metavar="TICKET")
     p.add_argument("--timeout", type=int, default=540, help="seconds to block for")
     p.add_argument("--interval", type=int, default=30, help=argparse.SUPPRESS)
 
@@ -4805,7 +4805,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--detach", action="store_true", help="start the runner in the background")
     p.add_argument("--status", action="store_true", help="report runner state")
     p.add_argument("--wait", metavar="SHA",
-                   help="block until SHA reaches master or a Steward bead covers it")
+                   help="block until SHA reaches master or a Steward ticket covers it")
     p.add_argument("--timeout", type=int, default=540, help="seconds --wait blocks for")
     p.add_argument("--interval", type=int, default=30, help=argparse.SUPPRESS)
     p.add_argument("--check-worker", help=argparse.SUPPRESS)
@@ -4815,7 +4815,7 @@ def build_parser() -> argparse.ArgumentParser:
     add("ticket-backup", cmd_ticket_backup, "Back up server tickets to Git once per UTC day.")
 
     p = add("worktree", cmd_worktree,
-            "Create or remove a bead worktree cut from staging, or prune dead ones.")
+            "Create or remove a ticket worktree cut from staging, or prune dead ones.")
     p.add_argument("action", choices=["create", "remove", "prune"])
     p.add_argument("name", nargs="?")
 
@@ -4827,7 +4827,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("status", cmd_status, "Report this machine's Enact state.")
 
     p = add("release", cmd_release, "Return an abandoned bead to the queue.")
-    p.add_argument("bead")
+    p.add_argument("bead", metavar="TICKET")
     p.add_argument("--reason", required=True)
     p.add_argument("--actor")
     p.add_argument("--expected-owner", help="exact observed assignee")
