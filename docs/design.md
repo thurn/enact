@@ -6,7 +6,7 @@ The hourly scheduled Marshal sweep is gone. An audit of about 75 hourly
 beryl sweeps over three days found it never nudged a worker, resumed a
 vizier, released a reservation or started CI. Its only output was
 archiving three finished chats (two more archive attempts were refused for
-live work) and marking already-archived chats on their beads, at 1-4
+live work) and marking already-archived chats on their tickets, at 1-4
 minutes per run and once 18. The recorded session IDs for several sessions
 also did not resolve, so it is doubtful it could have recovered a real
 stall. Claude scheduled turns could never start sessions anyway, so on
@@ -61,7 +61,7 @@ publication boundary, stale takeover, owner-fenced release and recovery.
 ## Run contracts
 
 The helper and role prompts enforce these contracts cooperatively; raw git
-and Beads writes and unmodified older helpers remain outside that protocol.
+and tickets writes and unmodified older helpers remain outside that protocol.
 
 - Audit against local project chats in the current desktop app, preserving
   Claude Desktop support. Identify supported tools and execution location
@@ -71,7 +71,7 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   (2026-11-13): it changed no behaviour.
 - A run finishes only when its delivered commits have passed slow CI and
   reached `master`, including any required Steward fixes. Workers may still
-  close their beads after pushing. Bead closure alone is not run completion.
+  close their tickets after pushing. ticket closure alone is not run completion.
 - The Justiciar retains broad emergency authority. Direct changes to
   `master` are exceptional recovery: explain why repairing staging and
   running CI cannot resolve the emergency, preserve the old SHA, and record
@@ -101,7 +101,7 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   them; slow tests are never kept "just in case".
 - The slow-CI runner kills a slow check's whole process tree after
   `[checks] slow_timeout` seconds (default 3600) and reports a failure, so a
-  hang (a stuck exec, a server never stopped) files a Steward bead instead of
+  hang (a stuck exec, a server never stopped) files a Steward ticket instead of
   holding `master` back indefinitely. Budgets stay the project's to enforce.
 - `[checks] slow_min_gap` (seconds, default 0) is the least time between the end
   of one slow-CI run and the start of the next. The runner waits it out while
@@ -127,7 +127,7 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   the tip equals the last tested SHA; re-check after releasing the lock. No
   debounce.
   - Pass: fast-forward `origin/master` to the tested SHA (slow CI green).
-  - Fail: at most one open P0 Steward bead per project per OS, unparented;
+  - Fail: at most one open P0 Steward ticket per project per OS, unparented;
     later failures add a comment with the new range and log excerpt.
 - Machines run slow CI independently; any machine's pass advances master.
 - Local `staging` and `master` track `origin/staging` and `origin/master`
@@ -140,52 +140,49 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   nobody commits on them.
 - Executors keep pushing while staging is red.
 
-## Beads
+## Ticket operations
 
-- Embedded Dolt mode (verified: works from linked worktrees and under
-  concurrent writes). Remote is origin `refs/dolt/data`.
-- `enact sync`: dolt commit, pull, push, retry. On a true conflict the remote
-  wins and the helper prints the dropped local values.
-- `enact claim`: pull, verify open+unassigned, claim, push; the loser of a
-  cross-machine race backs off. `enact push` appends `enact_commits` and
-  repairs delivery receipts; `enact close` closes the bead and syncs.
-- Role is a label `role:<name>`; unlabeled beads are executor beads.
-- Targeting metadata: `enact_host=<hostname>` / `enact_provider=claude|codex`
-  restricts which vizier may pick a bead (this is the "mailbox").
-- Bookkeeping metadata: `enact_vizier`, `enact_session`, `enact_archived`,
-  `enact_commits`.
+- The ticket service owns the task graph and coordination. Each checkout
+  configures its project and service URL in `.enact.toml`.
+- `enact claim` atomically claims a ticket. The loser of a cross-machine race
+  backs off. `enact push` appends `enact_commits` and repairs delivery
+  receipts. `enact close` publishes the closure immediately.
+- Role is a `role:<name>` label. Unlabeled tickets are executor tasks.
+- `enact_host` and `enact_provider` restrict which vizier may select work.
+  `enact_vizier`, `enact_session`, `enact_archived`, and `enact_commits`
+  retain the execution record.
 
 ## Vizier
 
 - One user-invoked skill that scales with its input, `/enact-plan <input>
   [parallelism]`. One entry point keeps small tasks lightweight.
-  - Bead: execute it. An epic is the run (joining another vizier's run needs
-    nothing special); a plain bead is wrapped in a new epic, since follow-ups
+  - ticket: execute it. An epic is the run (joining another vizier's run needs
+    nothing special); a plain ticket is wrapped in a new epic, since follow-ups
     and `enact next` work by epic.
   - Plan document: full stoppage audit with the user, full decomposition.
-  - Task prompt: smallest graph, one executor bead, no milestones or
+  - Task prompt: smallest graph, one executor ticket, no milestones or
     gates; a prompt describing a large work item is treated as a plan.
-    Review is none, inline or a Warden bead (below).
+    Review is none, inline or a Warden ticket (below).
 - Pre-flight: audit stoppage risks and resolve each with the user up front;
   refuse to start if any remain. Require a non-prompting permission mode.
   `git pull --ff-only` in ~/enact.
 - Inline review: a `review:inline` label requires one fresh-context
-  cold-review subagent before pushing. Use a Warden bead for large or risky
+  cold-review subagent before pushing. Use a Warden ticket for large or risky
   changes or when the user requests one.
 - Follow-ups are essential-only: real bugs, missing tests for risky behavior,
-  imminent design problems or broken tooling. Each bead costs a session.
+  imminent design problems or broken tooling. Each ticket costs a session.
   Comment issues on a not-yet-started Warden that will review the code
-  rather than duplicating its work; a Warden closes beads its fixes cover.
+  rather than duplicating its work; a Warden closes tickets its fixes cover.
 - `enact install` removes dangling links to retired skills
   (`enact-intake`).
 - Decomposition: full graph up front or rolling milestones, at the vizier's
-  discretion; "decompose milestone N" beads go to the executor role. Agents
-  re-validate stale beads against current code.
-- Warden default: one Warden bead per lane or milestone area, per bead only
+  discretion; "decompose milestone N" tickets go to the executor role. Agents
+  re-validate stale tickets against current code.
+- Warden default: one Warden ticket per lane or milestone area, per ticket only
   for risky changes (see Token economy); code-dependent work depends on the
-  Warden bead.
+  Warden ticket.
 - Milestones are child epics. Mason/Sage audits are "gate" epics blocking the
-  next milestone epic (beads only lets epics block epics; a blocked epic hides
+  next milestone epic (tickets only lets epics block epics; a blocked epic hides
   its children from `bd ready`). Important findings become children of the
   gate; `enact next` closes eligible epics.
 - Loop runs inside the user's original turn (Claude Desktop refuses
@@ -195,14 +192,14 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   and repeat. Resume one yielded process through bounded tool waits; never
   create competing scheduler processes. Output restates the loop so it
   survives compaction.
-- Selection scope: ready descendants of the epic plus unparented Steward beads.
-  Capacity = open beads with `enact_vizier=<me>`; default parallelism 1.
+- Selection scope: ready descendants of the epic plus unparented Steward tickets.
+  Capacity = open tickets with `enact_vizier=<me>`; default parallelism 1.
   Parallelism comes only from the invocation or a later user message, never
-  from bead, epic or plan text: the same graph can run at different widths,
+  from ticket, epic or plan text: the same graph can run at different widths,
   and a stored level would silently override the user. Viziers do not write
-  it into beads and ignore it when present; `run register` metadata records
+  it into tickets and ignore it when present; `run register` metadata records
   the invocation's value for recovery only.
-- The vizier archives sessions of closed beads reported by `enact next`.
+- The vizier archives sessions of closed tickets reported by `enact next`.
 - All spawns go through the vizier, including the Justiciar
   (`enact justiciar request`); the requesting host's vizier spawns it.
 - Termination: `enact next` reports done only after epic closure, required
@@ -210,7 +207,7 @@ and Beads writes and unmodified older helpers remain outside that protocol.
   and pending validation keep the run alive. A genuine deadlock requests a
   Justiciar; paused and blocked states retain unmet acceptance.
 - Spawn prompt names `roles/common.md` and `roles/<role>.md` by absolute path,
-  plus the bead and epic, and asks for both reads and `enact start` in the
+  plus the ticket and epic, and asks for both reads and `enact start` in the
   first message: each extra request rereads the whole context (2026-11-15:
   runs of read-only requests were about a quarter of Beryl's weekly spend).
   The files stay out of the prompt itself because the vizier would have to
@@ -228,7 +225,7 @@ and Beads writes and unmodified older helpers remain outside that protocol.
 ## Marshal
 
 Removed on 2026-11-11; see [Marshal removed](#marshal-removed-2026-11-11).
-`enact status` still lists only beads spawned by the caller's host app: a
+`enact status` still lists only tickets spawned by the caller's host app: a
 Claude session cannot see Codex threads. Legacy routing remains visible for
 inspection; uncertainty never authorizes releasing ownership.
 
@@ -236,18 +233,18 @@ inspection; uncertainty never authorizes releasing ownership.
 
 - May edit ~/enact, but only through Enact's own flow: a worktree from
   `origin/staging` and `enact push`. The Enact repository is itself set up
-  with Enact (Beads prefix `en`), so its slow CI advances its `master`, which
+  with Enact (tickets prefix `en`), so its slow CI advances its `master`, which
   is what every machine pulls.
 
 ## Archivist
 
-- One Archivist bead ends every plan run (small task-prompt runs get none).
+- One Archivist ticket ends every plan run (small task-prompt runs get none).
   It deletes the plan document if the repository tracks it, fixes links that
   would dangle, and edits the persistent docs to describe the shipped state
   only, minimally (YAGNI), within the project's existing doc architecture.
-- `enact next` holds a `role:archivist` bead until it is the last open
-  non-epic bead in the run epic. Planned dependency edges could not cover
-  follow-ups filed mid-run, and tasks cannot depend on epics in Beads.
+- `enact next` holds a `role:archivist` ticket until it is the last open
+  non-epic ticket in the run epic. Planned dependency edges could not cover
+  follow-ups filed mid-run, and tasks cannot depend on epics in tickets.
 - Default architecture when a project has none: one project skill. Claude
   Code reads project skills only from `.claude/skills/`, Codex only from
   `.agents/skills/` (cwd up to the repository root). The content lives in
@@ -275,21 +272,21 @@ inspection; uncertainty never authorizes releasing ownership.
   full-replacement `create`/`remove` hooks (env: `ENACT_WORKTREE_PATH`,
   `ENACT_BRANCH`, `ENACT_BASE_SHA`, `ENACT_REPO`), optional
   `[roles.<role>]` model/effort per host.
-- Worktree slots (2026-11-13): `[worktree] slots = N` gives bead worktrees N
+- Worktree slots (2026-11-13): `[worktree] slots = N` gives ticket worktrees N
   fixed directories, `slot-01` to `slot-NN`, instead of a new directory per
-  bead. Cargo's fingerprints include the worktree path, so a reused path
+  ticket. Cargo's fingerprints include the worktree path, so a reused path
   skips recompiling the workspace crates; on Beryl a build plus a test build
   took 115 s in a reused path against 224 s in a new one. `worktree create`
-  hands a bead the first slot parked on a detached HEAD, resets it and checks
-  the bead's branch out; ignored files stay. Releasing (push, `worktree
+  hands a ticket the first slot parked on a detached HEAD, resets it and checks
+  the ticket's branch out; ignored files stay. Releasing (push, `worktree
   remove`, the sweep) detaches the slot at staging, deletes the branch and
-  keeps the directory, without running the `remove` hook. The bead's
-  `enact_worktree` pointer names the slot, and a slot belongs to the bead
+  keeps the directory, without running the `remove` hook. The ticket's
+  `enact_worktree` pointer names the slot, and a slot belongs to the ticket
   whose `enact_branch` is checked out in it. Default 0 keeps the old
   behavior. Slots never shrink the build directory, so a project that enables
   them must prune it itself.
 - Ad hoc trees in slots (2026-11-15): `enact worktree create <name>` without a
-  bead takes a slot too, checking out `enact/<name>`; `create` and `remove`
+  ticket takes a slot too, checking out `enact/<name>`; `create` and `remove`
   with the same name find the slot by that branch. Of the free slots, the one
   parked at the newest staging tip is taken, because its build is the closest.
   Beryl's fast check had its Rust test step killed at the 180 s limit in 48 of
@@ -309,15 +306,15 @@ inspection; uncertainty never authorizes releasing ownership.
   the pool then makes another slot or a named directory, which costs a cold
   build, never someone's work.
 - Slots that hold work are never handed out (2026-11-15): a detached slot is
-  also busy when it has uncommitted or untracked files, or when a bead that is
+  also busy when it has uncommitted or untracked files, or when a ticket that is
   not closed records it (`enact_worktree` on this host) and its `enact_branch`
   still exists, since release deletes that branch. `claim_slot` no longer
   resets or cleans the slot it takes, because a free slot is already clean.
-  `enact push` exits 2 when the tree's branch is not the bead's
+  `enact push` exits 2 when the tree's branch is not the ticket's
   `enact_branch`. Before this, after an app restart on Beryl, a slot whose
-  owner was mid-rebase was handed to a second bead (the rebase guard had not
+  owner was mid-rebase was handed to a second ticket (the rebase guard had not
   reached `master` yet); the owner's rebase then finished on the wrong branch
-  and an amend rewrote the other bead's commit.
+  and an amend rewrote the other ticket's commit.
 - Only released slots are free (2026-11-15): `release_slot` writes
   `enact-released` in the slot's git dir with the commit it parked the slot
   at, and a slot is free only while that file names its current HEAD;
@@ -354,11 +351,11 @@ inspection; uncertainty never authorizes releasing ownership.
 ## Packaging
 
 - One stdlib-only `scripts/enact.py` (Python 3.11+), subcommands `push ci
-  claim close sync next worktree justiciar install setup`, plus ownership,
+  claim close next worktree justiciar install setup`, plus ownership,
   run-control, status and recovery commands shown by `--help`.
 - Skills linked per machine into user-level skill dirs (symlinks; junctions on
-  Windows). `enact-setup` per project: beads init, dolt remote, staging
-  branch, `.enact.toml`, AGENTS.md bullets.
+  Windows). `enact-setup` per project: ticket project configuration, machine registration, staging
+  branch, and AGENTS.md instructions.
 - Four skills: `enact-plan` (the vizier), `enact` (inline),
   `enact-setup` and `enact-sweep` (backlog sweep). Role files stay in `skills/enact/roles/` so spawn prompts
   and Marshal tasks written before the split keep working (the Marshal role
@@ -372,23 +369,14 @@ inspection; uncertainty never authorizes releasing ownership.
   Justiciar, inline runs, and ad hoc sessions following the AGENTS.md
   section) titles itself on start and ends every final turn on ✅ or ⛔,
   including early stops. Existing projects keep old AGENTS.md text, so
-  `enact worktree create` and `enact push` without a bead also print a
+  `enact worktree create` and `enact push` without a ticket also print a
   `title` notice, and `watch_ci` names the CI-wait emojis.
 
 ## Implementation contracts
 
-- Spawned sessions take their bead with `enact start`, which moves the
+- Spawned sessions take their ticket with `enact start`, which moves the
   assignee from a unique vizier reservation to their own session ID, fenced
   by the reservation token.
-- Dolt conflicts are row-level in practice (`updated_at` changes on every
-  write), so any concurrent edit of one bead conflicts. `bd sql` is not
-  available in embedded mode, so `enact sync` resolves conflicts with the
-  `dolt` CLI directly on `.beads/embeddeddolt/<db>`. That makes `dolt` a hard
-  requirement.
-- `bd init` runs with `--skip-agents --skip-hooks` (Enact's AGENTS.md section
-  replaces bd's injected instructions, Claude/Codex hooks and git hooks) and
-  commits `.beads/` itself. Fresh clones use `bd bootstrap`.
-- bd stores `key=true` metadata as a JSON boolean; the helper normalizes it.
 - `enact next --wait` remembers, in a machine-local file, which archive
   entries it has already reported, so a session that refuses archiving
   (still busy) does not make the vizier spin. It is retried at the end of
@@ -415,7 +403,7 @@ inspection; uncertainty never authorizes releasing ownership.
 ## Durable delivery and final promotion (2026-10-29)
 
 - Before pushing staging, save a local delivery receipt in the git common
-  directory. It contains the bead, run epics, delivered commits, previous
+  directory. It contains the ticket, run epics, delivered commits, previous
   commit history and CI intent. Only retire it after confirmed remote
   ancestry, published metadata and CI startup. `push`, `next` and `status`
   recover confirmed receipts; a successful push followed by a failed sync
@@ -424,9 +412,9 @@ inspection; uncertainty never authorizes releasing ownership.
   pushes. Sync recovery unions and verifies metadata after remote-wins
   merges. CI launches an immutable helper snapshot in the git common
   directory, so self-delivery cannot delete the child's entry point.
-- Assignments record `enact_run`; deliveries and CI failure beads record
+- Assignments record `enact_run`; deliveries and CI failure tickets record
   `enact_runs` (multiple runs may share a Steward). Repeated CI failures
-  retain affected runs. Older beads infer run membership from the parent
+  retain affected runs. Older tickets infer run membership from the parent
   graph; legacy Stewards can be matched through their failing commit range.
 - `next` reports `done` only after epic closure, no local assignments, closed
   required Stewards and all run commits being ancestors of remote master.
@@ -517,13 +505,13 @@ inspection; uncertainty never authorizes releasing ownership.
   already recorded child identity must also match. Existing sessions remain
   usable: a legacy reservation without a token requires its recorded child
   ID; a worker that
-  already owns the bead can resume. Same-host operations serialize their
-  check/write/sync sequence with the existing portable OS lock. Remote Beads
+  already owns the ticket can resume. Same-host operations serialize their
+  check/write/sync sequence with the existing portable OS lock. Remote tickets
   conflicts retain remote-wins semantics and published ownership is checked.
 - Close, metadata changes, release, worktree operations and push check current
-  ownership after sync. Push infers a bead from its tree even when `--bead`
+  ownership after sync. Push infers a ticket from its tree even when `--bead`
   is omitted, and checks again immediately before publishing. Ownership is a
-  cooperative helper protocol: raw git/Beads writes and unmodified older
+  cooperative helper protocol: raw git/tickets writes and unmodified older
   helpers cannot be fenced. Upgrade resumed workers before they act. Recovery
   must first establish inactivity; it is not permission to preempt a live
   command between its final check and remote git publication.
@@ -546,21 +534,21 @@ inspection; uncertainty never authorizes releasing ownership.
   worktree's commits that are not on staging to its branch on the remote,
   with a lease so it never overwrites another host's commits, before it
   gives up ownership; a rejected push fails the release and keeps the
-  assignment (2026-11-16: two Beryl beads released on one host were redone
+  assignment (2026-11-16: two Beryl tickets released on one host were redone
   from scratch on another). A remote replacement starts from that pushed
   branch and keeps the original recovery record, including its original
   host; uncommitted files cannot cross machines and are only flagged
   `uncommitted`. Delivery deletes the pushed branch, since its rebased
   commits never become ancestors of staging.
 - Worktree creation records its host/path/branch and can be retried. A
-  never-assigned bead is claimed for direct CLI work; released beads must be
+  never-assigned ticket is claimed for direct CLI work; released tickets must be
   reassigned first. Explicit removal refuses dirty or unpublished work,
   including branch commits whose checkout directory has disappeared, and
   successful delivery retains a tree with untracked artifacts. Durable
   delivery receipt replay may append factual already-pushed commits after
   reassignment; it does not authorize new publication by an old worker.
 - Vizier routing writes and reservation releases require the token from the
-  original spawn action. A vizier may reserve the same bead repeatedly, so
+  original spawn action. A vizier may reserve the same ticket repeatedly, so
   its identity alone cannot distinguish a delayed response from the current
   assignment. Legacy reservations without tokens keep their existing flow.
   Marshal releases of reservations also supply the observed token.
@@ -579,7 +567,7 @@ inspection; uncertainty never authorizes releasing ownership.
   Registration never resumes a held run. Different viziers use separate
   metadata keys; remote-wins sync verifies every published update.
 - `run pause` and `run block --exhausted` set shared control independently
-  of Beads issue status. Claims, reservation starts, scheduling and Marshal
+  of tickets issue status. Claims, reservation starts, scheduling and Marshal
   recovery check holds on run links and ancestors. Workers already running
   may push and close under a hold. Automatic epic closure excludes held
   epics and their descendants; unmet acceptance remains open. Block a run
@@ -587,7 +575,7 @@ inspection; uncertainty never authorizes releasing ownership.
   decision. Do not replace impossible requirements with endless retries.
 - Only `run resume --explicit --reason` clears a hold and creates a new
   recovery epoch. The flag attests an explicit user instruction, not a
-  permission available to automatic recovery. Raw Beads writes and old
+  permission available to automatic recovery. Raw tickets writes and old
   helper versions can bypass this cooperative protocol; update participating
   peers before relying on fleet-wide pause enforcement.
 - `run recover` records one attempt before a native message is sent. Per
@@ -627,7 +615,7 @@ inspection; uncertainty never authorizes releasing ownership.
 Claude Desktop's `start_session` returns the host session ID
 (`local_...`, also `CLAUDE_CODE_HOST_SESSION_ID`), which the vizier records
 as `enact_session`. `CLAUDE_CODE_SESSION_ID` is a different CLI ID. Start,
-owner checks and release accept both as aliases, using whichever the bead
+owner checks and release accept both as aliases, using whichever the ticket
 records. The default actor stays the CLI ID to preserve live claims.
 `ENACT_SESSION`, when set, is the only accepted identity.
 
@@ -639,12 +627,12 @@ records. The default actor stays the CLI ID to preserve live claims.
   authorized effort preference to `thinking`, and records ready chat IDs.
   Pending client IDs never become ownership identities. Defaults remain
   implicit unless the user requested model settings; unavailable preferred
-  settings fall back with a bead comment, while required models block.
+  settings fall back with a ticket comment, while required models block.
 - Pre-flight verifies tools and local access before reservation. Long helper
   waits stay in one process with bounded continuation calls and mid-run
   steering. The loop retains created-chat receipts for its final UI output.
 - Marshal discovery uses exact identity plus verified legacy aliases. Its
-  saved ID belongs in the run's bead comments; creation, migration and
+  saved ID belongs in the run's ticket comments; creation, migration and
   deletion use the current app schema. A lookup error never authorizes a
   duplicate sweep. Retention follows all relevant active runs and delivery
   state, and bounded recovery still uses the helper's durable permissions.
@@ -668,7 +656,7 @@ records. The default actor stays the CLI ID to preserve live claims.
 
 Verified on 2026-10-29 on jarvis (macOS) with registered local project
 `facd00e9-d913-430e-ad31-b727ae9a8c18` at `/Users/dthurn/enact`. The
-desktop tool host is `local`, distinct from the OS hostname. Run beads
+desktop tool host is `local`, distinct from the OS hostname. Run tickets
 `en-b2c.1.7`, `en-b2c.1.8`, `en-bcw` and `en-b2c.2.2` retain full evidence.
 
 - Chat `01a18aa6-457d-7fa2-b882-3375bd485d98` confirms local creation,
@@ -711,101 +699,31 @@ and active-run need, make one supported restoration and verify scheduled
 delivery. Return any temporary test cadence to hourly minute seven. Do not
 blindly recreate jobs or hand-edit scheduler databases.
 
-## Slow-check runtime (2026-10-29, revised 2026-10-30)
+## Slow-check runtime
 
-- Keep all scenarios in the normal fast+slow checks. Independent integration
-  scenarios take work from a queue in up to eight lanes, bounded by CPU count.
-  Twelve lanes measured slower than eight because of contention. Start the
-  longest scenarios first to avoid a serial tail. Each lane
-  creates its own bare origin, clones and absolute-path snapshot, then uses
-  unittest's usual fixture lifecycle. Database prefixes are unique per lane and
-  temporary Dolt configurations disable telemetry. A lane never edits another
-  lane's repository or database. CI/check subprocess races remain real.
-- Lane results are replayed on the runner thread, including setup/teardown
-  errors, subtest failures, skips and durations. Fast regressions exercise
-  concurrent fixture isolation and failure reporting. Focused test names still
-  run directly and sequentially for debugging; no test is opt-in. Policy
-  stories (desktop identity, reservation callbacks, legacy routing, archive
-  scheduling, run holds with recovery budgets and explicit resume, and the
-  Marshal release/stale-worker rejection matrix) run through the public CLI
-  parser and commands against a small in-memory Beads port in the fast suite.
-  Real Beads dependency readiness, including a higher-priority blocked
-  dependent, rides along with the shared-pause scenario. Persistence,
-  synchronization, racing claims, filesystem recovery, a cross-clone pause
-  fence and delivery checks continue to use real git, Beads and Dolt.
-- Embedded databases using the default remote can synchronize through the Dolt
-  CLI without repeatedly opening Beads' schema engine. Preserve the existing
-  commit/pull/push order for new tips, local ownership lock, remote-wins
-  conflict reporting, retries and ownership verification after publication.
-  Commit failures other than an empty working set abort before pull/push.
-  Initial databases may have no remote branch yet; publication uses an ordinary
-  push, never a forced database push.
-- The Dolt CLI does not wait for the embedded store: while another process has
-  it open (any bd command, even a read) it opens read-only and every write
-  fails with "database is read only". bd waits instead, and bd's workspace
-  gate cannot be borrowed (an exclusive holder makes bd fail fast), so every
-  direct Dolt call retries that error with jittered backoff for up to 60 s.
-  On Windows, Dolt's file lock keeps it from opening a held store at all
-  ("fslock ... being used by another process"), which is retried the same
-  way (2026-11-08). Other failures are not retried. A real scenario syncs
-  while a held store is released.
-- Within an ownership lock, reuse identical Beads show/list reads across helper
-  instances. Every write attempt and every synchronization clears those reads;
-  leaving the lock discards them. Cache raw JSON so each caller receives
-  independent objects. Unlocked observers query Beads directly. Verification
-  after publication therefore reads fresh values, including ownership and shared
-  holds.
-- An embedded sync still commits and pulls before comparing local and remote
-  commit hashes. Equal hashes need no redundant push. A clean working set alone
-  proves nothing: a real regression verifies that an already-committed
-  unpublished bead reaches the other clone.
-- Server mode, missing Dolt CLI/identity, and nondefault project remotes keep
-  the Beads synchronization path. Tests explicitly configure temporary Dolt
-  identities rather than relying on the developer's home directory; a real
-  synchronization regression also covers the identity-free fallback.
-- Recognize missing-remote-branch diagnostics case-insensitively while
-  preserving the actual branch name in Dolt commands. A real two-clone
-  scenario covers first publication of a mixed-case branch.
-- Scenarios named `test_sync_*` synchronize through the production git-backed
-  Dolt remote. All other scenarios share a local file Dolt remote, still real
-  Dolt pull/push, because each git-transport push costs seconds and every
-  command syncs two or three times. Both transports are snapshotted once per
-  lane. The CI-lifetime scenario also takes a lane instead of running first.
-- Dolt contends under parallel load on macOS: even read-only `dolt sql` calls
-  run about 2.4x slower with eight lanes, while process spawning scales.
-  Runtime therefore follows total scenario work, not lane count; six lanes
-  matched eight and fourteen were much slower. Budget new real-Dolt checks
-  by commands issued, and prefer the fast policy port for refusal matrices.
-- For isolated timings, pass a fully qualified scenario name to
-  `python3 -m unittest -v`. Python 3.12+ accepts `--durations 0` on the
-  normal fast+slow command. Concurrent scenario durations overlap and must
-  not be summed as suite wall time.
-- Enact's own slow budget is 2-3 minutes (see `AGENTS.md`). On 2026-10-30,
-  jarvis, macOS/Python 3.14, bd 1.3.2, the normal fast+slow command passed
-  all 72 tests in about 157 seconds.
-- Earlier, at `e4e1359` on jarvis, macOS/Python 3.14: Sage normal checks
-  passed all 68 tests in 273.385 seconds; separate fast checks passed 36
-  tests in 4.580 seconds. Independent Warden normal checks passed in
-  264.752 seconds. These support the near-five-minute budget on this host,
-  not a runtime guarantee for every host or load. Linux and Windows
-  execution are unverified; any machine's passing CI can promote master.
+The fast suite uses policy fixtures for scheduling and refusal matrices.
+Slow CI also runs real Git clones with the local Worker simulator, native
+CLI protocol checks, registration, backup and restore, and coordinator
+crash recovery. The fixtures isolate authentication and ticket storage from
+production. Run the commands in `.enact.toml` to exercise the configured
+fast and slow suites.
 
 ## Slow-CI ownership outside runs (2026-10-30)
 
 - The runner is a detached process and cannot start chats, so a Steward
-  bead filed while no vizier loops would sit unworked. A plain prompt in an
+  ticket filed while no vizier loops would sit unworked. A plain prompt in an
   Enact project therefore owns its own slow CI.
-- `enact push` prints `watch_ci` when slow CI started, the pushed bead (if
+- `enact push` prints `watch_ci` when slow CI started, the pushed ticket (if
   any) was not reserved by a vizier, and no registered run on any machine is
   unfinished and unheld. A vizier's worker never waits: its run owns repair,
   including after a pause.
 - `enact ci --wait <sha>` blocks up to `--timeout` (540 s) and returns
-  `passed` once the SHA reaches master, `failed` with the Steward beads whose
+  `passed` once the SHA reaches master, `failed` with the Steward tickets whose
   failing range covers it (unassigned or held by this session), or
   `waiting`. Stewards held by another session count as in repair, and
   only this OS's Stewards end the wait: any machine's pass promotes master. While
   waiting it restarts a dead runner when staging is untested.
-- On `failed` the session claims the Steward bead and follows the Steward
+- On `failed` the session claims the Steward ticket and follows the Steward
   role, then watches its repair the same way. Instructions live in the push
   output, so existing project AGENTS.md files need no change.
 
@@ -815,14 +733,14 @@ blindly recreate jobs or hand-edit scheduler databases.
   Many tasks need no unattended fleet, and spawning sessions, a Marshal
   and per-session titles costs more than the work.
 - `/enact` never starts sessions, scheduled tasks or a Justiciar. A plain
-  bead or task prompt is implemented by the session itself; an epic runs
-  each bead in a fresh subagent, sequential by default so the title names
+  ticket or task prompt is implemented by the session itself; an epic runs
+  each ticket in a fresh subagent, sequential by default so the title names
   the working role. Plan documents and large prompts go to `/enact-plan`.
 - Review follows the vizier's policy: Executor only for routine changes,
-  Executor plus a Warden subagent on its own bead for large or risky ones.
+  Executor plus a Warden subagent on its own ticket for large or risky ones.
   Subagents cannot start subagents, so an Executor subagent's
   `review:inline` becomes a Warden after its push.
-- Mason, Sage and Archivist run only for beads an epic already contains;
+- Mason, Sage and Archivist run only for tickets an epic already contains;
   the inline skill never files them.
 - Subagents share the orchestrator's session ID: it claims with
   `enact claim`, they push and close. No helper changes were needed.
@@ -834,17 +752,17 @@ blindly recreate jobs or hand-edit scheduler databases.
 
 - The invocation keyword **light**, for `/enact` and `/enact-plan`, trades
   robustness for velocity. It drops Mason, Sage and Archivist work and caps
-  review at one final Warden bead depending on every implementation bead,
+  review at one final Warden ticket depending on every implementation ticket,
   skipped when the whole run is one routine change. `review:inline` labels
   are ignored. Plans still get the stoppage audit, which unattended
   execution needs at any pace.
 - The run records the mode as a `run:light` label on the run epic (or on an
-  inline task prompt's beads). `bd create --parent` inherits parent labels,
+  inline task prompt's tickets). `bd create --parent` inherits parent labels,
   so follow-ups carry it for free, and workers learn the mode from the
   graph rather than from their spawn prompt.
-- In an existing epic, unclaimed Mason, Sage, Archivist and Warden beads are
+- In an existing epic, unclaimed Mason, Sage, Archivist and Warden tickets are
   closed as skipped rather than left open: an open gate child would block
-  the next milestone and any open bead keeps the epic from closing. The
+  the next milestone and any open ticket keeps the epic from closing. The
   final Warden covers what the skipped Wardens would have reviewed.
 - Follow-ups in a light run are real bugs only, with no review of their
   own; the filer makes the final Warden depend on them so it stays last.
@@ -853,20 +771,20 @@ blindly recreate jobs or hand-edit scheduler databases.
 ## Clarifying task prompts (2026-11-01)
 
 - `/enact` given a task prompt starts by asking the user a few clarifying
-  questions, one at a time, as needed to understand its scope. A bead was
+  questions, one at a time, as needed to understand its scope. A ticket was
   already scoped when it was filed; a prompt is often a sentence, and the
   user is present at the start of an inline run but may not be later.
 
-## Waiting on beads (2026-11-01)
+## Waiting on tickets (2026-11-01)
 
 - `enact wait <bead>...` blocks up to `--timeout` (540 s) until every named
-  bead is closed and returns `closed`, or `waiting` with the open beads, so
-  `/enact` can honor "start this once ps-myz closes". It syncs Beads each
-  poll, like `ci --wait`, because another machine may close the bead.
+  ticket is closed and returns `closed`, or `waiting` with the open tickets, so
+  `/enact` can honor "start this once ps-myz closes". It syncs tickets each
+  poll, like `ci --wait`, because another machine may close the ticket.
 - A dependency edge is not enough: `enact claim` ignores blockers, an epic
   loop stops as deadlocked when only outside work blocks it, and edges do
-  not cross Beads graphs. The waiter runs from the project that owns the
-  beads. An unknown ID fails at once instead of waiting forever.
+  not cross tickets graphs. The waiter runs from the project that owns the
+  tickets. An unknown ID fails at once instead of waiting forever.
 
 ## Worktree sweep (2026-11-02)
 
@@ -881,9 +799,9 @@ blindly recreate jobs or hand-edit scheduler databases.
   no check is live, so every `ci-*` tree goes, including ones git left
   locked "initializing". `enact worktree prune` runs the same sweep by hand
   (for projects without slow CI), minus `ci-*` trees.
-- An `enact/<bead>` tree goes only when its bead is closed and the tree has
+- An `enact/<bead>` tree goes only when its ticket is closed and the tree has
   no uncommitted, untracked or unpublished (not on `origin/staging`) work.
-  An unclosed bead, a branch outside `enact/` (hand-made, Codex) and a
+  An unclosed ticket, a branch outside `enact/` (hand-made, Codex) and a
   locked tree are never touched, nor are loose files.
 - A directory under the root that git does not track goes after an hour
   untouched, unless it is hidden, holds registered trees (a hook's pool) or
@@ -904,11 +822,11 @@ blindly recreate jobs or hand-edit scheduler databases.
   minutes), and a single red episode explained the largest gaps. Pausing
   pushes while red or bisecting every batch would cost more throughput
   than it saves.
-- Two of six Steward beads there were stale: a Steward pushed its repair
+- Two of six Steward tickets there were stale: a Steward pushed its repair
   and closed, then the runner finished an older tip without the repair and
-  filed a new bead, whose Steward found it already fixed. A failure is now
+  filed a new ticket, whose Steward found it already fixed. A failure is now
   not filed when staging gained, after the failing tip, a commit recorded in
-  `enact_commits` of a Steward bead for this OS. The runner's loop retests
+  `enact_commits` of a Steward ticket for this OS. The runner's loop retests
   the newer tip and files or comments only if that fails too. The condition
   is a landed repair rather than "staging moved on", so a real failure is
   never deferred indefinitely by a steady stream of pushes.
@@ -925,41 +843,41 @@ blindly recreate jobs or hand-edit scheduler databases.
 
 - With prompt caching, a session costs roughly its context size times its
   turns. The expensive part is each fresh session rediscovering the code it
-  touches, paid again for every bead, Warden and cold reviewer, while the
+  touches, paid again for every ticket, Warden and cold reviewer, while the
   planner had already read that code. The changes below move knowledge
   forward instead of rediscovering it, without giving up fresh-context
   review.
-- **Lanes.** A `lane:<name>` label groups related beads of one role that one
+- **Lanes.** A `lane:<name>` label groups related tickets of one role that one
   session works in priority order, delivering and closing each on its own.
-  `enact close --continue` claims the lane's next ready bead for the same
+  `enact close --continue` claims the lane's next ready ticket for the same
   session under the ownership lock, copying the run, vizier, routing and
   session metadata with a fresh reservation token, so the vizier counts it
   as in flight and the Marshal can route recovery to it. The scheduler
-  starts no session on a lane bead while another bead of that lane is
+  starts no session on a lane ticket while another ticket of that lane is
   assigned, and neither `enact next` nor `enact status` lists a session for
-  archiving while it holds an open bead. A worker that stops chaining just
+  archiving while it holds an open ticket. A worker that stops chaining just
   closes without `--continue`, and the rest of the lane goes to a fresh
   session. Lanes need no ordering edges, so they add no deadlock risk.
-  Wardens are never in lanes. `/enact` accepts several bead IDs as a lane it
+  Wardens are never in lanes. `/enact` accepts several ticket IDs as a lane it
   works itself.
-- **Context packets.** Bead descriptions name the files, helpers and tests
+- **Context packets.** ticket descriptions name the files, helpers and tests
   to touch and what need not be read; the run epic holds a short code map;
-  beads are sized by code locality rather than topic. The Archivist keeps a
+  tickets are sized by code locality rather than topic. The Archivist keeps a
   project code map current.
 - **Handoffs and `enact brief`.** Workers leave a `Handoff:` comment before
-  closing. `enact brief <bead>` returns, in one read, the bead with its
+  closing. `enact brief <bead>` returns, in one read, the ticket with its
   comments, its epic chain, each blocking dependency's close reason,
   commits, touched files and latest handoff, and its lane. It replaces
   several verbose `bd show` calls at every session start; it does not sync,
   since `start` and `claim` just did.
-- **Reviews.** One Warden per lane or milestone area by default, a per-bead
+- **Reviews.** One Warden per lane or milestone area by default, a per-ticket
   Warden only for risky changes. Wardens and inline cold reviewers keep a
   fresh context for independence but read the touched files and what they
   call rather than the codebase. The inline cold review runs on a cheaper
   model unless the change is risky.
 - **Tiers.** A `tier:<name>` label selects `[tiers.<name>.<provider>]`
   model settings in `.enact.toml`, overriding the role's. The vizier labels
-  mechanical beads `tier:light`; new projects get `light = sonnet` for
+  mechanical tickets `tier:light`; new projects get `light = sonnet` for
   Claude. Project configuration counts as a user request for model
   settings, so Codex applies spawn `settings` too.
 - **Lean shared protocol.** Recovery, takeover and emergency procedures
@@ -967,53 +885,53 @@ blindly recreate jobs or hand-edit scheduler databases.
 
 ## Backlog sweep (2026-11-08)
 
-- `/enact-sweep` triages stale beads and runs the survivors. A bead is
+- `/enact-sweep` triages stale tickets and runs the survivors. A ticket is
   stale when it is open, unassigned and outside every live run. Ownership
-  decides, not age: a fresh bead under a dead run is stale, while an old
-  bead queued in a live run is not. `bd stale` measures only age, so it
+  decides, not age: a fresh ticket under a dead run is stale, while an old
+  ticket queued in a live run is not. `bd stale` measures only age, so it
   would close queued work.
 - Verdicts are done, obsolete, keep and human, each with evidence. Read-only
   subagents on the light tier triage large backlogs, and only the sweeper
-  writes to Beads. Closes are reversible (`bd reopen`), so the invocation
+  writes to tickets. Closes are reversible (`bd reopen`), so the invocation
   authorizes them without a confirmation step.
-- Human beads are settled while the user is present, the same way as the
+- Human tickets are settled while the user is present, the same way as the
   stoppage audit, or deferred. An unattended run never starts on one.
 - The run starts in the sweep's own turn, because Claude Desktop lets only
   a user-started turn start sessions. A scheduled task cannot launch a
-  vizier. Kept beads move into one `Bead sweep <date>` epic and go to
-  enact-plan as "several beads".
+  vizier. Kept tickets move into one `Bead sweep <date>` epic and go to
+  enact-plan as "several tickets".
 
 ## Models by name (2026-11-10)
 
 - `tier:opus` and `tier:sonnet` are built-in tiers: for the Claude provider
   they select that model with no entry in `.enact.toml`. A user asked a plan
-  to "assign beads to opus or sonnet based on complexity, default opus", and
+  to "assign tickets to opus or sonnet based on complexity, default opus", and
   the only way to pin the default was a project-level tier added for the
   occasion.
 - A project's own `[tiers.<name>.<provider>]` still wins, so it can remap a
   built-in tier or map it for another provider. A provider with no mapping
   keeps its role's settings, as with any unknown tier.
-- The vizier assigns every bead a named tier only when the invocation or
-  AGENTS.md asks for models by name. Otherwise it labels mechanical beads
+- The vizier assigns every ticket a named tier only when the invocation or
+  AGENTS.md asks for models by name. Otherwise it labels mechanical tickets
   `tier:light` and leaves the rest on the user's default, as before, so
   existing projects and runs do not change.
 - The policy goes in the run epic, not on it as a label: children inherit an
-  epic's labels, and a bead with two tier labels takes whichever is listed
+  epic's labels, and a ticket with two tier labels takes whichever is listed
   first.
 - `tier:fable` joined them the same day. A user auditing a plan asked to
-  "tag the biggest design challenges to fable": the beads whose design every
-  later bead builds on. The vizier uses it only when asked, since the other
+  "tag the biggest design challenges to fable": the tickets whose design every
+  later ticket builds on. The vizier uses it only when asked, since the other
   two already cover "mechanical" and "everything else".
 
 ## Required models (2026-11-10)
 
-- A `tier:fable` bead spawned by an Opus vizier ran on Opus:
+- A `tier:fable` ticket spawned by an Opus vizier ran on Opus:
   `start_session`'s `model` is silently ignored above the caller's own
   model. The user caught it from the session list.
 - The vizier now starts such a child on a holding prompt, switches it with
   `set_session_model`, confirms with `get_session` and only then sends the
   Enact prompt. The holding turn is one trivial reply on the vizier's
-  model; the worker's whole bead runs on the tier's.
+  model; the worker's whole ticket runs on the tier's.
 - A Claude spawn action that names a model carries `model_required` to
   preserve these steps across compaction. The vizier blocks the run if it
   cannot set the required model. Workers no longer self-check their model
@@ -1042,7 +960,7 @@ blindly recreate jobs or hand-edit scheduler databases.
   open Steward covers the SHA. Its state is unchanged, since another OS
   failing never stopped this one promoting. `watch_ci` tells the session to
   repair it if the log makes the cause plain, and otherwise to comment its
-  analysis and name the bead in its final reply.
+  analysis and name the ticket in its final reply.
 - No timer runs slow CI. A machine tests staging only from its own pushes,
   viziers, waits and Marshal, so a peer's commits reach its tests when it
   next works, and each OS's failures are fixed as they appear. A scheduled
@@ -1057,28 +975,12 @@ blindly recreate jobs or hand-edit scheduler databases.
   project's master would then depend on its least available machine. A
   peer OS's failure is repaired through its Steward instead.
 
-## Many sessions on one host (2026-11-11)
+## Concurrent delivery
 
-- A push holds the ownership lock only for its bookkeeping: the first
-  ownership check, then the final check, the push to staging and the delivery
-  record. It once held it through the rebase and the fast check, so with a
-  dozen sessions on one machine every claim, close, meta and sync waited out
-  other sessions' checks and failed "ownership operation busy" after 180 s,
-  and a plain `enact sync` took 100 s of wall time for 6 s of work. The remote
-  still arbitrates pushes: one that loses the race is rejected and
-  re-integrates. Two sessions may now find one delivery receipt; the first to
-  lock it finishes it and the other skips it.
-- Sync compacts an embedded Beads store whose Dolt journal passed 64 MiB with
-  `dolt gc`, which rewrites storage but not history. Dolt never compacts the
-  journal itself: a week of writes grew Beryl's to 410 MB, and each bd
-  command, which opens the store afresh, spent about a second reading it
-  (0.2 s after the gc). `bd gc` is not used: it also squashes commits that the
-  remote and other clones already have.
-- After a push loses the race to staging and re-integrates, its fast check
-  runs again with `ENACT_CHECKED` naming the commit the last pass checked.
-  At about twenty pushes an hour a two-minute check often loses the race, and
-  rerunning all of it repeated work the new commits could not affect: a
-  project's check may compare the trees and rerun only what they reach.
+Ticket mutations use atomic batches and preconditions. Git arbitrates
+staging pushes. A rejected push re-integrates and repeats the fast check,
+with `ENACT_CHECKED` naming the commit that passed previously so the
+project can restrict its checks to the additional changes.
 
 ## Waiting on the user (2026-11-12)
 
@@ -1094,14 +996,14 @@ blindly recreate jobs or hand-edit scheduler databases.
 
 - Claude Desktop now caps a session at ten sessions started over its life,
   and still lets only a user-started turn start one. A vizier that started
-  one session per bead stopped after ten beads.
+  one session per ticket stopped after ten tickets.
 - A live probe from turns woken by a background task (no user, no
   side-session exception) showed `start_session` refused, while
   `clear_session`, `set_session_model` and `send_message` on an idle child
   worked, after thirteen automatic wakes in a row. The cleared child saw no
   earlier messages and ran on the newly set model.
 - So a Claude Desktop vizier starts a fixed pool (`parallel + 1`, the spare
-  for a Justiciar, at most ten) in its first turn and hands each bead to an
+  for a Justiciar, at most ten) in its first turn and hands each ticket to an
   idle member: clear, set model and effort, send the spawn prompt. It never
   starts sessions after pre-flight. A lost member is replaced only in a
   turn the user starts (`action: pool-empty` when none remain).
@@ -1112,7 +1014,7 @@ blindly recreate jobs or hand-edit scheduler databases.
   run. Codex keeps its foreground loop.
 - The pool is machine-local state per vizier (`pool-<vizier>.json`:
   members, sessions started, members resting). Which members are busy comes
-  from the graph: an open bead bound by `enact_session` or reserved by
+  from the graph: an open ticket bound by `enact_session` or reserved by
   `enact_pool_session`, or the Justiciar lock's `pool_session`. The
   reservation names the member, so its worker may run `enact start` before
   the vizier records the binding, and no other session can take it.
@@ -1148,18 +1050,18 @@ blindly recreate jobs or hand-edit scheduler databases.
   blocked, but Codex's bounded command waits woke the model about once a
   minute; repeated status narration added tokens without changing work.
 - `enact next` now includes `inflight_threads` for a Codex vizier's bound,
-  open beads. It reads these IDs from the graph already fetched for
+  open tickets. It reads these IDs from the graph already fetched for
   scheduling. Claude results and the Claude background-command loop are
   unchanged. The Codex reminder describes its event wait after compaction.
 - The Codex vizier makes an immediate `enact next --wait 0` scheduling pass.
   On `wait` with active bound chats, it uses `wait_threads` with cursors for
   up to five minutes and then makes another immediate scheduling pass. The
   host wakes it when a worker turn ends or needs attention; the timeout
-  catches bead, remote-host and CI changes and renews the 20-minute local
+  catches ticket, remote-host and CI changes and renews the 20-minute local
   vizier lease. At most eight chats fit one wait; rotate when there are more.
-- A worker can close a bead before its turn ends. The next dependent spawn
+- A worker can close a ticket before its turn ends. The next dependent spawn
   may then lag by up to five minutes. A chat that has already completed but
-  still owns an open bead cannot wake another event wait. With no active
+  still owns an open ticket cannot wake another event wait. With no active
   bound chat, Codex falls back to `enact next --wait 540`, preserving CI and
   remote-host progress and existing recovery checks. `enact next` remains
   the only authority for claiming, spawning and archiving work.
@@ -1168,26 +1070,26 @@ blindly recreate jobs or hand-edit scheduler databases.
 
 - A Beryl run stalled four times on questions the vizier put to the user:
   a reported-only benchmark pinned to a Windows host with no vizier, which
-  held the epic's final beads; ten pilot beads failing on one shared test
+  held the epic's final tickets; ten pilot tickets failing on one shared test
   fault; a single-chain graph that wanted restructuring for parallelism;
   and a performance budget measured on a loaded machine that kept filing
   follow-ups. The user's rule: orchestration completes work speculatively
   by relaxing blocking constraints, so none of these should reach them.
 - Once the loop starts nobody asks the user. Whoever holds the choice (a
   worker, a Warden, the Justiciar on a deadlock) applies the least-blocking
-  default from `common.md` "Speculative defaults" and records it on the bead
-  and the run epic. The vizier still never reads beads; its only graph
+  default from `common.md` "Speculative defaults" and records it on the ticket
+  and the run epic. The vizier still never reads tickets; its only graph
   action stays a Justiciar request.
 - The stoppage audit asks the user only about human-only steps (access,
   credentials, payments, irreversible outward actions, outside people).
   Agent-decidable points become recorded defaults in the run epic.
-- Planners avoid serializing edges: edges go on the bead that needs a
-  result rather than on its epic, reported-only beads get no dependents,
-  pins are reserved for beads that cannot run elsewhere and gate nothing,
-  and decomposition beads sit under the run epic with no dependencies,
-  since the milestone epic keeps the beads they file gated.
+- Planners avoid serializing edges: edges go on the ticket that needs a
+  result rather than on its epic, reported-only tickets get no dependents,
+  pins are reserved for tickets that cannot run elsewhere and gate nothing,
+  and decomposition tickets sit under the run epic with no dependencies,
+  since the milestone epic keeps the tickets they file gated.
 - `enact next` flags a pin nobody serves: when nothing else can proceed and
-  every ready bead it skipped is pinned to a host or provider with no vizier
+  every ready ticket it skipped is pinned to a host or provider with no vizier
   route registered on the run, it returns `deadlock` with a `stranded` list
   instead of waiting for the six-hour stale check. Running viziers already
   handle `deadlock` by requesting a Justiciar, so the change is compatible.
@@ -1196,37 +1098,37 @@ blindly recreate jobs or hand-edit scheduler databases.
 
 ## Lane and tier defaults (2026-11-13)
 
-- A user asked how nine beads filed outside a run should be executed to
+- A user asked how nine tickets filed outside a run should be executed to
   spend the fewest tokens. The answer was already Enact's lane design, but
-  `/enact-plan` applied it only to beads it filed itself: given an existing
-  epic with children it filed nothing and ran one session per bead, or one
+  `/enact-plan` applied it only to tickets it filed itself: given an existing
+  epic with children it filed nothing and ran one session per ticket, or one
   session per lane however the lanes had been labelled.
 - The reasoning, now stated in the skill: a session pays once to learn its
-  code and on every turn to re-read its whole context. One session per bead
-  relearns shared code. One session for many beads carries finished beads
-  through every later turn and runs all of them on the costliest bead's
-  model. The second cost is the larger, so lanes stay at two to four beads.
-- The vizier therefore runs a "lane and tier pass" over the unclaimed beads
-  of any epic or bead list it is given, using the files their descriptions
+  code and on every turn to re-read its whole context. One session per ticket
+  relearns shared code. One session for many tickets carries finished tickets
+  through every later turn and runs all of them on the costliest ticket's
+  model. The second cost is the larger, so lanes stay at two to four tickets.
+- The vizier therefore runs a "lane and tier pass" over the unclaimed tickets
+  of any epic or ticket list it is given, using the files their descriptions
   name. It does not read code for this, so the pass stays inside pre-flight
   and the loop is unchanged.
-- A lane has one tier. The session keeps the model its first bead started
-  on, so the nine beads above, labelled by shared code alone, would have run
-  Sonnet-tier beads on Opus or an Opus-tier design on Sonnet. A bead of
+- A lane has one tier. The session keeps the model its first ticket started
+  on, so the nine tickets above, labelled by shared code alone, would have run
+  Sonnet-tier tickets on Opus or an Opus-tier design on Sonnet. A ticket of
   another tier leaves the lane and takes an ordering edge where it edits the
   same code non-additively.
-- A bead likely to fill a session (a design, a rewrite) stays out of lanes,
+- A ticket likely to fill a session (a design, a rewrite) stays out of lanes,
   for the same reason a worker with a heavy context closes without
   `--continue`.
 - Lane labels are not put on epics, like tier labels: children inherit an
-  epic's labels, which would join unrelated beads into one lane.
+  epic's labels, which would join unrelated tickets into one lane.
 - No helper change. The scheduler still treats a lane as "one session at a
-  time"; the rules only change which beads share a label.
+  time"; the rules only change which tickets share a label.
 
 ## Removing a worktree ends its processes
 
-A fuzz run started in a bead's worktree kept a core busy for four and a half
-hours after the bead closed and the tree was deleted, because nothing reads the
+A fuzz run started in a ticket's worktree kept a core busy for four and a half
+hours after the ticket closed and the tree was deleted, because nothing reads the
 result of a process whose directory is gone. `remove_worktree` and the sweep
 now end every process whose working directory or executable is inside the tree
 (SIGTERM, then SIGKILL after three seconds) before deleting it, never the
@@ -1268,7 +1170,7 @@ check twice or more. `[push] queue = true` replaces that with a queue per host.
   output back, and its push prints it and exits 2.
 - The integrator re-checks ownership under the ownership lock and writes each
   entry's delivery receipt before pushing. The waiting push then does the
-  bead bookkeeping, worktree removal and slow-CI start exactly as before;
+  ticket bookkeeping, worktree removal and slow-CI start exactly as before;
   results gain `queue: {batch, checks}`.
 - The check reads `.enact.toml` from the combined tree and is killed after
   `[push] timeout` seconds (default 1800), since a hung check would hold
@@ -1330,23 +1232,23 @@ check twice or more. `[push] queue = true` replaces that with a queue per host.
   host's lock, so a Justiciar already holding it can still transition and
   release it; other hosts ignore it.
 - Justiciars on different machines may work at once. They coordinate shared
-  state (remote, Dolt, `master`) through incident beads.
+  state (Git remote, ticket service, `master`) through incident tickets.
 
-## Adopting existing beads (2026-11-13)
+## Adopting existing tickets (2026-11-13)
 
-A plan session moved a bead out of another open epic into its own run and
-blocked it on a deep bead there, leaving the first epic's remaining bead
+A plan session moved a ticket out of another open epic into its own run and
+blocked it on a deep ticket there, leaving the first epic's remaining ticket
 waiting on work far outside it: `enact next` reported a deadlock on a run
-nobody had touched. The session had read the bead with output cut short, so
+nobody had touched. The session had read the ticket with output cut short, so
 it never saw the parent or the dependent, and its graph view predated the
-other epic claiming the bead.
+other epic claiming the ticket.
 
-The plan skill now treats existing beads as owned by whoever filed them:
-read the full bead (parent and dependents) right before moving or wiring
-it, ask the user before taking a bead from another open epic or blocking a
-bead another epic waits on, and check at the end of planning that no other
+The plan skill now treats existing tickets as owned by whoever filed them:
+read the full ticket (parent and dependents) right before moving or wiring
+it, ask the user before taking a ticket from another open epic or blocking a
+ticket another epic waits on, and check at the end of planning that no other
 epic now waits on the run. This stays in the skill rather than the helper:
-moves and edges are raw `bd`, and the judgement of when to reference a bead
+moves and edges use `tk`, and the judgement of when to reference a ticket
 instead of adopting it needs the plan's context.
 
 ## Vizier leases (2026-11-13)
@@ -1375,12 +1277,12 @@ instead of adopting it needs the plan's context.
   or anywhere when they have neither.
 - `stranded()` counts a route on this host only while it is alive. Routes
   on other hosts still count, since their leases cannot be read here;
-  treating them as dead would make every bead pinned to another machine
+  treating them as dead would make every ticket pinned to another machine
   look stranded.
 - `enact push` prints `watch_ci` unless it has fresh evidence that a vizier
-  will repair the push's slow-CI failures: the vizier that spawned the bead
-  still renews its lease on that run, or one of the bead's runs is live. An
-  ad hoc push, with no bead, always prints it. Assuming nobody is watching
+  will repair the push's slow-CI failures: the vizier that spawned the ticket
+  still renews its lease on that run, or one of the ticket's runs is live. An
+  ad hoc push, with no ticket, always prints it. Assuming nobody is watching
   is the cheap mistake: a needless watch costs one session some waiting,
   while a missing one stalled Beryl's master for hours. A worker whose run
   is paused or blocked still gets no notice, since a held run starts no
@@ -1388,7 +1290,7 @@ instead of adopting it needs the plan's context.
 - `common.md` and `executor.md` now tell workers to follow `watch_ci` when
   push prints it, because it then means their vizier has stopped.
 - When slow CI files or updates a Steward and no live run here covers its
-  `enact_runs`, the bead gets `enact_unowned=true` and a note in its
+  `enact_runs`, the ticket gets `enact_unowned=true` and a note in its
   description (or the new failure comment), so a session or scheduled
   routine looking for unrepaired failures finds it without reasoning about
   runs. `claim()` unsets the flag. A failure with no recorded runs is
@@ -1402,11 +1304,11 @@ instead of adopting it needs the plan's context.
   (`steward_targeted_here`) that no live run here would schedule (one
   without a parent, or one in that run's delivery, as `schedule` does) and
   whose assignee, if any, neither holds a fresh lease (on any epic) nor
-  updated the bead within `VIZIER_LEASE_SECONDS`. Unlike `enact_unowned`,
+  updated the ticket within `VIZIER_LEASE_SECONDS`. Unlike `enact_unowned`,
   which is set once when CI files the failure, this counts any live vizier
   as cover for a parentless Steward: a routine runs status again every
   half hour, so the promise only has to hold until then. Worker sessions
-  hold no lease, so for them the bead's `updated_at` is the only evidence.
+  hold no lease, so for them the ticket's `updated_at` is the only evidence.
 
 
 ## Runs finish explicitly (2026-11-13)
@@ -1422,14 +1324,10 @@ instead of adopting it needs the plan's context.
   reactivates a finished run. `stopped_runs` is unchanged: finished runs
   are not halted, so late Steward repairs of their commits stay allowed.
 - A child set aside indefinitely counts as done (`work_done`) when Enact
-  decides whether an epic is complete. Legacy Beads also uses deferred
-  status for dated snoozes. A ready read reopens those beads when the
-  deadline passes, so Enact keeps their epics open. The ticket server reports
-  native timed work as open with a future `defer_until`. After cutover, it
-  also wakes imported and shim-created dated deferrals. When a deadline is the
-  only barrier to work a vizier can serve, `schedule` waits for readiness.
-  Beads rechecks on its next poll and the ticket server announces deadlines
-  on its change feed.
+  decides whether an epic is complete. Dated deferrals keep their epics open.
+  The service announces deadlines on the feed, and `schedule` waits for
+  readiness when a deadline is the only barrier.
+
 - The vizier's skill text runs `enact run finish` as its last command.
 
 
@@ -1443,12 +1341,12 @@ instead of adopting it needs the plan's context.
   here. A closed run is pruned like an open one.
 - A stale run becomes `finished` only when its epic is closed and its
   delivery is complete. A green delivery can belong to an open epic with
-  more beads to run; marking that run finished would strand those beads.
-  An open epic, or one with pending commits or Steward beads, becomes
+  more tickets to run; marking that run finished would strand those tickets.
+  An open epic, or one with pending commits or Steward tickets, becomes
   `paused` with a reason naming the expired lease (and a closed epic is
   reopened, as `run pause` does), so a returning vizier resumes it with
   `enact run resume --explicit`.
-- `enact ci` prunes after it files or updates a Steward bead, and
+- `enact ci` prunes after it files or updates a Steward ticket, and
   `enact status` lists `stale_runs` with a hint to run the prune.
 
 ## Green delivery with unfinished work (2026-11-13)
@@ -1456,7 +1354,7 @@ instead of adopting it needs the plan's context.
 - In Beryl run `by-bmdk`, the Codex vizier ended a turn while `enact next`
   still returned `action: wait`. Its lease expired. The epic remained open,
   but the commits delivered so far had all reached master. That state must
-  remain recoverable; a green delivery is not evidence that all beads ran.
+  remain recoverable; a green delivery is not evidence that all tickets ran.
 - `run prune` now requires both a closed epic and complete delivery to mark
   a stale run `finished`. It pauses an open epic so a returning vizier can
   explicitly resume it. This fixes the false completion in recovery; the
@@ -1467,24 +1365,24 @@ instead of adopting it needs the plan's context.
 
 - In Beryl run by-bajq two workers ended their turns waiting on background
   `just specs <card>` commands, servers that never exit. They sat idle for
-  4.5 to 6 hours with beads `in_progress`, filling all three slots. A bound
-  open bead counts as busy forever, so the vizier kept reporting `wait`
+  4.5 to 6 hours with tickets `in_progress`, filling all three slots. A bound
+  open ticket counts as busy forever, so the vizier kept reporting `wait`
   until the user noticed.
-- `enact next` now lists `stalled` entries: the vizier's own open beads
+- `enact next` now lists `stalled` entries: the vizier's own open tickets
   bound by `enact_session` whose `updated_at` is 90 minutes old or more.
   Each carries the session, idle minutes and a one-line `nudge`. The result
   adds `stall_notice` so the instructions survive compaction.
-- Bead age is only a hint: a healthy worker may run long without touching
-  its bead. Only the host knows whether a session is idle, so the vizier
+- ticket age is only a hint: a healthy worker may run long without touching
+  its ticket. Only the host knows whether a session is idle, so the vizier
   checks it (`get_session`, `read_thread`), nudges only an idle one with
   `send_message` (which works from automated turns), and releases an
   archived or missing one as any lost worker. A false positive costs one
   session lookup.
-- Each 90-minute period of a stall is reported once, keyed by bead and
+- Each 90-minute period of a stall is reported once, keyed by ticket and
   period in the existing per-vizier `archive-reported` file, and a new one
   ends a background wait early. So a vizier is not re-woken by the same
   stall, while a nudge that did not help surfaces again one period later.
-  A bead update clears the key.
+  A ticket update clears the key.
 - Rejected: watching worktree file times or commits (costly on big trees,
   host-local, and a hung server can still write logs), and a separate
   record of nudges (the period key gives the same spacing statelessly).
@@ -1498,16 +1396,16 @@ instead of adopting it needs the plan's context.
   90-minute stall check, costing 90 to 180 minutes of a worker slot.
 - `common.md` now tells workers to wait on long jobs in the foreground or
   with a host-tracked background command, never by ending the turn.
-- `enact next` now lists a bound bead after 15 minutes without an update.
+- `enact next` now lists a bound ticket after 15 minutes without an update.
   When the vizier finds that worker's turn still running, it passes
-  `--running <bead>` on its next call; the bead is then not listed again
-  until 90 minutes, as before. The mark is the bead's ID and `updated_at`,
+  `--running <bead>` on its next call; the ticket is then not listed again
+  until 90 minutes, as before. The mark is the ticket's ID and `updated_at`,
   kept with the reported keys in the per-vizier `archive-reported` file,
-  so any bead update drops it and the short check starts over.
+  so any ticket update drops it and the short check starts over.
 - The stall key now includes the period length, so a 15-minute report does
   not hide the first 90-minute one.
 - Cost: a healthy worker that runs quietly costs the vizier one session
-  lookup per bead update. Rejected: a turn-end hook in each host (Claude
+  lookup per ticket update. Rejected: a turn-end hook in each host (Claude
   and Codex differ, and it adds installed state on every machine).
 
 ## A run answers only to its own holds (2026-11-14)
@@ -1518,9 +1416,9 @@ instead of adopting it needs the plan's context.
   `stopped_runs`, found that pause, and reported the other run (by-jj37)
   as paused too. Its vizier stopped looping and dropped its lease, so the
   next slow-CI prune found no fresh lease and paused by-jj37 for real.
-- `run_holds(bead, graph, epic)` now decides what holds a bead within a
+- `run_holds(bead, graph, epic)` now decides what holds a ticket within a
   run: a pause or block on the run, on an epic above it, or on a milestone
-  the bead sits in. `schedule` uses it for the beads in its scope, and
+  the ticket sits in. `schedule` uses it for the tickets in its scope, and
   `require_running` uses it for work claimed for a run (`enact_run`).
   Unparented Stewards outside the run's scope keep the wider
   `stopped_runs` check.
@@ -1563,81 +1461,11 @@ instead of adopting it needs the plan's context.
 - An executor left an oracle check for its own card unrun because the
   checker mismatched a card name, and noted the fix only in its handoff.
 - The essential-only follow-up rule read as permission to drop it. A
-  tooling defect that blocks verifying the bead's own work now counts as
-  essential: fix it in the bead when within reach, otherwise file a
+  tooling defect that blocks verifying the ticket's own work now counts as
+  essential: fix it in the ticket when within reach, otherwise file a
   follow-up whose acceptance runs the blocked checks, and record the gap on
-  the bead. Handoffs and summaries are never where such a gap goes, since
+  the ticket. Handoffs and summaries are never where such a gap goes, since
   nothing acts on them. Marginal bugs met in passing stay unfiled.
-
-## Ownership lock queue and skipped syncs (2026-11-15)
-
-- On Beryl's Mac a 5-minute sample found the ownership lock held the whole
-  time, by 16 commands holding it 19 s on average (`start` up to 46 s). In 3
-  days sessions printed "still waiting for the ownership lock" about 166
-  times and gave up after 180 s about 20 times. Waiters polled the OS lock,
-  so whichever polled first after a release won, and an early waiter could
-  lose every handoff.
-- Waiters now queue: each writes a ticket `<time_ns>-<pid>` under
-  `.git/enact/ownership.queue` and tries the lock only when no live,
-  recently refreshed ticket sorts before its own. Older helpers that do not
-  queue can still take the lock between queued waiters.
-- Most of a hold was Beads syncs. A command syncs before it reads and again
-  after it writes, and each sync launches Dolt about 6 times; every launch
-  waits while any bd command (including a dashboard polling `bd export`)
-  has the embedded store open. A sync is now skipped when this process has
-  made no bd write since its last sync and the commit at the remote's
-  `refs/dolt/data` (one `git ls-remote`) is already in Dolt's git cache,
-  which holds only commits this clone fetched or pushed. bd pushes after
-  every write by itself, which moved Beryl's ref about every 15 s, so a
-  first version that compared with the tip of the last sync rarely matched.
-  A push from another machine is never in the cache, so a pause written
-  there is still pulled before the next command here reads it. `enact sync`
-  always syncs, because agents run it after raw bd writes that Enact cannot
-  see.
-- The store's remotes and branch are cached in
-  `.git/enact/beads-dolt-settings.json`, keyed on the contents of Dolt's
-  config files, which saves three Dolt launches per full sync.
-
-## Lock-wait log (2026-11-15)
-
-- Sessions wait on the ownership lock, but only a "still waiting" line on
-  stderr showed it, and nothing records how long. Over 7 days on Beryl's
-  Mac, `enact meta` took 48 s on average and `enact worktree` 76 s.
-- Each ownership-lock acquisition now appends one JSON line to
-  `.git/enact/lock-waits.jsonl` (`repo.state`, beside `ownership.lock`),
-  written just before the lock is released, so holders never interleave
-  their lines. A waiter that gives up writes its own line at once.
-- Fields: `time` (UTC, `YYYY-MM-DDTHH:MM:SSZ`, when the wait began), `pid`,
-  `command` (the first four words of `sys.argv`, as in the holder record),
-  `outcome` (`acquired` or `gave_up`), `waited_s`, `held_s`, `sync_s`
-  (seconds spent in `sync` while holding the lock, skipped syncs included),
-  `syncs` (how many `sync` calls), and `holder` (the holder record's
-  command, seen once the wait passed 1 s; for `gave_up`, the holder at that
-  moment; otherwise null). For `gave_up`, `held_s`, `sync_s` and `syncs` are
-  null. Times are seconds rounded to milliseconds.
-- `sync_s` is split by step (2026-11-16), because a 227 s sync on Beryl's
-  Mac could not say where its time went: `tip_s` (`git ls-remote` for the
-  remote's data ref), `settings_s` (reading the store's remotes and branch),
-  `commit_s`, `pull_s` (with any conflict resolution), `check_s` (comparing
-  local and remote tips), `push_s`, `retry_s` (sleeps after a rejected
-  push) and `gc_s` (`compact_beads`). `busy_s` is the part of all of these
-  that `dolt` spent retrying because another process had the store open, so
-  it overlaps them rather than adding to them. Each is 0 when the step did
-  not run and null on a `gave_up` line.
-- When the file reaches 8 MB (about 40,000 lines) the next write first
-  renames it to `lock-waits.1.jsonl`, replacing the previous one, so the two
-  files together stay under 16 MB. A reader takes both.
-- Writing costs one stat and one append and never fails a command: any
-  `OSError` is ignored.
-
-### Staging lease waits
-
-When the ticket server queues the push that is running a host's merge queue,
-Enact appends one line to `.git/enact/staging-lease-waits.jsonl` at the end of
-the wait. The line gives the first busy reply's UTC `time` with milliseconds,
-the push's `pid` and `bead` (null for an unnamed push), the `outcome`
-(`acquired` or `gave_up`), and the elapsed `waited_s` through retries. It uses
-the same local append and rotation as the ownership-lock log.
 
 ## Dead delivery receipts (2026-11-16)
 
@@ -1655,78 +1483,20 @@ the same local append and rotation as the ownership-lock log.
   receipts over an hour old whose head is on neither staging nor master.
   `cmd_status` fetches with `check=False`, so it never drops one.
 
-## Where a sync's time goes (2026-11-16)
-
-- Between 00:36 and 01:43 UTC on 2026-11-16, ten syncs on Beryl's Mac held
-  the ownership lock for 45-227 s, and 12 waiters gave up behind them. The
-  step fields above were added to find out why.
-- In the 80 minutes after they landed (01:46-03:09 UTC), 66 full syncs ran
-  at load averages of 40-76. None took over 60 s (the longest took 51 s) and
-  no waiter gave up. Of 1,073 s in sync steps, `push_s` was 763 s (median
-  11 s, p90 21 s, max 50 s), `pull_s` 176 s, `busy_s` 53 s (max 22 s), and
-  `gc_s` 1 s.
-- A traced 14 s push spent 6.7 s in four `git push` calls to GitHub (two to
-  `refs/dolt/data`, two to `__dolt_remote_info__`), 4.7 s in 530
-  `git cat-file` calls on Dolt's 741 MB git cache, and 2.1 s in seven
-  fetches. All of this happens inside the Dolt CLI (2.2.0), so Enact can
-  only make fewer pushes, not cheaper ones.
-- Ruled out: `dolt gc` on a copy of the store took 1.5 s at load 76, and a
-  full `git gc` of the git cache took 4.5 s, so moving `compact_beads` out
-  of the lock would save nothing. The remote conjoined its table files
-  (254 down to 145) during the quiet window without any slow sync.
-- So the minutes-long syncs of the earlier window were not reproduced, and
-  their cause is not known. If they come back, the step fields of their
-  lines name the step. The steady cost is Dolt's push, which a newer Dolt
-  may make cheaper.
-
-## Owner writes push in the background (2026-11-15)
-
-- The lock-wait log showed that, on Beryl's Mac, `enact meta` held the
-  ownership lock for 28 s at the median, `start` 37 s and `close` 19 s,
-  nearly all of it in Beads syncs, while other commands waited 13-50 s
-  behind them. Timing one `meta`: the bd write took 1.7 s, `dolt pull`
-  2.3 s and `dolt push` 8.3 s. Dolt pushes through a git cache of the data
-  ref, which on Beryl is 794 MB. `bd comments add` takes 0.55 s: bd commits
-  locally and does not push, so it was not the slow part.
-- A full sync now skips the pull when this clone already has the commit at
-  the remote's data ref (`remote_tip_known`): the push then fast-forwards.
-  If the remote moved in between, the push is rejected and the retry loop
-  pulls, as before.
-- `enact meta` and `enact close` write only beads their caller owns, and no
-  other machine may claim an owned bead, so their writes need not reach the
-  remote before the command returns. Instead of their closing sync they
-  call `defer_sync`, which records `.git/enact/sync-pending` and starts
-  `enact sync --deferred` unless one is running (`sync-pusher.lock`). The
-  pusher waits `DEFERRED_SYNC_DELAY` (2 s) so that more writes can gather,
-  then runs one forced sync under the ownership lock, and repeats while the
-  flag is back. It checks the flag again after letting go of its own lock,
-  so a write recorded while it runs is never left behind. Any full sync
-  removes the flag, because it pushes every local commit. Its output goes
-  to `.git/enact/deferred-sync.log`.
-- What this gives up: `meta` and `close` no longer re-read the bead after
-  the push to report a remote-wins conflict, and other machines see these
-  writes a few seconds later. Claims (`claim`, `start`, lane continuation)
-  still pull before and push and verify after, so two viziers still never
-  claim the same bead.
-- `ENACT_SYNC_NOW=1` restores the synchronous sync and check. The test
-  harness sets it so that no background pusher outlives a test, and one
-  integration test turns it off to check that deferred writes reach the
-  other clone.
-
 ## Longest chains first (2026-11-15)
 
-- Among ready beads of equal role class and priority, `enact next` (and lane
-  continuation) now starts the bead with the longest chain of open beads
+- Among ready tickets of equal role class and priority, `enact next` (and lane
+  continuation) now starts the ticket with the longest chain of open tickets
   waiting on it through blocking edges (`blocks`, `conditional-blocks`,
-  `waits-for`), counting itself. Bead number remains the last tiebreak.
+  `waits-for`), counting itself. ticket number remains the last tiebreak.
 - Why: picking the lowest number could leave a long dependency chain for
   last, so a parallel run would finish with one session working through it
-  bead by bead while the rest of the pool sat idle. Starting the critical
+  ticket by ticket while the rest of the pool sat idle. Starting the critical
   path early keeps the tail of a run wide.
 - Stewards and explicit priority still come first: priority is the
   planner's stated intent, chain length only a default.
-- Closed and deferred beads do not lengthen a chain. Lanes are not counted
-  as chains: lane beads already run one after another in one session, and
+- Closed and deferred tickets do not lengthen a chain. Lanes are not counted
+  as chains: lane tickets already run one after another in one session, and
   only edges express a real ordering.
 
 ## Pool limit per message (2026-11-15)
@@ -1739,88 +1509,57 @@ the same local append and rotation as the ownership-lock log.
   message's starts) and `started` is kept for reporting. `pool-empty` no
   longer sends the user to a new session at the cap.
 
-## Release rather than wait on another bead (2026-11-16)
+## Release rather than wait on another ticket (2026-11-16)
 
-- A worker whose bead needs another bead's work that has not reached
+- A worker whose ticket needs another ticket's work that has not reached
   staging now commits to its branch, adds the dependency edge, and
-  releases its bead. It does not watch `origin/staging` in a loop.
+  releases its ticket. It does not watch `origin/staging` in a loop.
 - Why: in Beryl's week to 2026-11-16, workers in active runs held run
   slots for 16 to 55 minutes at a time in loops that waited for another
-  bead, or a Steward's repair, to land. A run that is limited by its slot
-  count loses that time outright. A released bead is not ready again
+  ticket, or a Steward's repair, to land. A run that is limited by its slot
+  count loses that time outright. A released ticket is not ready again
   until its new blocker closes, so the vizier gives the slot to ready work
-  and restarts the bead afterwards, and the recovery record keeps the
+  and restarts the ticket afterwards, and the recovery record keeps the
   branch and head for the next session.
 - A closed dependency is not waited on either: its commits are on
   staging already, so the worker rebases.
 
-## One bead's unmet need never holds a run (2026-11-16)
+## One ticket's unmet need never holds a run (2026-11-16)
 
-- A Beryl run stopped overnight for one bead. The Beryl 3D sweep on Cygnus
+- A Beryl run stopped overnight for one ticket. The Beryl 3D sweep on Cygnus
   (Windows) filed a cargo-test failure into the epic with no host pin. A
   Mac worker could not reach Cygnus or its log, so it asked for a
   Justiciar. The Justiciar queued a request for Cygnus, waited ten minutes,
   then ran `run block --exhausted`. That held the whole epic, though
-  nothing depended on the bead. The failure was MSVC's missing
+  nothing depended on the ticket. The failure was MSVC's missing
   `mspdbcore.dll` on Cygnus, not Beryl's code.
-- A bead only another machine can do or check (its failure came from
+- A ticket only another machine can do or check (its failure came from
   there, or it needs that OS, a device or that host's logs) is now pinned
   to that host by the worker and released. It is not impossible
   acceptance. A failure in a machine's own environment is that machine's
   work.
-- The Justiciar drops a bead with an unmet need from the run instead of
-  holding the run: it moves the bead out of the epic, labels it
+- The Justiciar drops a ticket with an unmet need from the run instead of
+  holding the run: it moves the ticket out of the epic, labels it
   `enact:dropped`, removes edges so nothing waits on it, and comments
   `Dropped requirement:` on the run epic for the vizier's final report.
-  The bead stays open with its acceptance, so this does not close an
+  The ticket stays open with its acceptance, so this does not close an
   impossible requirement. Waiting on another machine or a person is not
   recovery.
-- `run block --exhausted` stays for a need that no bead left in the run
+- `run block --exhausted` stays for a need that no ticket left in the run
   can progress without. The helper is unchanged: whether a need is one
-  bead's or the run's is a judgment, and the rule lives in `justiciar.md`.
+  ticket's or the run's is a judgment, and the rule lives in `justiciar.md`.
 - Pre-flight's stoppage audit now covers machines, OSes and devices no
-  vizier on the run serves, and tooling that files beads into the epic
-  from such machines. It also runs over the open beads of an existing
-  epic or input beads, which it skipped before.
+  vizier on the run serves, and tooling that files tickets into the epic
+  from such machines. It also runs over the open tickets of an existing
+  epic or input tickets, which it skipped before.
 - When a run is blocked, the vizier gives the user two answers: meet the
   need, or drop the requirement and resume.
 
-## Only ownership checks push inside the lock (2026-11-16)
-
-- Symptom: on Beryl's Mac, the ownership lock was busy 79% of the time
-  between 14:00 and 16:10 UTC, commands waited 17,300 s for it in those two
-  hours, and 7 gave up. Dolt pushes made up about 2,000 s of the 6,100 s it
-  was held, at a median of 12-14 s each and 40-80 pushes an hour.
-- Why a push is slow whatever it carries: through a `git+` remote, `dolt
-  push` (and `dolt fetch`) reads every table file blob of the remote from
-  Dolt's git cache with `git cat-file blob`. On Beryl that was 230 blobs and
-  864 MB, twenty of them 52 MB parts, to upload about 20-60 KB. A push also
-  holds the embedded store's file lock for its whole run, so a concurrent
-  `bd show` waited for all of it. (A fetch does not block bd.) Moving the
-  push out of the ownership lock alone would therefore only move the wait
-  to the store lock; the fix is fewer pushes.
-- bd commits locally and never pushes, so almost every sync found local
-  commits the remote lacked (other sessions' bd writes) and pushed them,
-  opening syncs included.
-- `sync(publish=False)`, the default, now commits and merges, and leaves
-  commits the remote lacks to the background pusher (`defer_sync`), which
-  gathers several commands' writes into one push. `sync(publish=True)` keeps
-  the old push-before-return for the closing syncs whose check reads what the
-  remote kept after a race with another machine: `claim` (and so vizier
-  reservations), `start`, `release`, the pusher itself, `enact sync` and
-  setup. Other closing writes (run metadata, delivery records, worktree
-  records, Steward filing, epic closing) belong to an owner or the vizier
-  that already holds them, the same argument as for `meta` and `close`
-  above; other machines see them a few seconds later.
-- `ENACT_SYNC_NOW` still makes every sync push before returning. The
-  integration tests set it.
-
 ## Cloudflare ticket system contract
 
-The ticket backend runs alongside the Beads backend. With no active
-`[tickets]` configuration, Beads owns the graph and coordination. An
-enrolled project follows the Worker's per-project cutover state unless
-the helper is explicitly configured to use the server immediately.
+The ticket service owns the graph, scheduling, leases, and feed. Every
+project supplies an active `[tickets]` configuration. Both production projects
+completed the irreversible transition to `after` on November 17, 2026.
 See [local ticket verification](../README.md#local-ticket-verification)
 for the simulator and isolated Git tests.
 
@@ -1903,7 +1642,7 @@ CREATE INDEX aliases_id ON aliases(id);
 - When the object wakes it loads every ticket whose status is not `closed`,
   and the edges among them, into memory. `graph`, `ready` and readiness are
   answered from memory; writes go to SQLite and memory in one transaction.
-- An imported bead's whole changelog is one `history` row (`seq` 0, `change`
+- An imported ticket's whole changelog is one `history` row (`seq` 0, `change`
   a JSON array of the old events). This keeps a full import near 40,000 rows
   written, inside one day's limit; the importer ticket measures the real
   figure.
@@ -1965,8 +1704,8 @@ the shared sequence write.
 
 An import can supply `daily_row_ceiling` to lower its own quota. The Worker
 checks it against current usage in the import transaction. Imported comments
-keep their original Beads IDs in `legacy_id`. `metadata._enact_beads` retains
-source-only fields and the original dependency records for callers of the shim.
+keep their original IDs in `legacy_id`. `metadata._enact_beads` retains
+source-only fields and the original dependency records as archival metadata.
 
 `POST /batch` takes `{if: [...], ops: [...]}` and applies all of it in one
 transaction or none of it.
@@ -1983,7 +1722,7 @@ transaction or none of it.
 - Result: `{seq, results: [...]}`, or status 409 with
   `{failed: <index of the precondition or operation>, current: <ticket>}`.
 - A create dependency with `reverse: true` is directed from `on` to the
-  new ticket, as in `bd create --deps blocks:ID`.
+  new ticket, as in `tk create --deps blocks:ID`.
 - Closing a ticket also closes each ancestor whose descendants are now all
   closed, in the same transaction, and reports them in the result.
 - A close with `include_ready: true` also returns `ready`, the IDs ready
@@ -2044,12 +1783,11 @@ graph includes the full readiness result in `ready`. When an eligible
 ticket's defer time passes, the graph's ETag changes without a new write.
 The graph's numeric `seq` remains the batch precondition.
 
-Native `tk defer` leaves the ticket open with `defer_until` set. Beads
-snoozes are stored as `deferred` with a date so the shim shows the legacy
-status and cutover can compare exact snapshots. After cutover, the deadline
-alarm or the next graph or ready read reopens those tickets and clears the
-date. The status change advances the sequence and is journaled for the feed.
-A deferral without a date needs an explicit status change.
+`tk defer` leaves the ticket open with `defer_until` set. Imported dated
+deferrals wake when their deadline passes. The alarm or a graph or ready
+read reopens the ticket, clears its date, advances the sequence, and
+journals the change for the feed. An undated deferral needs an explicit
+status change.
 
 ### 5. Leases
 
@@ -2159,15 +1897,6 @@ tk restore <tickets.jsonl> [--row-budget N]
 tk register | tk bench | tk version
 ```
 
-Run import and comparison from the legacy Beads project. Set
-`ENACT_REAL_BD` to the path of the original Beads executable if the shim is
-first on `PATH`. Both commands reuse the per-project history cache under the
-Enact configuration directory. Import sends closed tickets first and reserves
-36,000 rows below the server's 90% daily cutoff for normal work. An import
-that reaches its budget exits with code 5 and reports the remaining tickets
-and estimated days. Run the same command again to resume. Compare exits
-with code 1 if any fields or readiness values differ.
-
 Without `--json` a command prints a short human-readable form; with it, the
 server's JSON. Exit codes: 0 done; 1 bad usage, not found or a malformed
 request; 3 a precondition failed or a claim or lease belongs to someone else
@@ -2179,7 +1908,7 @@ asking the server whether the first attempt landed; a `create` carries a
 client-chosen request key that the server remembers for a day, so a retry
 never creates twice.
 
-Commands with Beads counterparts use the same names and flags. A JSON
+A JSON
 `show` with one ID returns a ticket object. With multiple IDs it returns an
 array in the requested order. `comments <id>` returns the ticket's comments
 array. `dep cycles` returns arrays of ticket IDs. `create --silent` prints
@@ -2187,9 +1916,6 @@ only the canonical ID when called without `--json`.
 
 Search accepts a quoted phrase or separate words. It returns up to 50 tickets
 by default. Pass `--limit 0` to return every match.
-
-`bd children <id>`, `bd list --label-any a,b`, `bd comments add <id> -f FILE`,
-`bd dep cycles`, and a positional title and `-l` for `bd create`.
 
 #### Daily backups and restore
 
@@ -2305,20 +2031,20 @@ The local runner still tracks its PID, log and pending promotion receipt.
 
 ## Runs never wait for time to pass (2026-11-16)
 
-- Audits and plans kept filing beads whose acceptance needed elapsed time:
+- Audits and plans kept filing tickets whose acceptance needed elapsed time:
   Beryl's by-q44s.4.6 ("first measure a day of pushes after" a fix) under
   the M2 review gate, and by-vaexw.1 ("over a normal running day"). Such a
-  bead holds its epic, so the whole run, open for hours with nothing to do.
+  ticket holds its epic, so the whole run, open for hours with nothing to do.
 - The stoppage audit in enact-plan lists waiting for time or data as a
-  stoppage. `common.md` forbids filing such beads: acceptance must be
-  measurable when the bead is worked (existing logs, replays, benchmarks).
-- Observation still worth having becomes an **observation bead**: no
+  stoppage. `common.md` forbids filing such tickets: acceptance must be
+  measurable when the ticket is worked (existing logs, replays, benchmarks).
+- Observation still worth having becomes an **observation ticket**: no
   parent, label `enact:observe`, deferred to the date the data will exist.
   A dated deferral under a run epic would keep that epic open (`work_done`),
   so it lives outside every run. When the date passes it is ordinary open,
   unowned work, which the sweep triages or a later run takes.
-- A worker handed such a bead does the change, measures what it can now,
-  files the rest as an observation bead and closes, so beads already filed
+- A worker handed such a ticket does the change, measures what it can now,
+  files the rest as an observation ticket and closes, so tickets already filed
   stop blocking too. This is prompt-only; the helper is unchanged.
 
 
