@@ -2,7 +2,7 @@ import {env, exports} from "cloudflare:workers";
 import {runInDurableObject} from "cloudflare:test";
 import {expect, test} from "vitest";
 
-const request = (path: string, init?: RequestInit) => exports.default.fetch("https://example.com/by" + path, init);
+const request = (path: string, init?: RequestInit) => exports.default.fetch("https://example.com/beryl" + path, init);
 const stub = env.TICKETS.getByName("by");
 const token = "dashboard-test-token";
 
@@ -70,7 +70,7 @@ test("renders project pages from 5,000 tickets and revalidates them", async () =
     expect(homeBody).toContain(`href="#${id}"`);
   }
   expect(homeBody).toContain("Slow CI failures");
-  expect(homeBody).toContain('href="/by/tickets/Tq44s.7.24"');
+  expect(homeBody).toContain('href="/beryl/tickets/Tq44s.7.24"');
   expect(homeBody).toContain('class="c-mono">Tq44s</');
   expect(homeBody).toContain("4792/4795");
 
@@ -79,15 +79,15 @@ test("renders project pages from 5,000 tickets and revalidates them", async () =
   const detailBody = await detail.text();
   for (const value of ["Description", "Comments", "Changelog", "Subtasks", "Blocked by", "Blocking", "Assignee", "Epic",
     "In progress", "Render live tickets &lt;safely&gt;", "session ff7437", "Validate the old path", "Simulator failure",
-    '<strong>context</strong>', 'href="/by/tickets/Tq44s"', 'href="/by/tickets/Tpath"', "renamed it", "created this",
-    'class="c-mono">Tq44s.7.24</', 'href="/by/tickets/Tq44s.7">Tq44s.7</',
+    '<strong>context</strong>', 'href="/beryl/tickets/Tq44s"', 'href="/beryl/tickets/Tpath"', "renamed it", "created this",
+    'class="c-mono">Tq44s.7.24</', 'href="/beryl/tickets/Tq44s.7">Tq44s.7</',
     'class="c-row-id c-mono c-hide-narrow">Tq44s.7.24.1</']) {
     expect(detailBody).toContain(value);
   }
 
-  expect(detailBody).toMatch(/href="\/by\/tickets\/Terro"[^>]*><span class="c-mono">Terro<\/span><\/a>/);
+  expect(detailBody).toMatch(/href="\/beryl\/tickets\/Terro"[^>]*><span class="c-mono">Terro<\/span><\/a>/);
   expect(detailBody).toContain("<code>Tpath</code>");
-  expect(detailBody).toContain('href="/by/tickets/Tpath?ref=notes">Tpath</a>');
+  expect(detailBody).toContain('href="/beryl/tickets/Tpath?ref=notes">Tpath</a>');
   expect(detailBody).not.toContain("by-path");
   expect(detailBody).not.toContain("by-q44s");
 
@@ -115,7 +115,7 @@ test("renders project pages from 5,000 tickets and revalidates them", async () =
   for (const path of ["/beads/by-q44s.7.24", "/beads/by-q44s.7.24.html", "/tickets/by-q44s.7.24", "/tickets/old", "/tickets/Tq44s.7.24/", "/tickets/q44s.7.24"]) {
     const redirect = await request(path + "?from=bookmark", {redirect: "manual"});
     expect(redirect.status).toBe(308);
-    expect(redirect.headers.get("location")).toBe("https://example.com/by/tickets/Tq44s.7.24?from=bookmark");
+    expect(redirect.headers.get("location")).toBe("https://example.com/beryl/tickets/Tq44s.7.24?from=bookmark");
   }
   const homeBeforeReopen = (await request("/")).headers.get("etag")!;
   await batch({op: "reopen", id: "q44s.999"});
@@ -147,7 +147,7 @@ test("home fragments show current project status independently of the ticket boa
     const at = new Date().toISOString();
     sql.exec(`
       INSERT INTO events VALUES
-        (1, ?, 'session', 'mac', 'Casey', '{"session":"Casey","ticket":"Tlive","action":"start"}'),
+        (1, ?, 'session', 'mac', 'Casey', '{"session":"Casey","ticket":"by-live","action":"start"}'),
         (2, ?, 'session', 'mac', 'Pat', '{"session":"Pat","ticket":"old","action":"start"}'),
         (3, ?, 'session', 'mac', 'Pat', '{"session":"Pat","ticket":"old","action":"archive"}'),
         (4, ?, 'ci', 'Mac runner', 'ci', '{"os":"macos","passed":false,"tip":"obsolete"}'),
@@ -165,7 +165,7 @@ test("home fragments show current project status independently of the ticket boa
   expect(status.headers.get("x-cirrus-sequence")).toBe("6");
   const html = await status.text();
   for (const value of [
-    "Casey", 'href="/by/tickets/Tlive">Tlive</a>', "Windows", "Failed", "01234567", "macOS", "Passed", "abcdef12",
+    "Casey", 'href="/beryl/tickets/Tlive">Tlive</a>', "Windows", "Failed", "01234567", "macOS", "Passed", "abcdef12",
     "Merge holder", "Queued merger", "Writes paused", "UTC day", "Requests", "Rows written", "/100000",
   ]) expect(html).toContain(value);
   expect(html).not.toMatch(/>Pat<|obsolete|<main|<script/);
@@ -186,4 +186,40 @@ test("home fragments show current project status independently of the ticket boa
   expect(live).toContain('<template id="c-status-fragment">');
   expect(live).toContain("Queued merger");
   expect(live).not.toContain("<script");
+});
+
+test("Beryl bookmarks redirect while both API paths reach the existing project", async () => {
+  for (const prefix of ["by", "beryl"]) {
+    const get = (path: string, method = "GET") => exports.default.fetch(`https://example.com/${prefix}${path}`, {method, redirect: "manual"});
+    for (const path of ["", "/"]) {
+      if (prefix === "beryl" && path === "/") continue;
+      for (const method of ["GET", "HEAD"]) {
+        const response = await get(path + "?from=bookmark", method);
+        expect(response.status).toBe(308);
+        expect(response.headers.get("location")).toBe("https://example.com/beryl/?from=bookmark");
+      }
+    }
+    for (const path of ["/tickets/Tq44s.7.24", "/tickets/by-q44s.7.24", "/beads/by-q44s.7.24.html"]) {
+      if (prefix === "beryl" && path === "/tickets/Tq44s.7.24") continue;
+      const response = await get(path + "?from=bookmark");
+      expect(response.status).toBe(308);
+      expect(response.headers.get("location")).toBe("https://example.com/beryl/tickets/Tq44s.7.24?from=bookmark");
+    }
+    const ticket = await get("/api/tickets/Tq44s.7.24");
+    expect(ticket.status).toBe(200);
+    expect(await ticket.text()).toContain("Render live tickets <safely>");
+    const feed = await exports.default.fetch(`https://example.com/${prefix}/api/feed`, {headers: {Upgrade: "websocket"}});
+    expect(feed.status).toBe(101);
+    feed.webSocket!.accept();
+    feed.webSocket!.close();
+  }
+  const home = await request("/");
+  const html = await home.text();
+  expect(html).toContain('<title>Tickets · Beryl</title>');
+  expect(html).toContain('<meta name="cirrus-root" content="/beryl/">');
+  expect(html).not.toContain('href="/by/');
+  const enact = await exports.default.fetch("https://example.com/en/");
+  expect(enact.status).toBe(200);
+  expect(await enact.text()).toContain('<meta name="cirrus-root" content="/en/">');
+  expect((await exports.default.fetch("https://example.com/unconfigured/")).status).toBe(404);
 });

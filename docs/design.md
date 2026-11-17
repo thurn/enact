@@ -2070,3 +2070,19 @@ behind staging and its incremental caches stay valid.
   released. The worktree sweep keeps check trees.
 - The merge-queue path (`queue = true`) still checks in the pushing tree.
 
+
+
+## Beryl dashboard address (2026-11-17)
+
+Beryl's dashboard now uses `/beryl/`. Its old `/by/` home and ticket
+bookmarks redirect permanently, preserving query parameters. The public
+slug maps to the existing `by` Durable Object, repository authorization and
+ticket prefixes. Both API paths reach that same project so existing clients
+and the dashboard's live feed keep working without migrating ticket data.
+
+The isolated browser check measured home rendering at 7.2 ms cold and 4.9 ms
+warm before the change, and 5.4 ms cold and 3.5 ms warm afterward. The changed
+route retained scroll positions, replayed live updates after reconnecting,
+and made no idle requests. The 375 px and 1280 px layouts were checked in
+light and dark modes. The existing viewport-prefetch assertion timed out
+on the baseline; the focused route run omitted that assertion.

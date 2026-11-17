@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { version } from "../package.json";
 import { ChangeFeed, type FeedChange } from "./change-feed";
 import { Dashboard, dashboardRoute } from "./dashboard";
+import { storedProject } from "./project-paths";
 import { ProjectDeadlines } from "./project-deadlines";
 import { cutoverState, dayMilliseconds, events, leases, ProjectWrite } from "./project-state";
 import { ProjectUsage, type RequestReservation } from "./project-usage";
@@ -26,8 +27,10 @@ declare global {
   }
 }
 
-function apiPath(pathname: string): RegExpExecArray | null {
-  return /^\/([a-z0-9][a-z0-9-]*)\/api(\/.*)$/.exec(pathname);
+function apiPath(pathname: string) {
+  const match = /^\/([a-z0-9][a-z0-9-]*)\/api(\/.*)$/.exec(pathname);
+  if (match) match[1] = storedProject(match[1]);
+  return match;
 }
 
 export class ProjectTickets extends DurableObject<Cloudflare.Env> {

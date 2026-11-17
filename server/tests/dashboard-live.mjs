@@ -62,8 +62,8 @@ try {
   const context = await browser.newContext({viewport: {width: 1280, height: 720}, reducedMotion: "reduce"});
   async function open(path, ctx = context, route) {
     const page = await ctx.newPage();
-    if (route) await page.routeWebSocket("**/by/api/feed", route);
-    const feed = page.waitForEvent("websocket", {predicate: (ws) => ws.url().endsWith("/by/api/feed")})
+    if (route) await page.routeWebSocket("**/beryl/api/feed", route);
+    const feed = page.waitForEvent("websocket", {predicate: (ws) => ws.url().endsWith("/beryl/api/feed")})
       .then((ws) => ws.waitForEvent("framesent"));
     const response = await page.goto(origin + path);
     assert.equal(response.status(), 200, path);
@@ -71,12 +71,18 @@ try {
     return page;
   }
 
-  const home = await open("/by/");
+  const coldStart = performance.now();
+  assert.equal((await fetch(origin + "/beryl/")).status, 200);
+  const coldMs = performance.now() - coldStart;
+  const warmStart = performance.now();
+  assert.equal((await fetch(origin + "/beryl/")).status, 200);
+  console.log(`Dashboard render: cold ${(coldMs).toFixed(1)} ms, warm ${(performance.now() - warmStart).toFixed(1)} ms.`);
+  const home = await open("/beryl/");
   assert.equal(await home.getByRole("link").filter({hasText: displayId}).getAttribute("href"),
-    "/by/tickets/" + displayId);
+    "/beryl/tickets/" + displayId);
   let connected;
   let disconnecting = false;
-  const detail = await open("/by/tickets/" + id, context, (route) => {
+  const detail = await open("/beryl/tickets/" + id, context, (route) => {
     if (disconnecting) return route.close({code: 1012});
     const server = route.connectToServer();
     connected = () => Promise.all([route.close({code: 1012}), server.close({code: 1012})]);
@@ -138,9 +144,9 @@ try {
   for (const width of [375, 1280]) {
     for (const colorScheme of ["light", "dark"]) {
       const view = await browser.newContext({viewport: {width, height: 720}, colorScheme, reducedMotion: "reduce"});
-      const page = await open("/by/", view);
+      const page = await open("/beryl/", view);
       await page.locator(".c-card").filter({hasText: displayId}).getByText(displayId, {exact: true}).waitFor();
-      const ticket = await open("/by/tickets/" + id, view);
+      const ticket = await open("/beryl/tickets/" + id, view);
       await ticket.locator(".c-eyebrow").getByText(displayId, {exact: true}).waitFor();
       assert.ok(await ticket.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       const panel = page.locator("#project-status");

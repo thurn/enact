@@ -1,3 +1,5 @@
+import {dashboardRoot, storedProject} from "./project-paths";
+
 export function mentions(project: string, text: string, replace: (id: string) => string): string {
   return text.replace(/\bT?[a-z0-9-]+(?:\.[0-9]+)*\b/g, (word) => {
     // Bare roots can be ordinary words. In prose, link explicit prefixes and dotted IDs.
@@ -12,7 +14,7 @@ export function ticketPaths(
   return text.replace(
     /(?<![\w./-])(?:https?:\/\/tickets\.thurn\.workers\.dev)?\/([a-z0-9-]+)\/(tickets|beads)\/(T?[a-z0-9-]+(?:\.[0-9]+)*(?:\.html)?)\b/g,
     (url, owner: string, route: string, id: string) =>
-      owner === project ? replace(route === "beads" ? id.replace(/\.html$/, "") : id, url) : url,
+      storedProject(owner) === project ? replace(route === "beads" ? id.replace(/\.html$/, "") : id, url) : url,
   );
 }
 
@@ -31,7 +33,7 @@ export function rewriteTicketPaths(project: string, text: string, resolve: Resol
     const id = resolve(name);
     if (!id) return url;
     const origin = url.startsWith("http") ? new URL(url).origin : "";
-    return origin + ticketUrl(`/${project}/`, id);
+    return origin + ticketUrl(dashboardRoot(project), id);
   });
 }
 

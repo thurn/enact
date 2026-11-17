@@ -1,4 +1,5 @@
 import * as c from "../cirrus/components";
+import {dashboardRoot, storedProject} from "../project-paths";
 import {ProjectUsage} from "../project-usage";
 import {resolveId} from "../ticket-batch";
 import {ancestors, type BatchChanges} from "../ticket-index";
@@ -13,7 +14,7 @@ export function dashboardRoute(pathname: string) {
   const match = /^\/([a-z0-9][a-z0-9-]*)(?:\/(?:(tickets|beads)\/([^/]+)\/?)?)?$/.exec(pathname);
   if (!match) return null;
   const [, project, tail, ticket] = match;
-  return {project, ticket, legacy: tail === "beads"};
+  return {project: storedProject(project), ticket, legacy: tail === "beads"};
 }
 
 type Page = {
@@ -43,7 +44,7 @@ export class Dashboard {
   async fetch(request: Request, route: NonNullable<ReturnType<typeof dashboardRoute>>, now = Date.now(), usage = new ProjectUsage(this.sql, now)): Promise<Response> {
     const {project, ticket, legacy} = route;
     const url = new URL(request.url);
-    const root = `/${project}/`;
+    const root = dashboardRoot(project);
     const fragment = url.searchParams.get("fragment");
     const head = request.method === "HEAD";
     const seq = this.sql.exec<{value: string}>("SELECT value FROM meta WHERE key = 'seq'").toArray()[0]?.value ?? "0";

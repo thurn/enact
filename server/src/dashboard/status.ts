@@ -1,3 +1,4 @@
+import {storedProject} from "../project-paths";
 import * as c from "../cirrus/components";
 import {cutoverState, events, leases} from "../project-state";
 import type {ProjectUsage} from "../project-usage";
@@ -17,7 +18,7 @@ function activeSessions(root: string, sql: SqlStorage, entries: Event[]) {
     const id = field(event, "session") ?? event.actor;
     if (!latest.has(id)) latest.set(id, event);
   }
-  const project = root.slice(1, -1);
+  const project = storedProject(root.slice(1, -1));
   const active = [];
   for (const [session, event] of latest) {
     const action = field(event, "action") ?? field(event, "state") ?? field(event, "status");

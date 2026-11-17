@@ -41,7 +41,7 @@ export function childrenProgress(count: Progress | undefined): string {
 
 export function brand(root: string): string {
   const project = root.slice(1, -1);
-  if (project === "by") return "Beryl";
+  if (project === "beryl") return "Beryl";
   if (project === "en") return "Enact";
   return project;
 }
