@@ -254,7 +254,11 @@ export class TicketBatch {
 
     for (const value of array(op.deps === undefined ? [] : op.deps, "deps")) {
       const dep = typeof value === "string" ? {on: value} : object(value, "dependency");
-      this.dependency(id, dep, false);
+      if (dep.reverse === true) {
+        this.dependency(this.ticket(dep.on, "on").id, {...dep, on: id}, false);
+      } else {
+        this.dependency(id, dep, false);
+      }
     }
     if (key) {
       this.write(

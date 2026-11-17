@@ -1,3 +1,4 @@
+mod create;
 mod diagnostics;
 mod output;
 pub(crate) mod state;
@@ -6,11 +7,10 @@ use crate::client::{Client, Failure, Result, usage};
 use crate::commands;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
+use std::env;
 use std::ffi::OsString;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
-use std::{env, fs, io};
 
 #[derive(Parser)]
 #[command(name = "bd", disable_help_flag = true, disable_version_flag = true)]
@@ -97,26 +97,7 @@ enum Action {
         #[arg(long)]
         verbose: bool,
     },
-    Create {
-        #[arg(long)]
-        id: Option<String>,
-        #[arg(long)]
-        parent: Option<String>,
-        #[arg(long)]
-        title: String,
-        #[arg(long = "type", short = 't', default_value = "task")]
-        kind: String,
-        #[arg(short = 'p', long, default_value_t = 2)]
-        priority: u8,
-        #[arg(long, short = 'd')]
-        description: Option<String>,
-        #[arg(long)]
-        body_file: Option<String>,
-        #[arg(long, value_delimiter = ',')]
-        labels: Vec<String>,
-        #[arg(long)]
-        acceptance: Option<String>,
-    },
+    Create(create::Create),
     Update {
         id: String,
         #[arg(long)]
@@ -217,7 +198,7 @@ enum Remote {
 impl Action {
     fn write_name(&self) -> &str {
         match self {
-            Self::Create { .. } => "create",
+            Self::Create(_) => "create",
             Self::Update { .. } => "update",
             Self::Close { .. } => "close",
             Self::Dep { .. } => "dep",
@@ -290,7 +271,7 @@ pub fn main() -> ExitCode {
 fn legacy_help(args: &[OsString]) -> bool {
     match args {
         [command, help] if help == "--help" || help == "-h" => {
-            ["comments", "list", "ready", "undefer"]
+            ["comments", "create", "list", "ready", "undefer"]
                 .iter()
                 .any(|name| command == *name)
         }
@@ -363,6 +344,20 @@ fn update(client: &Client, id: &str, fields: Value) -> Result<Value> {
         vec![],
     )?;
     Ok(json!([output::row(client, &ticket(client, id, &[])?)]))
+}
+
+fn defer_until(until: String) -> Result<String> {
+    use chrono::{Local, NaiveDate, TimeZone};
+    let Ok(date) = NaiveDate::parse_from_str(&until, "%Y-%m-%d") else {
+        return Ok(until);
+    };
+    let midnight = date.and_hms_opt(0, 0, 0).expect("midnight");
+    Ok(Local
+        .from_local_datetime(&midnight)
+        .earliest()
+        .ok_or_else(|| usage("invalid local date"))?
+        .to_utc()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }
 
 fn run(client: &Client, options: Options) -> Result<u8> {
@@ -444,53 +439,7 @@ fn run(client: &Client, options: Options) -> Result<u8> {
         }
         Action::Show { ids } => return output::show(client, &ids, options.json),
         Action::Export { .. } => return Err(retired_export()),
-        Action::Create {
-            id,
-            parent,
-            title,
-            kind,
-            priority,
-            description,
-            body_file,
-            labels,
-            acceptance,
-        } => {
-            if id.is_some() && parent.is_some() {
-                return Err(usage("Error: cannot specify both --id and --parent flags"));
-            }
-            let body = match body_file.as_deref() {
-                Some("-") => {
-                    let mut text = String::new();
-                    io::stdin().read_to_string(&mut text).map_err(usage)?;
-                    text
-                }
-                Some(path) => fs::read_to_string(path).map_err(usage)?,
-                None => description.unwrap_or_default(),
-            };
-            let mut legacy = json!({});
-            if let Some(owner) = git_config("user.email") {
-                legacy["owner"] = json!(owner);
-            }
-            let mut operation = json!({"op": "create", "parent": parent, "fields": {
-                "title": title, "type": kind, "priority": priority, "body": body, "labels": labels,
-                "acceptance": acceptance.unwrap_or_default(), "metadata": {"_enact_beads": legacy},
-            }});
-            if let Some(id) = id {
-                operation["legacy_id"] = json!(id);
-            }
-            let response = commands::single(client, operation, vec![])?;
-            let mut row = output::row(
-                client,
-                &ticket(client, string(&response["results"][0]["id"]), &[])?,
-            );
-            row["schema_version"] = json!(1);
-            rendered = Some(format!(
-                "✓ Created {}: {}\n",
-                string(&row["id"]),
-                string(&row["title"])
-            ));
-            row
-        }
+        Action::Create(create) => return create.run(client, options.json),
         Action::Update {
             id,
             status,
@@ -569,6 +518,14 @@ fn run(client: &Client, options: Options) -> Result<u8> {
                 json!({"op": "close", "id": id, "reason": reason, "legacy": true}),
                 vec![json!({"id": id, "version": before["version"]})],
             )?;
+            if !options.json {
+                println!(
+                    "✓ Closed {} — {}: {reason}",
+                    output::legacy_id(client, string(&before["id"])),
+                    string(&before["title"]),
+                );
+                return Ok(0);
+            }
             json!([output::row(client, &ticket(client, &id, &[])?)])
         }
         Action::Dep { operation } => dependency(client, operation)?,
@@ -621,16 +578,7 @@ fn run(client: &Client, options: Options) -> Result<u8> {
         }
         Action::Epic { operation } => epic(client, operation)?,
         Action::Defer { id, until, reason } => {
-            use chrono::{Local, NaiveDate, TimeZone};
-            let until = match NaiveDate::parse_from_str(&until, "%Y-%m-%d") {
-                Ok(date) => Local
-                    .from_local_datetime(&date.and_hms_opt(0, 0, 0).expect("midnight"))
-                    .earliest()
-                    .ok_or_else(|| usage("invalid local date"))?
-                    .to_utc()
-                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                Err(_) => until,
-            };
+            let until = defer_until(until)?;
             let mut fields = json!({"status": "deferred", "defer_until": until});
             if let Some(reason) = reason {
                 fields["notes"] = json!(reason);

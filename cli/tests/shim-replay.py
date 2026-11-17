@@ -21,7 +21,7 @@ EXPORT_ERROR = ("bd: full exports are disabled after ticket cutover. "
                 "Use the ticket dashboard or targeted tk list/show reads.\n")
 RULES = (
     "JSON whitespace and object key order",
-    "opaque version tokens and newly allocated comment IDs (mapped consistently)",
+    "opaque version tokens and newly allocated comment and root ticket IDs (mapped consistently)",
     "simulator-generated timestamps on fixture tickets and comments",
     "date-only deferral represented in the caller's local timezone",
     "recorded future snoozes kept future when replayed later",
@@ -65,18 +65,19 @@ def parse_time(value):
     return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def normalize(value, comment_ids):
+def normalize(value, comment_ids, allocated_roots):
     if isinstance(value, list):
-        return [normalize(row, comment_ids) for row in value]
+        return [normalize(row, comment_ids, allocated_roots) for row in value]
     if not isinstance(value, dict):
         return value
-    result = {key: normalize(field, comment_ids) for key, field in value.items()}
+    result = {key: normalize(field, comment_ids, allocated_roots) for key, field in value.items()}
     if result.get("dependencies") and all("depends_on_id" in row for row in result["dependencies"]):
         result["dependencies"].sort(key=lambda row: (row["depends_on_id"], row["type"]))
     if "revision" in result:
         assert isinstance(result["revision"], str) and result["revision"]
         result["revision"] = "<version>"
-    if result.get("id", "").startswith("by-corpus") or result.get("issue_id", "").startswith("by-corpus"):
+    ticket_id = result.get("issue_id", result.get("id", ""))
+    if ticket_id.startswith("by-corpus") or ticket_id in allocated_roots:
         for field in ("created_at", "updated_at", "started_at", "closed_at"):
             if field in result:
                 parse_time(result[field])
@@ -111,6 +112,48 @@ def difference(expected, actual, path=""):
 
 
 
+def verify_ticket(native, row):
+    for legacy, key in (
+        ("title", "title"), ("status", "status"), ("priority", "priority"), ("issue_type", "type"),
+        ("created_by", "created_by"), ("assignee", "assignee"), ("description", "body"),
+        ("acceptance_criteria", "acceptance"), ("notes", "notes"), ("close_reason", "close_reason"),
+    ):
+        actual = native[key] if native[key] != "" else None
+        assert actual == row.get(legacy), (row["id"], key, actual, row.get(legacy))
+    assert sorted(native["labels"]) == sorted(row.get("labels", []))
+    metadata = dict(native["metadata"])
+    assert metadata.pop("_enact_beads", {}).get("owner") == row.get("owner")
+    assert metadata == row.get("metadata", {})
+
+
+def verify_create_or_close(address, expected, actual_id):
+    native = request(address, f"/by/api/tickets/{actual_id}")
+    verify_ticket(native, expected)
+    for field in ("closed_at", "defer_until"):
+        recorded = expected.get(field)
+        if recorded is not None:
+            parse_time(native[field])
+            if field == "defer_until":
+                assert parse_time(native[field]) == parse_time(recorded), field
+        else:
+            assert native[field] is None, field
+    parent = expected.get("parent")
+    assert native["parent"] == (parent.removeprefix("by-") if parent else None), "parent"
+    expected_edges = []
+    for field in ("dependencies", "dependents"):
+        for edge in expected.get(field, []):
+            kind = edge["dependency_type"]
+            if kind == "parent-child":
+                continue
+            target = edge["id"].removeprefix("by-")
+            src, dst = (native["id"], target) if field == "dependencies" else (target, native["id"])
+            expected_edges.append((src, dst, "related" if kind == "relates-to" else kind))
+    actual_edges = [(edge["src"], edge["dst"], edge["kind"]) for edge in native["edges"]]
+    assert sorted(actual_edges) == sorted(expected_edges), (actual_edges, expected_edges)
+    if parent:
+        assert native["id"] in request(address, f"/by/api/tickets/{parent}")["children"]
+
+
 def verify_write(address, args, recorded):
     if args[0] == "--actor":
         args = args[2:]
@@ -121,14 +164,7 @@ def verify_write(address, args, recorded):
     if command in {"create", "update", "close", "defer", "undefer"}:
         row = recorded if command == "create" else recorded[0]
         native = inspect(row["id"])
-        for legacy, key in (
-            ("title", "title"), ("status", "status"), ("priority", "priority"), ("issue_type", "type"),
-            ("created_by", "created_by"), ("assignee", "assignee"), ("description", "body"),
-            ("acceptance_criteria", "acceptance"), ("notes", "notes"), ("close_reason", "close_reason"),
-        ):
-            assert (native.get(key) or None) == (row.get(legacy) or None), (row["id"], key)
-        assert sorted(native["labels"]) == sorted(row.get("labels", []))
-        assert {key: value for key, value in native["metadata"].items() if key != "_enact_beads"} == row.get("metadata", {})
+        verify_ticket(native, row)
         if command == "create" and "--parent" in args:
             assert "by-" + native["parent"] == args[args.index("--parent") + 1]
         if command == "defer":
@@ -208,22 +244,32 @@ def replay(tk, bd, directory, env, address):
     request(address, "/by/api/state", {"cutover": "after"})
 
     calls = read_gzip(CORPUS / "calls.jsonl.gz")
+    signatures = {(tuple(call["command"]), tuple(call["flags"])) for call in calls}
+    live = json.loads((CORPUS / "live-shapes.json").read_text(encoding="utf-8"))
+    missing_writes = {(tuple(shape["command"]), tuple(shape["flags"])) for shape in live
+                      if shape["command"] in (["create"], ["close"])} - signatures
+    assert not missing_writes, missing_writes
     problems = []
     expected_ids, actual_ids = {}, {}
+    allocated_roots = {}
     # The first read observes cutover and saves the permanent local marker.
     ok(bd, ["list", "--id", "by-r61mr", "--json"], directory, env)
     retired = 0
     for call in calls:
-        args = call["argv"]
+        args = [allocated_roots.get(arg, arg) for arg in call["argv"]]
         cwd = directory / call["cwd"]
+        for name, contents in call.get("files", {}).items():
+            (cwd / name).write_bytes(contents.encode("utf-8"))
         if call["command"] == ["export"]:
             retired_export(bd, args, cwd, env, address, "by")
             retired += 1
             continue
-        if "--readonly" in args and call["command"] == ["update"]:
+        unchanged = ("--readonly" in args and call["command"] == ["update"]) or (
+            call["command"] in (["create"], ["close"]) and call["returncode"] != 0)
+        if unchanged:
             before = request(address, "/by/api/state")["seq"]
         reply = run(bd, args, cwd, env, call["stdin"])
-        if "--readonly" in args and call["command"] == ["update"]:
+        if unchanged:
             assert request(address, "/by/api/state")["seq"] == before, args
         want = call["stdout"]
         got = reply.stdout
@@ -234,6 +280,12 @@ def replay(tk, bd, directory, env, address):
             problems.append(f"{args}: stderr {reply.stderr!r}, expected {call['stderr']!r}")
         if "--json" in args and want and got:
             want, got = json.loads(want), json.loads(got)
+            if call.get("allocated_root"):
+                actual_id = got["id"]
+                assert re.fullmatch(r"by-[a-hj-km-np-tv-z][0-9a-hj-km-np-tv-z]{3}", actual_id), actual_id
+                assert actual_id not in allocated_roots.values(), actual_id
+                allocated_roots[want["id"]] = actual_id
+                got["id"] = want["id"]
             if args[0] == "defer":
                 assert parse_time(want[0]["defer_until"]).date().isoformat() == args[3]
                 assert parse_time(got[0]["defer_until"]).astimezone().date().isoformat() == args[3]
@@ -253,13 +305,22 @@ def replay(tk, bd, directory, env, address):
                             row["blocked_by"].sort(key=lambda blocker: blocker["id"])
                     else:
                         rank_order(listing)
-            mismatch = difference(normalize(want, expected_ids), normalize(got, actual_ids))
+            mismatch = difference(normalize(want, expected_ids, allocated_roots),
+                                  normalize(got, actual_ids, allocated_roots))
         elif call["command"] == ["show"] and args[1:3] == ["by-corpus.2", "by-corpus.1"]:
             mismatch = difference(show_text(want), show_text(got))
         else:
+            if call["command"] == ["close"] and "persisted" in call:
+                old_id = call["persisted"]["id"]
+                want = want.replace(old_id, allocated_roots.get(old_id, old_id), 1)
             mismatch = difference(want or "", got)
         if mismatch:
             problems.append(f"{args}: {mismatch}")
+        elif expected := call.get("persisted"):
+            try:
+                verify_create_or_close(address, expected, allocated_roots.get(expected["id"], expected["id"]))
+            except AssertionError as error:
+                problems.append(f"{args}: persisted ticket differs ({error})")
         elif call["returncode"] == 0 and "--json" in args:
             try:
                 verify_write(address, args, json.loads(call["stdout"]))

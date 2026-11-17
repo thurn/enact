@@ -1969,6 +1969,8 @@ transaction or none of it.
   `event` (append an event associated with a ticket or a batch reference).
 - Result: `{seq, results: [...]}`, or status 409 with
   `{failed: <index of the precondition or operation>, current: <ticket>}`.
+- A create dependency with `reverse: true` is directed from `on` to the
+  new ticket, as in `bd create --deps blocks:ID`.
 - Closing a ticket also closes each ancestor whose descendants are now all
   closed, in the same transaction, and reports them in the result.
 - A close with `include_ready: true` also returns `ready`, the IDs ready
