@@ -1,10 +1,12 @@
 """Replay the checked-in Beads transcript against the real local Worker."""
+from contextlib import contextmanager
 import datetime as dt
 import gzip
 from itertools import groupby
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 import socket
 import subprocess
@@ -536,10 +538,103 @@ def migration_compare(tk, fake, directory, env, address):
     print("Migration compare accepts rule 5 only and fails on leaf, mixed blocker and field drift.")
 
 
+@contextmanager
+def simulator(directory):
+    worker = subprocess.Popen(["node", HERE / "shim-simulator.mjs"], cwd=directory,
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        address = worker.stdout.readline().strip()
+        assert address.startswith("http://"), address
+        yield address
+    finally:
+        worker.stdin.close()
+        worker.wait(timeout=45)
+
+
+def migration_audit(tk, directory, env):
+    on_path = Path(shutil.which("bd") or "bd").absolute()
+    paired = on_path.with_name(f"bd-real{on_path.suffix}")
+    legacy = Path(os.environ.get("ENACT_REAL_BD") or (paired if paired.is_file() else on_path))
+    assert legacy.is_file(), "the real Beads CLI is required for the audit regression"
+    assert shutil.which("dolt"), "the Dolt CLI is required for the audit regression"
+    env = {**env, "ENACT_REAL_BD": str(legacy)}
+    live = directory / "live"
+    frozen = directory / "frozen"
+    live.mkdir()
+    frozen.mkdir()
+
+    def bd(*args):
+        reply = run(legacy, args, live, env)
+        assert reply.returncode == 0, reply
+        return reply.stdout
+
+    subprocess.run(["git", "init", "-q"], cwd=live, env=env, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=frozen, env=env, check=True)
+    bd("init", "--prefix", "en", "--skip-agents", "--skip-hooks", "--non-interactive")
+    ticket = json.loads(bd("create", "--title", "Audit history fixture", "--json"))["id"]
+    initial = bd("--readonly", "--sandbox", "export")
+    export = directory / "rehearsal.jsonl"
+    export.write_text(initial, encoding="utf-8")
+    history = directory / "history-cache"
+    cached_import = ["--json", "import", str(export), "--history-dir", str(history)]
+
+    with simulator(directory) as address:
+        request(address, "/test-token/en")
+        (live / ".enact.toml").write_text(f'[tickets]\nproject = "en"\nurl = "{address}"\n')
+        assert ok(tk, cached_import, live, env)["imported"] == 1
+        assert (history / f"{ticket}.json").is_file()
+        path = f"/en/api/tickets/{ticket}?history=1"
+        before = request(address, path)["history"][0]["change"]
+        assert [event["event_type"] for event in before] == ["created"]
+
+        bd("label", "add", ticket, "temporary")
+        bd("label", "remove", ticket, "temporary")
+        assert bd("--readonly", "--sandbox", "export") == initial
+        expected = json.loads(bd("--readonly", "--sandbox", "history", ticket, "--events", "--json"))
+        assert {event["event_type"] for event in expected} == {"created", "label_added", "label_removed"}
+        shutil.copytree(live / ".beads", frozen / ".beads")
+        bd("update", ticket, "--title", "New live title")
+
+        # The final gate uses the copy even with the live repo as cwd and an
+        # ambient Beads override. It must see the stale server as a mismatch.
+        env["BEADS_DIR"] = str(live / ".beads")
+        ok(tk, ["--json", "state", "--set-cutover", "paused"], live, env)
+        frozen_flag = ["--frozen-beads", str(frozen)]
+        compare = ["--json", "compare", *frozen_flag]
+        drift = run(tk, compare, live, env)
+        assert drift.returncode == 1, drift
+        assert json.loads(drift.stdout)["differences"] == [
+            {"id": ticket.removeprefix("en-"), "fields": ["history"], "ready": None},
+        ]
+        frozen_import = ["--json", "import", *frozen_flag]
+        assert ok(tk, frozen_import, live, env)["imported"] == 1
+        assert ok(tk, frozen_import, live, env)["imported"] == 0
+        assert ok(tk, compare, live, env)["differences"] == []
+        saved = request(address, path)
+        assert saved["title"] == "Audit history fixture"
+        assert sorted(saved["history"][0]["change"], key=lambda event: event["id"]) == sorted(
+            expected, key=lambda event: event["id"],
+        )
+        print("Frozen Dolt history catches and repairs audit drift with an identical Beads export.")
+
+
 def main():
     tk = Path(sys.argv[1]).resolve()
     with tempfile.TemporaryDirectory() as scratch:
         directory = Path(scratch)
+        env = {**os.environ, "HOME": scratch, "APPDATA": scratch,
+               "GIT_CONFIG_GLOBAL": str(directory / "gitconfig"), "GIT_CONFIG_NOSYSTEM": "1"}
+        tokens = directory / ("enact" if os.name == "nt" else ".config/enact")
+        tokens.mkdir(parents=True)
+        (tokens / "token").write_text(TOKEN)
+        (directory / "gitconfig").write_text("[user]\nname = Derek Thurn\nemail = derek@fake.email\n")
+        for key in tuple(env):
+            if key.upper().startswith("BEADS_"):
+                env.pop(key)
+        if sys.argv[2:] == ["--audit"]:
+            migration_audit(tk, directory, env)
+            return
+
         bd = directory / f"bd{tk.suffix}"
         fake = directory / f"legacy{tk.suffix}"
         help_output = directory / "help"
@@ -583,20 +678,10 @@ fn main() {
             'with Path("synced").open("a") as file: file.write("sync\\n")\n'
             "print('{\"remote\": true}')\n"
         )
-        env = {**os.environ, "HOME": scratch, "APPDATA": scratch,
-               "GIT_CONFIG_GLOBAL": str(directory / "gitconfig"),
-               "GIT_CONFIG_NOSYSTEM": "1", "SHIM_TEST_HELP": str(help_output),
-               "ENACT_SHIM_HELPER": str(sync_script), "ENACT_SHIM_PYTHON": sys.executable}
+        env.update({"SHIM_TEST_HELP": str(help_output), "ENACT_SHIM_HELPER": str(sync_script),
+                    "ENACT_SHIM_PYTHON": sys.executable})
         env.pop("ENACT_REAL_BD", None)
-        tokens = directory / ("enact" if os.name == "nt" else ".config/enact")
-        tokens.mkdir(parents=True)
-        (tokens / "token").write_text(TOKEN)
-        (directory / "gitconfig").write_text("[user]\nname = Derek Thurn\nemail = derek@fake.email\n")
-        worker = subprocess.Popen(["node", HERE / "shim-simulator.mjs"], cwd=directory,
-                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-        try:
-            address = worker.stdout.readline().strip()
-            assert address.startswith("http://"), address
+        with simulator(directory) as address:
             for project in ("by", "gate"):
                 request(address, f"/test-token/{project}")
             (directory / ".enact.toml").write_text(f'[tickets]\nproject = "by"\nurl = "{address}"\n')
@@ -608,9 +693,6 @@ fn main() {
             replay(tk, bd, workspace, env, address)
             dated_deferrals(tk, bd, directory, env, address)
             migration_compare(tk, fake, directory, env, address)
-        finally:
-            worker.stdin.close()
-            worker.wait(timeout=45)
 
 
 if __name__ == "__main__":

@@ -165,9 +165,9 @@
       "wait": "ready [--ancestor ID] [--label L]... | ticket <id> [--status S] | lease <name> | change [--since SEQ] --timeout S",
       "state": "[--set-cutover before|paused|after]",
       "export": "",
-      "import": "<bd-export.jsonl> [--history-dir D] [--row-budget N]",
+      "import": "(<bd-export.jsonl> [--history-dir D] | --frozen-beads CHECKOUT) [--row-budget N]",
       "restore": "<tickets.jsonl> [--row-budget N]",
-      "compare": "[--history-dir D]",
+      "compare": "[--history-dir D | --frozen-beads CHECKOUT]",
       "register": "",
       "bench": "",
       "version": ""

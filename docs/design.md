@@ -2092,8 +2092,23 @@ idle connection costs nothing.
   `cutover_at` from the start of the pause. Returning to `before` clears it.
 - The cutover session sets `paused`, waits until every machine that posted a
   `machine` event in the previous 10 minutes has posted `drained` (at most 5
-  minutes, else it sets `before` again and stops), pulls the bead store, runs
-  the final import and comparison, and sets `after`.
+  minutes, else it sets `before` again and stops) and pulls the bead store.
+  After the final pull, make an isolated copy of the project's `.beads`
+  directory under a temporary checkout. Copy the embedded Dolt files, including
+  `.dolt`, without links back to the live store. An issue export alone lacks
+  audit events. From the configured project checkout, run both commands with
+  the same copy, using project `by` for Beryl and `en` for Enact.
+
+  ```sh
+  tk import --frozen-beads "$frozen_checkout"
+  tk compare --frozen-beads "$frozen_checkout"
+  ```
+
+  Each command runs read-only Beads queries on the copy and reads its Dolt
+  `events` table directly. The history cache used during staged imports cannot
+  detect an audit-only change such as adding and removing a label. Set `after`
+  only after both commands succeed. If either fails, set `before` again and
+  investigate.
 - `tk compare` checks all imported fields and projects Beads' ready set
   through readiness rule 5. Its `expected_readiness_differences` report lists
   the raw results and live child IDs for each Beads-ready container blocked
@@ -2161,9 +2176,9 @@ tk wait ready [--ancestor ID] [--label L]... | ticket <id> [--status S]
         | lease <name> | change [--since SEQ]   --timeout S
 tk state [--set-cutover before|paused|after]
 tk export
-tk import <bd-export.jsonl> [--history-dir D] [--row-budget N]
+tk import (<bd-export.jsonl> [--history-dir D] | --frozen-beads CHECKOUT) [--row-budget N]
 tk restore <tickets.jsonl> [--row-budget N]
-tk compare [--history-dir D]
+tk compare [--history-dir D | --frozen-beads CHECKOUT]
 tk register | tk bench | tk version
 ```
 

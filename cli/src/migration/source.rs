@@ -2,13 +2,17 @@ use crate::client::{Result, usage};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::BufRead;
-use std::path::PathBuf;
+use std::io::{BufRead, Cursor};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub type Tickets = BTreeMap<String, Value>;
 
 pub fn legacy(arguments: &[&str], low_priority: bool) -> Result<Vec<u8>> {
+    legacy_in(arguments, low_priority, None)
+}
+
+fn legacy_in(arguments: &[&str], low_priority: bool, root: Option<&Path>) -> Result<Vec<u8>> {
     let binary = crate::shim::state::real_binary()?;
     let mut command = if low_priority && cfg!(unix) {
         let mut nice = Command::new("nice");
@@ -22,6 +26,21 @@ pub fn legacy(arguments: &[&str], low_priority: bool) -> Result<Vec<u8>> {
         use std::os::windows::process::CommandExt;
         const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x4000;
         command.creation_flags(BELOW_NORMAL_PRIORITY_CLASS);
+    }
+    if let Some(root) = root {
+        // Read the copy even if this process normally targets another store.
+        for (key, _) in std::env::vars_os() {
+            if key
+                .to_string_lossy()
+                .to_ascii_uppercase()
+                .starts_with("BEADS_")
+            {
+                command.env_remove(key);
+            }
+        }
+        command
+            .current_dir(root)
+            .env("BEADS_DIR", root.join(".beads"));
     }
     let output = command
         .args(["--readonly", "--sandbox"])
@@ -262,6 +281,93 @@ fn convert_ticket(
     }))
 }
 
+pub struct FrozenBeads {
+    root: PathBuf,
+    database: PathBuf,
+    prefix: String,
+}
+
+impl FrozenBeads {
+    pub fn open(root: &Path, project: &str) -> Result<Self> {
+        let absolute = |path: &Path| {
+            fs::canonicalize(path).map_err(|error| usage(format!("{}: {error}", path.display())))
+        };
+        let root = absolute(root)?;
+        let beads = root.join(".beads");
+        let database = beads.join("embeddeddolt").join(project);
+        let dolt = database.join(".dolt");
+        if absolute(&dolt)? != dolt || !dolt.is_dir() {
+            return Err(usage(format!(
+                "{} must be a local embedded Dolt copy",
+                dolt.display()
+            )));
+        }
+        let metadata = beads.join("metadata.json");
+        let bytes = fs::read(&metadata)
+            .map_err(|error| usage(format!("{}: {error}", metadata.display())))?;
+        let config: Value = serde_json::from_slice(&bytes).map_err(usage)?;
+        if config["dolt_mode"] != "embedded" || config["dolt_database"] != project {
+            return Err(usage(format!(
+                "{} must describe the embedded Beads database for project {project}",
+                metadata.display()
+            )));
+        }
+        Ok(Self {
+            root,
+            database,
+            prefix: format!("{project}-"),
+        })
+    }
+
+    pub fn read(&self, arguments: &[&str]) -> Result<Vec<u8>> {
+        legacy_in(arguments, false, Some(&self.root))
+    }
+
+    pub fn export(&self) -> Result<Tickets> {
+        lines(Cursor::new(self.read(&["export"])?))
+    }
+
+    pub fn snapshots(&self, source: &Tickets) -> Result<Tickets> {
+        let mut converted = convert(source, &self.prefix)?;
+        // The events table is independent of the issue export. In particular,
+        // adding and removing a label can leave the export byte-for-byte equal.
+        let output = Command::new("dolt")
+            .current_dir(&self.database)
+            .args([
+                "sql",
+                "--disable-auto-gc",
+                "-r",
+                "jsonl",
+                "-q",
+                "SELECT id, issue_id, event_type, actor, old_value, new_value, comment, \
+                 DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%sZ') AS created_at FROM events",
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|error| usage(format!("dolt sql: {error}")))?;
+        if !output.status.success() {
+            return Err(usage(format!(
+                "dolt sql in {} failed: {}",
+                self.database.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        let mut histories: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+        for event in lines(Cursor::new(output.stdout))?.into_values() {
+            let id = field(&event, "issue_id")?;
+            // Beads' default export excludes infrastructure and memories.
+            if source.contains_key(id) {
+                histories.entry(id.to_owned()).or_default().push(event);
+            }
+        }
+        for (id, events) in histories {
+            let id = canonical_id(&id, &self.prefix)?;
+            attach_events(events, converted.get_mut(&id).expect("converted source"));
+        }
+        Ok(converted)
+    }
+}
+
 pub struct Histories(PathBuf);
 
 impl Histories {
@@ -304,25 +410,29 @@ impl Histories {
                 events
             }
         };
-        let mut events = events
+        let events = events
             .as_array()
             .ok_or_else(|| usage("bd history did not return an array"))?
             .clone();
-        // Match Beads' newest-first audit listing even when a rehearsal
-        // already cached an unordered copy of the events.
-        events.sort_by(|a, b| {
-            b["created_at"]
-                .as_str()
-                .cmp(&a["created_at"].as_str())
-                .then_with(|| a["id"].as_str().cmp(&b["id"].as_str()))
-        });
-        if !events.is_empty() {
-            snapshot["history"] = json!([{
-                "ticket": snapshot["id"], "seq": 0, "actor": snapshot["created_by"],
-                "at": snapshot["created_at"], "change": events,
-            }]);
-        }
+        attach_events(events, snapshot);
         Ok(())
+    }
+}
+
+fn attach_events(mut events: Vec<Value>, snapshot: &mut Value) {
+    // Both sources use the same newest-first audit listing and break ties
+    // by event ID so an unchanged history compares equal across runs.
+    events.sort_by(|a, b| {
+        b["created_at"]
+            .as_str()
+            .cmp(&a["created_at"].as_str())
+            .then_with(|| a["id"].as_str().cmp(&b["id"].as_str()))
+    });
+    if !events.is_empty() {
+        snapshot["history"] = json!([{
+            "ticket": snapshot["id"], "seq": 0, "actor": snapshot["created_by"],
+            "at": snapshot["created_at"], "change": events,
+        }]);
     }
 }
 

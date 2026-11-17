@@ -166,13 +166,17 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
         Command::State { set_cutover: None } => read(client, &["state"], &[]),
         Command::Import {
             file,
+            frozen_beads,
             history_dir,
             row_budget,
-        } => crate::migration::import(client, &file, history_dir, row_budget),
+        } => crate::migration::import(client, file, frozen_beads, history_dir, row_budget),
         Command::Restore { file, row_budget } => {
             crate::migration::restore(client, &file, row_budget)
         }
-        Command::Compare { history_dir } => crate::migration::compare(client, history_dir),
+        Command::Compare {
+            frozen_beads,
+            history_dir,
+        } => crate::migration::compare(client, frozen_beads, history_dir),
         Command::Bench { .. } | Command::Export | Command::Register { .. } | Command::Version => {
             unreachable!("handled by main")
         }

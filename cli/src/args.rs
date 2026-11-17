@@ -110,7 +110,11 @@ pub enum Command {
     Export,
     /// Copy a legacy Beads JSON Lines export and its audit history.
     Import {
-        file: std::path::PathBuf,
+        #[arg(required_unless_present = "frozen_beads")]
+        file: Option<std::path::PathBuf>,
+        /// Read tickets and audit events from an isolated copy of the Beads checkout.
+        #[arg(long, conflicts_with_all = ["file", "history_dir"])]
+        frozen_beads: Option<std::path::PathBuf>,
         #[arg(long)]
         history_dir: Option<std::path::PathBuf>,
         /// Override the daily import ceiling for a local rehearsal.
@@ -126,6 +130,9 @@ pub enum Command {
     },
     /// Check the legacy Beads store against the ticket server.
     Compare {
+        /// Verify tickets, readiness and audit events against an isolated Beads copy.
+        #[arg(long, conflicts_with = "history_dir")]
+        frozen_beads: Option<std::path::PathBuf>,
         #[arg(long)]
         history_dir: Option<std::path::PathBuf>,
     },

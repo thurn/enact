@@ -3,7 +3,9 @@ mod source;
 use crate::client::{Client, Failure, Result, usage};
 use crate::commands::export_pages;
 use serde_json::{Value, json};
-use source::{Histories, Tickets, array, canonical_id, convert, field, legacy, lines, prefix};
+use source::{
+    FrozenBeads, Histories, Tickets, array, canonical_id, convert, field, legacy, lines, prefix,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{BufReader, Cursor};
@@ -18,12 +20,21 @@ const NORMAL_ROWS: u64 = 36_000;
 
 pub fn import(
     client: &Client,
-    file: &Path,
+    file: Option<PathBuf>,
+    frozen_beads: Option<PathBuf>,
     history_dir: Option<PathBuf>,
     row_budget: Option<u64>,
 ) -> Result<Value> {
-    let source = read_file(file)?;
-    let expected = snapshots(&source, history_dir, &client.project)?;
+    let expected = if let Some(root) = frozen_beads {
+        let frozen = FrozenBeads::open(&root, &client.project)?;
+        frozen.snapshots(&frozen.export()?)?
+    } else {
+        let file = file
+            .as_deref()
+            .ok_or_else(|| usage("missing Beads export"))?;
+        let source = read_file(file)?;
+        cached_snapshots(&source, history_dir, &client.project)?
+    };
     let actual = server_snapshots(client)?;
     upload(client, expected, &actual, row_budget)
 }
@@ -193,7 +204,11 @@ fn count(value: &Value, key: &str) -> Result<u64> {
         .ok_or_else(|| usage(format!("missing or invalid {key}")))
 }
 
-fn snapshots(source: &Tickets, directory: Option<PathBuf>, project: &str) -> Result<Tickets> {
+fn cached_snapshots(
+    source: &Tickets,
+    directory: Option<PathBuf>,
+    project: &str,
+) -> Result<Tickets> {
     let prefix = prefix(source)?;
     let mut converted = convert(source, &prefix)?;
     let history = Histories::open(directory, project)?;
@@ -296,13 +311,24 @@ fn estimate(ticket: &Value, previous: &Value) -> Result<u64> {
         + changed_rows(ticket, previous, "history", "seq")?)
 }
 
-pub fn compare(client: &Client, history_dir: Option<PathBuf>) -> Result<Value> {
-    let export = legacy(&["export"], false)?;
-    let source = lines(Cursor::new(export))?;
+pub fn compare(
+    client: &Client,
+    frozen_beads: Option<PathBuf>,
+    history_dir: Option<PathBuf>,
+) -> Result<Value> {
+    let ready_args = ["ready", "--json", "--brief", "--limit", "0"];
+    let (source, expected, ready) = if let Some(root) = frozen_beads {
+        let frozen = FrozenBeads::open(&root, &client.project)?;
+        let source = frozen.export()?;
+        let expected = frozen.snapshots(&source)?;
+        (source, expected, frozen.read(&ready_args)?)
+    } else {
+        let source = lines(Cursor::new(legacy(&["export"], false)?))?;
+        let expected = cached_snapshots(&source, history_dir, &client.project)?;
+        (source, expected, legacy(&ready_args, false)?)
+    };
     let prefix = prefix(&source)?;
-    let expected = snapshots(&source, history_dir, &client.project)?;
     let actual = server_snapshots(client)?;
-    let ready = legacy(&["ready", "--json", "--brief", "--limit", "0"], false)?;
     let ready: Vec<Value> = serde_json::from_slice(&ready).map_err(usage)?;
     let ready = ready
         .iter()
