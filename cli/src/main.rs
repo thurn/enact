@@ -4,6 +4,7 @@ mod client;
 mod commands;
 mod feed;
 mod migration;
+mod output_ids;
 mod register;
 mod shim;
 
@@ -31,7 +32,8 @@ fn main() -> ExitCode {
     match run(options) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            if json_output && let Some(body) = error.body {
+            if json_output && let Some(mut body) = error.body {
+                output_ids::display(&mut body);
                 let _ = writeln!(io::stdout().lock(), "{body}");
             }
             eprintln!("tk: {}", error.message);
@@ -48,7 +50,7 @@ fn run(options: Options) -> Result<()> {
             operation: EdgeOperation::Cycles
         }
     );
-    let value = match options.command {
+    let mut value = match options.command {
         Command::Version => {
             let version = env!("CARGO_PKG_VERSION");
             if !options.json {
@@ -78,6 +80,11 @@ fn run(options: Options) -> Result<()> {
         }
     };
     let mut output = io::stdout().lock();
+    if dep_cycles {
+        output_ids::display_cycles(&mut value);
+    } else {
+        output_ids::display(&mut value);
+    }
     if options.json {
         writeln!(output, "{value}").map_err(usage)
     } else if silent_create {
@@ -103,7 +110,7 @@ fn human_cycles(output: &mut impl Write, value: &Value) -> io::Result<()> {
             .expect("cycle members array")
             .iter()
             .filter_map(Value::as_str)
-            .map(|id| format!("T{id}"))
+            .map(str::to_owned)
             .collect();
         if let Some(first) = ids.first() {
             ids.push(first.clone());
@@ -117,7 +124,7 @@ fn human(output: &mut impl Write, value: &Value) -> io::Result<()> {
     if let Some(tickets) = value["tickets"].as_array() {
         for ticket in tickets {
             if let Some(id) = ticket.as_str() {
-                writeln!(output, "T{id}")?;
+                writeln!(output, "{id}")?;
             } else {
                 human(output, ticket)?;
             }
@@ -133,7 +140,7 @@ fn human(output: &mut impl Write, value: &Value) -> io::Result<()> {
     if let (Some(id), Some(title)) = (value["id"].as_str(), value["title"].as_str()) {
         return writeln!(
             output,
-            "T{id}  {}  {title}",
+            "{id}  {}  {title}",
             value["status"].as_str().unwrap_or("")
         );
     }
@@ -143,7 +150,7 @@ fn human(output: &mut impl Write, value: &Value) -> io::Result<()> {
     if let Some(results) = value["results"].as_array() {
         for result in results {
             match result["id"].as_str() {
-                Some(id) => writeln!(output, "T{id}")?,
+                Some(id) => writeln!(output, "{id}")?,
                 None => writeln!(output, "{result}")?,
             }
         }

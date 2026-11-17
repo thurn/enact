@@ -4,7 +4,8 @@ use crate::client::{Client, Failure, Result, usage};
 use crate::commands::export_pages;
 use serde_json::{Value, json};
 use source::{
-    FrozenBeads, Histories, Tickets, array, canonical_id, convert, field, legacy, lines, prefix,
+    FrozenBeads, Histories, Tickets, array, canonical_id, convert, field, legacy, lines,
+    lines_with, prefix,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -65,7 +66,8 @@ fn frozen_snapshots(client: &Client, root: &Path) -> Result<Tickets> {
 }
 
 pub fn restore(client: &Client, file: &Path, row_budget: Option<u64>) -> Result<Value> {
-    let mut expected = read_file(file)?;
+    let input = File::open(file).map_err(|error| usage(format!("{}: {error}", file.display())))?;
+    let mut expected = lines_with(BufReader::new(input), crate::output_ids::canonical)?;
     let mut actual = server_snapshots(client)?;
     for ticket in expected.values_mut().chain(actual.values_mut()) {
         // Import allocates new versions. Compare the ticket and all related
@@ -78,7 +80,7 @@ pub fn restore(client: &Client, file: &Path, row_budget: Option<u64>) -> Result<
     for (id, ticket) in &actual {
         if expected.get(id) != Some(ticket) {
             return Err(usage(format!(
-                "{id}: target contains tickets outside this restore. Use a fresh project."
+                "T{id}: target contains tickets outside this restore. Use a fresh project."
             )));
         }
     }
@@ -160,7 +162,7 @@ fn upload(
                 let id = field(ticket, "id")?;
                 if !import_difference(ticket, current.get(id).unwrap_or(&Value::Null)).is_empty() {
                     return Err(usage(format!(
-                        "{id}: server ticket changed during import or is newer than the input"
+                        "T{id}: server ticket changed during import or is newer than the input"
                     )));
                 }
             }
@@ -458,7 +460,7 @@ fn compare_snapshots(
                     "ready: Beads {beads}, projected {projected}, server {server}"
                 ));
             }
-            output.push(format!("{id}: {description}"));
+            output.push(format!("T{id}: {description}"));
             differences.push(json!({
                 "id": id, "fields": changes,
                 "ready": readiness_differs.then(|| json!({

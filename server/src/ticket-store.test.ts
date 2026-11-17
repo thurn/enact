@@ -71,8 +71,9 @@ test("projects expose public reads and reject writes without a registered token"
 
 test("creates nested IDs, resolves aliases, and lists using every filter", async () => {
   const {stub, batch, show, list, request, checked} = await fixture("lookup");
+  const body = "See lookup-old and /lookup/beads/lookup-old.html.\n\n```sh\nbd show lookup-old\n```";
   const {seq, results} = await batch([
-    create("Epic", undefined, {type: "epic", body: "long body", design: "proposal", notes: "notes"}),
+    create("Epic", undefined, {type: "epic", body, design: "proposal", notes: "notes"}),
     create("Milestone", "$0", {type: "milestone"}),
     create("Assigned bug", "$1", {type: "bug", assignee: "dev", labels: ["engine", "urgent"]}, {deps: [{on: "$0", kind: "related"}]}),
     create("Closed task", "$0", {status: "closed"}),
@@ -88,8 +89,11 @@ test("creates nested IDs, resolves aliases, and lists using every filter", async
     store.invalidateIndex();
   });
   const shown = await show("lookup-old");
-  expect(shown).toMatchObject({id: epic, children: [milestone, archived], body: "long body"});
+  expect(shown).toMatchObject({id: epic, children: [milestone, archived], body});
   expect(shown.edges).toEqual([{src: bug, dst: epic, kind: "related"}]);
+  const readable = `See T${epic} and /lookup/tickets/T${epic}.\n\n\`\`\`sh\nbd show lookup-old\n\`\`\``;
+  expect((await show(epic, "?readable=1")).body).toBe(readable);
+  expect((await list("?readable=1"))[0].body).toBe(readable);
   expect(shown).not.toHaveProperty("comments");
   expect(shown).not.toHaveProperty("history");
   expect((await show("lookup-legacy")).id).toBe(bug);

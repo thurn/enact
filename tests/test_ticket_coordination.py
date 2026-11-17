@@ -319,7 +319,7 @@ print(json.dumps(enact.ci_run_once(enact.find_repo(), sys.argv[2])))
         self.assertEqual(len(stewards), 2)
         events = self.tk(a, "events", "--kind", "ci")
         self.assertEqual({(event["data"]["os"], event["data"]["ticket"])
-                          for event in events}, {("macos", mac_steward), ("windows", windows_steward)})
+                          for event in events}, {("macos", f"T{mac_steward}"), ("windows", f"T{windows_steward}")})
         self.assertEqual(len(events), 3)
         self.assertTrue(run_ci(b, "windows", failing=False)["master_advanced"])
         status = self.enact(a, "ci", "--status")["results_by_os"]
@@ -333,7 +333,7 @@ print(json.dumps(enact.ci_run_once(enact.find_repo(), sys.argv[2])))
         vizier, worker = self.hosts
         self.assertEqual(self.enact(worker, "backend")["backend"], "beads")
         self.cutover()
-        epic, first, second = (item["id"] for item in self.tk(vizier, "batch", data={"ops": [
+        epic, first, second = (item["id"].removeprefix("T") for item in self.tk(vizier, "batch", data={"ops": [
             {"op": "create", "fields": {"title": "Run", "type": "epic"}},
             {"op": "create", "parent": "$0", "fields": {"title": "First", "labels": ["lane:work"]}},
             {"op": "create", "parent": "$0", "deps": ["$1"],
@@ -341,7 +341,7 @@ print(json.dumps(enact.ci_run_once(enact.find_repo(), sys.argv[2])))
         ]})["results"])
 
         def next_step():
-            return self.enact(vizier, "next", "--epic", epic)
+            return self.enact(vizier, "next", "--epic", f"T{epic}")
 
         def start(step):
             self.enact(worker, "start", step["bead"], "--reservation", step["reservation"])

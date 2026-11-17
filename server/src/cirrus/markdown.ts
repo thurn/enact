@@ -83,10 +83,12 @@ function paragraphEnds(line: string): boolean {
 }
 
 /** Render blocks, including fenced code, tables, lists and quotes. */
-export function render(source: string, autolink: Autolink = noLinks): string {
+export function render(
+  source: string, autolink: Autolink = noLinks, prepareInline: (source: string) => string = noLinks,
+): string {
   const lines = source.replaceAll("\r\n", "\n").split("\n");
   const out: string[] = [];
-  const inlines = (text: string) => inline(text, autolink);
+  const inlines = (text: string) => inline(prepareInline(text), autolink);
   let index = 0;
 
   while (index < lines.length) {
@@ -129,7 +131,7 @@ export function render(source: string, autolink: Autolink = noLinks): string {
         index++;
       }
       out.push(
-        `<blockquote>${render(quoted.join("\n"), autolink)}</blockquote>`,
+        `<blockquote>${render(quoted.join("\n"), autolink, prepareInline)}</blockquote>`,
       );
       continue;
     }
@@ -155,7 +157,7 @@ export function render(source: string, autolink: Autolink = noLinks): string {
     }
 
     if (listItem(line)) {
-      const [html, after] = listBlock(lines, index, autolink);
+      const [html, after] = listBlock(lines, index, inlines);
       out.push(html);
       index = after;
       continue;
@@ -175,7 +177,7 @@ export function render(source: string, autolink: Autolink = noLinks): string {
 function listBlock(
   lines: string[],
   index: number,
-  autolink: Autolink,
+  inlines: (source: string) => string,
 ): [string, number] {
   const first = listItem(lines[index])!;
   const indent = first[1].length;
@@ -192,14 +194,14 @@ function listBlock(
       const line = lines[index];
       const deeper = listItem(line);
       if (deeper && deeper[1].length > indent) {
-        [nested, index] = listBlock(lines, index, autolink);
+        [nested, index] = listBlock(lines, index, inlines);
         continue;
       }
       if (deeper || fence.test(line) || heading.test(line)) break;
       text.push(line.trim());
       index++;
     }
-    items.push(`<li>${inline(text.join(" "), autolink)}${nested}</li>`);
+    items.push(`<li>${inlines(text.join(" "))}${nested}</li>`);
     // A blank line between items of the same kind keeps the list going.
     if (index + 1 < lines.length && !lines[index].trim()) {
       const after = sameKind.exec(lines[index + 1]);

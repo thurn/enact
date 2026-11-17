@@ -140,9 +140,11 @@ Run `enact backend` in the project. On `beads`, use `bd` and publish
 direct edits with `enact sync`. On `server`, use the returned `tk` path.
 Ticket writes are immediate. The ticket dashboard and readable `tk` output
 show IDs like `Tq44s` and `Tq44s.7`. Pass these IDs, bare IDs, or legacy Beads
-IDs to `tk`. Scripts using `--json` receive the bare IDs. Use `enact claim`,
-`start`, `meta`, `release` and `close` for ownership and assignment on both
-backends.
+IDs to `tk`. Dashboard links, `tk --json`, and `tk export` use the same `T`
+prefix. Dashboard descriptions and `tk` reads show resolved ticket references
+with the same prefix. Exports preserve the original prose for a faithful
+restore. Use `enact claim`, `start`, `meta`, `release` and `close` for ownership
+and assignment on both backends.
 
 New server-backed plans file milestone audits directly under the milestone
 with `tk create --last`. The server manages readiness and parent closure.

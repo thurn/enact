@@ -1,3 +1,5 @@
+import {displayTicketId} from "../ticket-references";
+export {displayTicketId, ticketUrl} from "../ticket-references";
 import * as c from "../cirrus/components";
 import type {Ticket} from "../ticket-types";
 import type {Card, Progress} from "./data";
@@ -35,14 +37,6 @@ export function childrenProgress(count: Progress | undefined): string {
   if (!count) return "";
   const {closed, working, total} = count;
   return c.progress(closed, total, `${closed} closed, ${working} in progress, ${total - closed - working} to do`);
-}
-
-export function displayTicketId(id: string): string {
-  return `T${id}`;
-}
-
-export function ticketUrl(root: string, id: string): string {
-  return root + "tickets/" + encodeURIComponent(id);
 }
 
 export function brand(root: string): string {

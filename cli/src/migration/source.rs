@@ -62,14 +62,19 @@ fn legacy_in(arguments: &[&str], low_priority: bool, root: Option<&Path>) -> Res
 }
 
 pub fn lines(input: impl BufRead) -> Result<Tickets> {
+    lines_with(input, |_| {})
+}
+
+pub fn lines_with(input: impl BufRead, prepare: impl Fn(&mut Value)) -> Result<Tickets> {
     let mut tickets = BTreeMap::new();
     for (index, line) in input.lines().enumerate() {
         let line = line.map_err(usage)?;
         if line.trim().is_empty() {
             continue;
         }
-        let ticket: Value = serde_json::from_str(&line)
+        let mut ticket: Value = serde_json::from_str(&line)
             .map_err(|error| usage(format!("line {}: {error}", index + 1)))?;
+        prepare(&mut ticket);
         let id = field(&ticket, "id")?.to_owned();
         if tickets.insert(id.clone(), ticket).is_some() {
             return Err(usage(format!("duplicate ticket {id}")));

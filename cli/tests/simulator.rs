@@ -132,7 +132,7 @@ fn commands_use_the_worker_protocol() {
     assert_eq!(
         sim.ok(&["show", "by-k7mq", "--comments", "--history"])["trace"],
         json!({"project":"by","route":"tickets","target":"by-k7mq",
-               "args":[["comments","1"],["history","1"]],"actor":null,"auth":null,"etag":null,"body":null})
+               "args":[["readable","1"],["comments","1"],["history","1"]],"actor":null,"auth":null,"etag":null,"body":null})
     );
     let list = sim.ok(&[
         "--project",
@@ -163,6 +163,7 @@ fn commands_use_the_worker_protocol() {
             ["ancestor", "q7mq"],
             ["label", "one & two"],
             ["label", "three"],
+            ["readable", "1"],
             ["status", "closed"],
             ["type", "task"],
             ["parent", "m7mq"],
@@ -173,7 +174,7 @@ fn commands_use_the_worker_protocol() {
     );
     assert_eq!(
         sim.ok(&["ready", "--label", "one"])[0]["trace"]["args"],
-        json!([["label", "one"], ["ready", "1"]])
+        json!([["label", "one"], ["ready", "1"], ["readable", "1"]])
     );
     let graph = sim.ok(&["graph"]);
     assert!(graph["edges"].is_array());
@@ -340,7 +341,7 @@ fn commands_use_the_worker_protocol() {
             "--timeout",
             "30"
         ])[0]["id"],
-        "k7mq"
+        "Tk7mq"
     );
     assert_eq!(
         sim.ok(&[
@@ -352,11 +353,11 @@ fn commands_use_the_worker_protocol() {
             "--timeout",
             "30"
         ])["id"],
-        "k7mq"
+        "Tk7mq"
     );
     assert_eq!(
         sim.ok(&["wait", "ticket", "k7mq", "--since", "2", "--timeout", "30"])["tickets"][0],
-        "k7mq"
+        "Tk7mq"
     );
     assert_eq!(
         sim.ok(&[
@@ -385,7 +386,7 @@ fn commands_use_the_worker_protocol() {
     );
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "{\"id\":\"aaaa\"}\n{\"ticket\":{\"id\":\"bbbb\"}}\n"
+        "{\"id\":\"Taaaa\"}\n{\"ticket\":{\"id\":\"Tbbbb\"}}\n"
     );
     assert_eq!(sim.ok(&["bench", "--samples", "2"])["samples"], 2);
     assert_eq!(sim.ok(&["version"])["version"], env!("CARGO_PKG_VERSION"));

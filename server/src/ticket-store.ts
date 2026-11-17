@@ -1,5 +1,6 @@
 import schema from "../contract/schema.sql";
 import {resolveId, TicketBatch} from "./ticket-batch";
+import {readableTicketText} from "./ticket-references";
 import {ancestors, TicketIndex, type BatchChanges} from "./ticket-index";
 import {ApiError, bad, byId, choice, decodeTicket, integer, statuses, ticketTypes, type Edge, type Ticket, type TicketRow} from "./ticket-types";
 
@@ -39,6 +40,18 @@ export class TicketStore {
     return this.tickets.graph(project, ifNoneMatch, flag(filter, "all"));
   }
 
+  private readableText(project: string, query: URLSearchParams) {
+    if (!flag(query, "readable")) return null;
+    const resolved = new Map<string, string | undefined>();
+    return (value: string) => readableTicketText(project, value, (name) => {
+      if (!resolved.has(name)) {
+        const id = resolveId(this.sql, project, name);
+        resolved.set(name, this.tickets.lookup(id)?.id);
+      }
+      return resolved.get(name);
+    });
+  }
+
   show(project: string, requested: string, filter: URLSearchParams): object {
     const id = resolveId(this.sql, project, requested);
     const ticket = this.tickets.lookup(id);
@@ -50,15 +63,19 @@ export class TicketStore {
     ).toArray();
     const children = this.sql.exec<{id: string}>("SELECT id FROM tickets WHERE parent = ? ORDER BY id", id)
       .toArray().map((row) => row.id);
-    const comments = flag(filter, "comments") ? {
-      comments: this.sql.exec("SELECT * FROM comments WHERE ticket = ? ORDER BY n", id).toArray(),
-    } : {};
+    const text = this.readableText(project, filter);
+    const comments = flag(filter, "comments")
+      ? this.sql.exec<{text: string}>("SELECT * FROM comments WHERE ticket = ? ORDER BY n", id).toArray()
+      : undefined;
     const history = flag(filter, "history") ? {
       history: this.sql.exec<{change: string}>("SELECT * FROM history WHERE ticket = ? ORDER BY seq", id)
         .toArray().map((row) => ({...row, change: JSON.parse(row.change)})),
     } : {};
     const beads = flag(filter, "beads") ? this.beadsCounts(id) : {};
-    return {...ticket, edges, children, ...this.tickets.readiness(ticket, Date.now()), ...comments, ...history, ...beads};
+    return {...ticket, ...(text && readableFields(ticket, text)), edges, children,
+      ...this.tickets.readiness(ticket, Date.now()),
+      ...(comments && {comments: text ? comments.map((comment) => ({...comment, text: text(comment.text)})) : comments}),
+      ...history, ...beads};
   }
 
   list(project: string, filter: URLSearchParams): object[] {
@@ -102,6 +119,7 @@ export class TicketStore {
         ? this.archivedCandidates(status, type, assignee, parent, ancestor)
         : [...tickets.live.values()].sort(byId);
     const now = Date.now();
+    const text = this.readableText(project, filter);
     const results: object[] = [];
     for (const ticket of candidates) {
       if (selectedStatuses.length !== 0 && !selectedStatuses.includes(ticket.status) || type !== null && ticket.type !== type
@@ -133,7 +151,7 @@ export class TicketStore {
         ticket.id,
       ).one() : {};
       const explanation = explain ? {beads_ready: beadsReady, beads_blockers: blockers} : {};
-      results.push({...ticket, ...readiness, ...counts, ...children, ...explanation});
+      results.push({...ticket, ...(text && readableFields(ticket, text)), ...readiness, ...counts, ...children, ...explanation});
       if (results.length === limit) break;
     }
     return results;
@@ -253,4 +271,11 @@ function flag(query: URLSearchParams, field: string): boolean {
   const value = query.get(field);
   if (value !== null && value !== "1" && value !== "0") bad(`${field} must be 0 or 1`);
   return value === "1";
+}
+
+function readableFields(ticket: Ticket, text: (value: string) => string) {
+  return {
+    body: text(ticket.body), acceptance: text(ticket.acceptance), design: text(ticket.design),
+    notes: text(ticket.notes), close_reason: ticket.close_reason === null ? null : text(ticket.close_reason),
+  };
 }

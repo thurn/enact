@@ -1,3 +1,4 @@
+import {mentions, ticketPaths} from "../ticket-references";
 import {resolveId} from "../ticket-batch";
 import {byId, decodeTicket, type Edge, type Ticket, type TicketRow} from "../ticket-types";
 
@@ -17,14 +18,6 @@ export function byAttention(left: Card, right: Card): number {
   return statusOrder[left.status] - statusOrder[right.status]
     || left.priority - right.priority
     || (left.updated_at < right.updated_at ? 1 : left.updated_at > right.updated_at ? -1 : byId(left, right));
-}
-
-export function mentions(project: string, text: string, replace: (id: string) => string): string {
-  return text.replace(/\bT?[a-z0-9-]+(?:\.[0-9]+)*\b/g, (word) => {
-    // Bare roots can be ordinary words. In prose, link explicit prefixes and dotted IDs.
-    return word.startsWith("T") || word.startsWith(project + "-") || /^[a-z0-9]+\.[0-9]/.test(word)
-      ? replace(word) : word;
-  });
 }
 
 export type ReadProgress = (ids: Iterable<string>) => Progress[];
@@ -86,16 +79,19 @@ export function ticketData(sql: SqlStorage, project: string, row: TicketRow, rea
   chain.reverse();
 
   const links = new Map<string, string>();
+  function collect(name: string): string {
+    if (!links.has(name)) {
+      const target = resolveId(sql, project, name);
+      links.set(name, target);
+      ids.add(target);
+    }
+    return name;
+  }
+
   for (const source of [ticket.body, ticket.acceptance, ticket.design, ticket.notes, ticket.close_reason ?? "",
     ...comments.map(({text}) => text), ...history.map(({change}) => change)]) {
-    mentions(project, source, (name) => {
-      if (!links.has(name)) {
-        const target = resolveId(sql, project, name);
-        links.set(name, target);
-        ids.add(target);
-      }
-      return name;
-    });
+    mentions(project, source, collect);
+    ticketPaths(project, source, collect);
   }
 
   const references = sql.exec<Card>(`

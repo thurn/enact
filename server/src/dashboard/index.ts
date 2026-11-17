@@ -61,10 +61,11 @@ export class Dashboard {
 
     const decoded = decodeURIComponent(ticket);
     const name = legacy ? decoded.replace(/\.html$/, "") : decoded;
-    let page = this.pages.get(name);
+    const canonicalId = name.startsWith("T") ? name.slice(1) : name;
+    let page = this.pages.get(canonicalId);
     // A warm canonical request needs only the revision query. After a write
     // re-resolve aliases, which imports may have added along with ticket rows.
-    if (legacy || page?.seq !== seq || url.pathname !== ticketUrl(root, name)) {
+    if (legacy || page?.seq !== seq || url.pathname !== ticketUrl(root, canonicalId)) {
       const id = resolveId(this.sql, project, name);
       const row = this.sql.exec<TicketRow>("SELECT * FROM tickets WHERE id = ?", id).toArray()[0];
       if (!row) {
@@ -79,8 +80,8 @@ export class Dashboard {
       if (url.pathname !== canonical) return this.redirect(url, canonical);
       page = this.page(page, seq, () => ticketData(this.sql, project, row, readProgress), (data) => ticketPage(root, project, data, seq));
     }
-    this.pages.delete(name);
-    this.pages.set(name, page);
+    this.pages.delete(canonicalId);
+    this.pages.set(canonicalId, page);
     // Bound the memory retained across requests on a long-lived project.
     if (this.pages.size > 32) this.pages.delete(this.pages.keys().next().value!);
     return fragment === "all" ? this.fragment(head, seq, this.regions(page)) : this.response(request, page);

@@ -1,7 +1,8 @@
 import * as c from "../cirrus/components";
 import {render} from "../cirrus/markdown";
 import {brand, childrenProgress, displayTicketId, person, priorityChip, priorityNames, statusDot, ticketHeading, ticketUrl} from "./common";
-import {byAttention, mentions, type Card, type ticketData} from "./data";
+import {byAttention, type Card, type ticketData} from "./data";
+import {mentions, rewriteTicketPaths} from "../ticket-references";
 import {timeline} from "./history";
 
 export function ticketPage(root: string, project: string, data: ReturnType<typeof ticketData>, seq: string): c.PageOptions {
@@ -27,7 +28,21 @@ export function ticketPage(root: string, project: string, data: ReturnType<typeo
   function linkText(text: string): string {
     return mentions(project, text, (name) => {
       const card = references.get(links.get(name) ?? "");
-      return card ? hoverLink(card, c.mono(name)) : name;
+      return card ? hoverLink(card, c.mono(displayTicketId(card.id))) : name;
+    });
+  }
+
+  function ticketMarkup(source: string): string {
+    const normalizedPaths = rewriteTicketPaths(project, source, (name) => {
+      const id = links.get(name);
+      return id && references.has(id) ? id : undefined;
+    });
+    return normalizedPaths.replace(/(?<!`)`(T?[a-z0-9-]+(?:\.[0-9]+)*)`(?!`)/g, (code, name: string) => {
+      const card = references.get(links.get(name) ?? "");
+      return card ? `\`${displayTicketId(card.id)}\`` : code;
+    }).replace(/\[(T?[a-z0-9-]+(?:\.[0-9]+)*)\](?=\()/g, (label, name: string) => {
+      const card = references.get(links.get(name) ?? "");
+      return card ? `[${displayTicketId(card.id)}]` : label;
     });
   }
 
@@ -45,7 +60,7 @@ export function ticketPage(root: string, project: string, data: ReturnType<typeo
     ["Description", ticket.body], ["Acceptance criteria", ticket.acceptance],
     ["Design", ticket.design], ["Notes", ticket.notes],
   ] as const) {
-    if (text?.trim()) add(heading, c.prose(render(text, linkText)));
+    if (text?.trim()) add(heading, c.prose(render(text, linkText, ticketMarkup)));
   }
 
   function row(card: Card): string {
@@ -68,7 +83,7 @@ export function ticketPage(root: string, project: string, data: ReturnType<typeo
   }
 
   if (comments.length) add("Comments", comments.map(({author, at, text}) =>
-    c.comment(author, person(author), c.time(at), render(text, linkText))).join(""), comments.length);
+    c.comment(author, person(author), c.time(at), render(text, linkText, ticketMarkup))).join(""), comments.length);
   const {_enact_beads: imported, ...metadata} = ticket.metadata;
   const legacy = imported as {owner?: unknown; started_at?: unknown} | undefined;
   const started = typeof legacy?.started_at === "string" ? legacy.started_at : "";

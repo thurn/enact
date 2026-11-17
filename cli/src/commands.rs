@@ -18,7 +18,7 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
             comments,
             history,
         } => {
-            let mut query = Query::new();
+            let mut query = vec![("readable", "1".into())];
             flag(&mut query, "comments", comments);
             flag(&mut query, "history", history);
             if let [id] = ids.as_slice() {
@@ -30,9 +30,15 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
                 .collect::<Result<Vec<_>>>()?;
             Ok(json!(tickets))
         }
-        Command::Children { id } => {
-            read(client, &["tickets"], &[("parent", id), ("all", "1".into())])
-        }
+        Command::Children { id } => read(
+            client,
+            &["tickets"],
+            &[
+                ("parent", id),
+                ("all", "1".into()),
+                ("readable", "1".into()),
+            ],
+        ),
         Command::List(List {
             ready_filters,
             status,
@@ -45,6 +51,7 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
             limit,
         }) => {
             let mut query = ready_query(ready_filters);
+            flag(&mut query, "readable", true);
             for (name, value) in [
                 ("status", status),
                 ("type", ticket_type),
@@ -63,14 +70,15 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
             words,
             status,
             limit,
-        }) => read(
-            client,
-            &["tickets"],
-            &search_query(words.join(" "), status, limit),
-        ),
+        }) => {
+            let mut query = search_query(words.join(" "), status, limit);
+            flag(&mut query, "readable", true);
+            read(client, &["tickets"], &query)
+        }
         Command::Ready(filters) => {
             let mut query = ready_query(filters);
             flag(&mut query, "ready", true);
+            flag(&mut query, "readable", true);
             read(client, &["tickets"], &query)
         }
         Command::Graph { if_none_match, all } => {
@@ -119,7 +127,11 @@ pub fn run(client: &Client, command: Command) -> Result<Value> {
             }
             None => {
                 let id = id.expect("ticket ID validated by parser");
-                let mut ticket = read(client, &["tickets", &id], &[("comments", "1".into())])?;
+                let mut ticket = read(
+                    client,
+                    &["tickets", &id],
+                    &[("comments", "1".into()), ("readable", "1".into())],
+                )?;
                 Ok(ticket["comments"].take())
             }
         },
@@ -276,9 +288,10 @@ fn write(client: &Client, path: &[&str], body: &Value) -> Result<Value> {
 pub fn export(client: &Client) -> Result<()> {
     let mut output = io::stdout().lock();
     export_pages(client, |page| {
-        output.write_all(page.as_bytes()).map_err(usage)?;
-        if !page.ends_with('\n') {
-            output.write_all(b"\n").map_err(usage)?;
+        for line in page.lines().filter(|line| !line.trim().is_empty()) {
+            let mut ticket = serde_json::from_str(line).map_err(usage)?;
+            crate::output_ids::display(&mut ticket);
+            writeln!(output, "{ticket}").map_err(usage)?;
         }
         Ok(())
     })

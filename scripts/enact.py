@@ -585,6 +585,8 @@ def refresh_delivery_backend(repo: Repo) -> bool:
 
 def canonical_ticket_id(repo: Repo, value: str) -> str:
     prefix = repo.config.ticket_project
+    if value.startswith("T"):
+        return value[1:]
     return value.removeprefix(prefix + "-") if prefix else value
 
 
@@ -611,7 +613,24 @@ def ticket_reply(proc: subprocess.CompletedProcess[str]) -> Any:
         # A conflict reply can include the current reservation.
         detail = "state changed" if proc.returncode == 3 else (proc.stderr or proc.stdout).strip()
         raise Fail(f"tk failed: {detail}", code=proc.returncode)
-    return json.loads(proc.stdout)
+    return canonical_ticket_reply(json.loads(proc.stdout))
+
+
+def canonical_ticket_reply(value: Any) -> Any:
+    """Use stored IDs for coordination keys and graph comparisons."""
+    if isinstance(value, list):
+        for row in value:
+            canonical_ticket_reply(row)
+    elif isinstance(value, dict):
+        for key in ("id", "parent", "src", "dst", "ticket"):
+            if isinstance(value.get(key), str):
+                value[key] = value[key].removeprefix("T")
+        for key in ("closed", "ready", "children"):
+            if isinstance(value.get(key), list):
+                value[key] = [item.removeprefix("T") for item in value[key]]
+        for key in ("tickets", "edges", "blocked_by", "results", "comments", "data"):
+            canonical_ticket_reply(value.get(key))
+    return value
 
 
 def ticket_lease(repo: Repo, action: str, name: str, holder: str, ttl: int = 180,

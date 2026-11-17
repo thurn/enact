@@ -269,8 +269,10 @@ def replay(tk, bd, directory, env, address, corpus):
     allocated_roots = {}
     # The first read observes cutover and saves the permanent local marker.
     ok(bd, ["list", "--id", "by-r61mr", "--json"], directory, env)
-    native_alias = ok(tk, ["search", "by-q44s.5.7", "--status", "closed", "--limit", "1", "--json"], directory, env)
-    assert [ticket["id"] for ticket in native_alias] == ["q44s.5.7"], native_alias
+    # The cutover rehearsal also runs this driver with a small synthetic corpus.
+    if any(row["id"] == "by-q44s.5.7" for row in rows):
+        native_alias = ok(tk, ["search", "by-q44s.5.7", "--status", "closed", "--limit", "1", "--json"], directory, env)
+        assert [ticket["id"] for ticket in native_alias] == ["Tq44s.5.7"], native_alias
     retired = 0
     for call in calls:
         args = [allocated_roots.get(arg, arg) for arg in call["argv"]]
@@ -417,29 +419,29 @@ def expanded_commands(tk, bd, directory, env, address):
         assert mismatch is None, f"{args}: {mismatch}"
 
     native = ok(tk, ["search", "ATLAS", "--status", "closed", "--limit", "1", "--json"], directory, env)
-    assert [(row["id"], row["status"]) for row in native] == [("corpus.3", "closed")], native
-    assert [row["id"] for row in ok(tk, ["search", "compat-corpus.1.1", "--json"], directory, env)] == ["corpus.1.1"]
-    assert [row["id"] for row in ok(tk, ["search", "Tcorpus.1.1", "--json"], directory, env)] == ["corpus.1.1"]
+    assert [(row["id"], row["status"]) for row in native] == [("Tcorpus.3", "closed")], native
+    assert [row["id"] for row in ok(tk, ["search", "compat-corpus.1.1", "--json"], directory, env)] == ["Tcorpus.1.1"]
+    assert [row["id"] for row in ok(tk, ["search", "Tcorpus.1.1", "--json"], directory, env)] == ["Tcorpus.1.1"]
     print(f"{len(fixture['calls'])} expanded commands match {fixture['bd_version']}.")
 
     created = run(tk, ["create", "Native positional title", "-t", "bug", "-p", "P1", "-l", "alpha,beta",
                        "--parent", "corpus", "--description", "Inline description", "--deps",
                        "corpus.3,blocks:corpus.2", "--silent"], directory, env)
-    assert (created.returncode, created.stdout, created.stderr) == (0, "corpus.5\n", ""), created
+    assert (created.returncode, created.stdout, created.stderr) == (0, "Tcorpus.5\n", ""), created
     shown = ok(tk, ["show", "Tcorpus.5", "corpus.3", "--json"], directory, env)
-    assert [row["id"] for row in shown] == ["corpus.5", "corpus.3"], shown
+    assert [row["id"] for row in shown] == ["Tcorpus.5", "Tcorpus.3"], shown
     child = shown[0]
     assert (child["title"], child["type"], child["priority"], child["labels"], child["body"]) == (
         "Native positional title", "bug", 1, ["alpha", "beta"], "Inline description",
     )
     assert child["edges"] == [
-        {"src": "corpus.2", "dst": "corpus.5", "kind": "blocks"},
-        {"src": "corpus.5", "dst": "corpus.3", "kind": "blocks"},
+        {"src": "Tcorpus.2", "dst": "Tcorpus.5", "kind": "blocks"},
+        {"src": "Tcorpus.5", "dst": "Tcorpus.3", "kind": "blocks"},
     ]
     children = ok(tk, ["children", "Tcorpus", "--json"], directory, env)
-    assert {row["id"] for row in children} == {f"corpus.{number}" for number in range(1, 6)}
+    assert {row["id"] for row in children} == {f"Tcorpus.{number}" for number in range(1, 6)}
     flagged = ok(tk, ["list", "--label-any", "alpha,other", "-n", "1", "--json"], directory, env)
-    assert [row["id"] for row in flagged] == ["corpus.5"]
+    assert [row["id"] for row in flagged] == ["Tcorpus.5"]
 
     def claim(actor, *args):
         return run(tk, ["--actor", actor, "update", "corpus.5", "--claim", "--json", *args], directory, env)
@@ -459,12 +461,12 @@ def expanded_commands(tk, bd, directory, env, address):
     ok(tk, ["--json", "comments", "add", "corpus.5", "--", "--literal text"], directory, env)
     comments = ok(tk, ["comments", "corpus.5", "--json"], directory, env)
     assert [row["text"] for row in comments] == ["  First\r\nsecond\t雪\n", "--literal text"], comments
-    assert ok(tk, ["dep", "cycles", "--json"], directory, env) == [["corpus.1", "corpus.2"]]
+    assert ok(tk, ["dep", "cycles", "--json"], directory, env) == [["Tcorpus.1", "Tcorpus.2"]]
     ok(tk, ["dep", "remove", "corpus.2", "corpus.1", "-t", "conditional-blocks", "--json"], directory, env)
     assert ok(tk, ["dep", "cycles", "--json"], directory, env) == []
     ok(tk, ["dep", "add", "corpus.5", "corpus.2", "--type", "relates-to", "--json"], directory, env)
     edges = ok(tk, ["show", "corpus.5", "--json"], directory, env)["edges"]
-    assert {"src": "corpus.5", "dst": "corpus.2", "kind": "related"} in edges, edges
+    assert {"src": "Tcorpus.5", "dst": "Tcorpus.2", "kind": "related"} in edges, edges
     print("Native Beads-style commands verified against the ticket Worker.")
 
 
@@ -568,7 +570,7 @@ def dated_deferrals(tk, bd, directory, env, address):
     assert set(rows) == {f"snooze-{snoozed}", f"snooze-{imported}"}, rows
     assert all(row["status"] == "open" and "defer_until" not in row for row in rows.values()), rows
     wake = ok(tk, ["--json", "wait", "change", "--since", str(seq), "--timeout", "15"], repo, env)
-    assert set(wake["tickets"]) == {snoozed, imported}, wake
+    assert set(wake["tickets"]) == {f"T{snoozed}", f"T{imported}"}, wake
 
     picked = next_ticket()
     assert (picked["action"], picked["bead"]) == ("spawn", snoozed), picked
@@ -626,7 +628,7 @@ def migration_compare(tk, fake, directory, env, address):
     assert saved["history"][0]["change"] == events[::-1]
 
     compare = ["--json", "compare", "--history-dir", str(history)]
-    expected = [{"id": "container", "beads": True, "server": False, "live_children": ["elsewhere.3"]}]
+    expected = [{"id": "Tcontainer", "beads": True, "server": False, "live_children": ["Telsewhere.3"]}]
     assert ok(tk, compare, work, legacy) == {
         "compared": len(rows), "differences": [], "expected_readiness_differences": expected,
     }
@@ -639,7 +641,7 @@ def migration_compare(tk, fake, directory, env, address):
     assert result["expected_readiness_differences"] == expected
     assert [(d["id"], d["fields"], d["ready"]["beads"], d["ready"]["server"])
             for d in result["differences"]] == [
-        ("elsewhere.3", [], False, True), ("gate", [], True, False),
+        ("Telsewhere.3", [], False, True), ("Tgate", [], True, False),
     ]
     assert {row["rule"] for row in result["differences"][1]["ready"]["blocked_by"]} == {2, 5}
 
@@ -722,7 +724,7 @@ def migration_audit(tk, directory, env):
         drift = run(tk, compare, live, env)
         assert drift.returncode == 1, drift
         assert json.loads(drift.stdout)["differences"] == [
-            {"id": ticket.removeprefix("en-"), "fields": ["history"], "ready": None},
+            {"id": "T" + ticket.removeprefix("en-"), "fields": ["history"], "ready": None},
         ]
         frozen_import = ["--json", "import", *frozen_flag]
         assert ok(tk, frozen_import, live, env)["imported"] == 1

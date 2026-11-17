@@ -33,7 +33,7 @@ async function seed() {
         ('q44s.7', 'q44s', 'Render milestone', 'milestone', 'open', '[]', '',
          '2026-11-16T19:30:00Z', '2026-11-16T19:30:00Z', 'Derek', 4992),
         ('q44s.7.24', 'q44s.7', 'Render live tickets <safely>', 'task', 'in_progress', '["lane:ui"]',
-         'Read by-q44s, q44s.7, and Terro for **context**.', '2026-11-16T19:30:00Z', '2026-11-16T19:30:00Z', 'Derek', 4992),
+         'Read by-q44s, q44s.7, and Terro for **context**. See \`by-path\` and [by-path](/by/beads/by-path.html?ref=notes).', '2026-11-16T19:30:00Z', '2026-11-16T19:30:00Z', 'Derek', 4992),
         ('q44s.7.24.1', 'q44s.7.24', 'Render detail rows', 'task', 'open', '[]', '',
          '2026-11-16T19:30:00Z', '2026-11-16T19:30:00Z', 'Derek', 4992),
         ('erro', NULL, 'Simulator failure', 'bug', 'blocked', '["role:steward"]', '',
@@ -70,26 +70,30 @@ test("renders project pages from 5,000 tickets and revalidates them", async () =
     expect(homeBody).toContain(`href="#${id}"`);
   }
   expect(homeBody).toContain("Slow CI failures");
-  expect(homeBody).toContain('href="/by/tickets/q44s.7.24"');
+  expect(homeBody).toContain('href="/by/tickets/Tq44s.7.24"');
   expect(homeBody).toContain('class="c-mono">Tq44s</');
   expect(homeBody).toContain("4792/4795");
 
-  const detail = await request("/tickets/q44s.7.24");
+  const detail = await request("/tickets/Tq44s.7.24");
   expect(detail.status).toBe(200);
   const detailBody = await detail.text();
   for (const value of ["Description", "Comments", "Changelog", "Subtasks", "Blocked by", "Blocking", "Assignee", "Epic",
     "In progress", "Render live tickets &lt;safely&gt;", "session ff7437", "Validate the old path", "Simulator failure",
-    '<strong>context</strong>', 'href="/by/tickets/q44s"', 'href="/by/tickets/path"', "renamed it", "created this",
-    'class="c-mono">Tq44s.7.24</', 'href="/by/tickets/q44s.7">Tq44s.7</',
+    '<strong>context</strong>', 'href="/by/tickets/Tq44s"', 'href="/by/tickets/Tpath"', "renamed it", "created this",
+    'class="c-mono">Tq44s.7.24</', 'href="/by/tickets/Tq44s.7">Tq44s.7</',
     'class="c-row-id c-mono c-hide-narrow">Tq44s.7.24.1</']) {
     expect(detailBody).toContain(value);
   }
 
-  expect(detailBody).toMatch(/href="\/by\/tickets\/erro"[^>]*><span class="c-mono">Terro<\/span><\/a>/);
+  expect(detailBody).toMatch(/href="\/by\/tickets\/Terro"[^>]*><span class="c-mono">Terro<\/span><\/a>/);
+  expect(detailBody).toContain("<code>Tpath</code>");
+  expect(detailBody).toContain('href="/by/tickets/Tpath?ref=notes">Tpath</a>');
+  expect(detailBody).not.toContain("by-path");
+  expect(detailBody).not.toContain("by-q44s");
 
   const homeTag = home.headers.get("etag")!;
   const detailTag = detail.headers.get("etag")!;
-  for (const [path, tag] of [["/", homeTag], ["/tickets/q44s.7.24", detailTag]]) {
+  for (const [path, tag] of [["/", homeTag], ["/tickets/Tq44s.7.24", detailTag]]) {
     expect(tag).toMatch(/^W\/"[0-9a-f]+"$/);
     const unchanged = await request(path, {headers: {"If-None-Match": `"another", ${tag.slice(2)}`}});
     expect(unchanged.status).toBe(304);
@@ -99,19 +103,19 @@ test("renders project pages from 5,000 tickets and revalidates them", async () =
 
   await batch({op: "comment", id: "q44s.7.24", text: "New dashboard comment"});
   expect((await request("/", {headers: {"If-None-Match": homeTag}})).status).toBe(304);
-  const commented = await request("/tickets/q44s.7.24", {headers: {"If-None-Match": detailTag}});
+  const commented = await request("/tickets/Tq44s.7.24", {headers: {"If-None-Match": detailTag}});
   expect(commented.status).toBe(200);
   expect(await commented.text()).toContain("New dashboard comment");
 
   await batch({op: "update", id: "erro", set: {title: "Renamed failure"}});
-  const changed = await request("/tickets/q44s.7.24", {headers: {"If-None-Match": commented.headers.get("etag")!}});
+  const changed = await request("/tickets/Tq44s.7.24", {headers: {"If-None-Match": commented.headers.get("etag")!}});
   expect(changed.status).toBe(200);
   expect(await changed.text()).toContain("Renamed failure");
 
-  for (const path of ["/beads/by-q44s.7.24", "/beads/by-q44s.7.24.html", "/tickets/by-q44s.7.24", "/tickets/old", "/tickets/q44s.7.24/", "/tickets/Tq44s.7.24"]) {
+  for (const path of ["/beads/by-q44s.7.24", "/beads/by-q44s.7.24.html", "/tickets/by-q44s.7.24", "/tickets/old", "/tickets/Tq44s.7.24/", "/tickets/q44s.7.24"]) {
     const redirect = await request(path + "?from=bookmark", {redirect: "manual"});
     expect(redirect.status).toBe(308);
-    expect(redirect.headers.get("location")).toBe("https://example.com/by/tickets/q44s.7.24?from=bookmark");
+    expect(redirect.headers.get("location")).toBe("https://example.com/by/tickets/Tq44s.7.24?from=bookmark");
   }
   const homeBeforeReopen = (await request("/")).headers.get("etag")!;
   await batch({op: "reopen", id: "q44s.999"});
@@ -119,12 +123,12 @@ test("renders project pages from 5,000 tickets and revalidates them", async () =
   expect(progressed.status).toBe(200);
   expect((await progressed.text()).includes("4791/4795")).toBe(true);
 
-  const head = await request("/tickets/q44s.7.24", {method: "HEAD"});
-  expect(head.headers.get("etag")).toBe((await request("/tickets/q44s.7.24")).headers.get("etag"));
+  const head = await request("/tickets/Tq44s.7.24", {method: "HEAD"});
+  expect(head.headers.get("etag")).toBe((await request("/tickets/Tq44s.7.24")).headers.get("etag"));
   expect(await head.text()).toBe("");
   expect((await request("/tickets/missing")).status).toBe(404);
 
-  const migrated = await (await request("/tickets/wait")).text();
+  const migrated = await (await request("/tickets/Twait")).text();
   expect(migrated).toContain("<dt>Owner</dt><dd>Old owner</dd>");
   expect(migrated).toContain("<dt>Started</dt><dd><time");
   expect(migrated).toContain("started work");
@@ -161,7 +165,7 @@ test("home fragments show current project status independently of the ticket boa
   expect(status.headers.get("x-cirrus-sequence")).toBe("6");
   const html = await status.text();
   for (const value of [
-    "Casey", 'href="/by/tickets/live">Tlive</a>', "Windows", "Failed", "01234567", "macOS", "Passed", "abcdef12",
+    "Casey", 'href="/by/tickets/Tlive">Tlive</a>', "Windows", "Failed", "01234567", "macOS", "Passed", "abcdef12",
     "Merge holder", "Queued merger", "Writes paused", "UTC day", "Requests", "Rows written", "/100000",
   ]) expect(html).toContain(value);
   expect(html).not.toMatch(/>Pat<|obsolete|<main|<script/);

@@ -88,10 +88,11 @@ impl Target {
             WaitMode::Ready(filters) => {
                 let mut query = crate::commands::ready_query(filters);
                 query.push(("ready", "1".into()));
+                query.push(("readable", "1".into()));
                 Self::Ready(query)
             }
             WaitMode::Ticket { id, status } => Self::Ticket {
-                path: client.url(&["tickets", &id], &[]),
+                path: client.url(&["tickets", &id], &[("readable", "1".into())]),
                 id: id
                     .strip_prefix('T')
                     .or_else(|| id.strip_prefix(&format!("{}-", client.project)))

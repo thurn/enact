@@ -48,10 +48,10 @@ try {
   await writeFile(body, Array.from({length: 60}, (_, n) => `Reading position, paragraph ${n}.`).join("\n\n"));
   const {results: [{id}]} = await tk("create", "--title", "Live dashboard fixture", "--body-file", body);
   for (let n = 0; n < 18; n++) await tk("create", "--title", `Scroll fixture ${n}`);
-  assert.match(id, /^[a-z][a-z0-9]{3}$/);
-  const displayId = `T${id}`;
+  assert.match(id, /^T[a-z][a-z0-9]{3}$/);
+  const displayId = id;
   assert.equal(await tkOutput("show", displayId), `${displayId}  open  Live dashboard fixture`);
-  assert.equal((await tk("show", displayId)).id, id);
+  assert.equal((await tk("show", displayId)).id, displayId);
   await tk("event", "session", JSON.stringify({session: "Casey", ticket: displayId, action: "start"}));
   await tk("event", "ci", JSON.stringify({os: "macos", passed: false}));
   await tk("event", "ci", JSON.stringify({os: "windows", passed: false}));
@@ -72,6 +72,8 @@ try {
   }
 
   const home = await open("/by/");
+  assert.equal(await home.getByRole("link").filter({hasText: displayId}).getAttribute("href"),
+    "/by/tickets/" + displayId);
   let connected;
   let disconnecting = false;
   const detail = await open("/by/tickets/" + id, context, (route) => {
@@ -85,6 +87,15 @@ try {
   await status.getByText(/^Windows/).waitFor();
   assert.match(await status.textContent(), /Passed.*Failed/s);
   assert.match(await status.textContent(), /HolderOwner.*Requests\d+\/100000.*Rows written\d+\/100000/s);
+
+  await home.bringToFront();
+  const untouchedCard = home.getByRole("link").filter({has: home.getByRole("heading", {name: "Scroll fixture 0", exact: true})});
+  assert.equal(await untouchedCard.evaluate((card) => card.getBoundingClientRect().top > innerHeight), true);
+  const href = await untouchedCard.evaluate((card) => card.href);
+  assert.equal(await home.evaluate((url) => performance.getEntriesByName(url).length, href), 0);
+  const prefetched = home.waitForResponse((response) => response.url() === href && response.ok());
+  await untouchedCard.scrollIntoViewIfNeeded();
+  await prefetched;
 
   for (const page of [home, detail]) {
     await page.evaluate(() => {
@@ -114,15 +125,6 @@ try {
   // Observe many feed-coalescing intervals with no mutations or interaction.
   await new Promise((resolve) => setTimeout(resolve, 2_000));
   assert.deepEqual(idleRequests, []);
-
-  await home.bringToFront();
-  const untouchedCard = home.getByRole("link").filter({has: home.getByRole("heading", {name: "Scroll fixture 0", exact: true})});
-  assert.equal(await untouchedCard.evaluate((card) => card.getBoundingClientRect().top > innerHeight), true);
-  const href = await untouchedCard.evaluate((card) => card.href);
-  assert.equal(await home.evaluate((url) => performance.getEntriesByName(url).length, href), 0);
-  const prefetched = home.waitForResponse((response) => response.url() === href && response.ok());
-  await untouchedCard.scrollIntoViewIfNeeded();
-  await prefetched;
 
   disconnecting = true;
   await connected();
