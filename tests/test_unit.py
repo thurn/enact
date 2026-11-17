@@ -2671,3 +2671,74 @@ class BdRecordingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CheckTreeTest(unittest.TestCase):
+    """`[push] check_trees`: a push's fast check runs in a reused `check-N` tree."""
+
+    def repo(self, root: Path, trees: int) -> types.SimpleNamespace:
+        return types.SimpleNamespace(state=root, top=root / "slot-01",
+                                     config=enact.Config(push_check_trees=trees))
+
+    def claim(self, repo: types.SimpleNamespace) -> tuple[Path, mock.Mock]:
+        checkout = mock.Mock(side_effect=lambda repo, name, head, kind: Path("/w") / name)
+        with mock.patch.object(enact, "checkout_slow_tree", checkout), \
+                mock.patch.object(enact, "reap_processes"):
+            with enact.claim_check_tree(repo, "head") as tree:
+                return tree, checkout
+
+    def test_config_default_and_setting(self):
+        self.assertEqual(enact.Config.parse("").push_check_trees, 0)
+        self.assertEqual(enact.Config.parse("[push]\ncheck_trees = 3\n").push_check_trees, 3)
+
+    def test_without_check_trees_the_pushing_tree_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self.repo(Path(tmp), 0)
+            tree, checkout = self.claim(repo)
+            self.assertEqual(tree, repo.top)
+            checkout.assert_not_called()
+
+    def test_the_most_recently_used_free_tree_is_taken_and_released(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self.repo(root, 3)
+            (root / "check-1.used").touch()
+            os.utime(root / "check-1.used", (1000, 1000))
+            (root / "check-2.used").touch()
+            os.utime(root / "check-2.used", (2000, 2000))
+            tree, checkout = self.claim(repo)
+            self.assertEqual(tree, Path("/w/check-2"))
+            checkout.assert_called_once_with(repo, "check-2", "head", kind="push check")
+            self.assertFalse((root / "check-2.lock").exists())  # released
+            # The claim stamped check-2 as the newest again.
+            self.assertGreater((root / "check-2.used").stat().st_mtime, 2000)
+
+    def test_a_busy_tree_is_skipped_and_all_busy_falls_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self.repo(root, 2)
+            first = enact.try_lock(root / "check-1.lock")
+            try:
+                tree, _ = self.claim(repo)
+                self.assertEqual(tree, Path("/w/check-2"))
+                second = enact.try_lock(root / "check-2.lock")
+                try:
+                    tree, checkout = self.claim(repo)
+                    self.assertEqual(tree, repo.top)
+                    checkout.assert_not_called()
+                finally:
+                    enact.release_lock(root / "check-2.lock", second)
+            finally:
+                enact.release_lock(root / "check-1.lock", first)
+
+    def test_a_tree_that_cannot_be_checked_out_falls_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self.repo(root, 1)
+            broken = mock.Mock(side_effect=enact.Fail("git refused"))
+            with mock.patch.object(enact, "checkout_slow_tree", broken), \
+                    mock.patch.object(enact, "reap_processes") as reap:
+                with enact.claim_check_tree(repo, "head") as tree:
+                    self.assertEqual(tree, repo.top)
+            reap.assert_not_called()
+            self.assertFalse((root / "check-1.lock").exists())

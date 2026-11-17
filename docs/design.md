@@ -2488,3 +2488,33 @@ open tickets that are snoozed until a future date.
 - A worker handed such a bead does the change, measures what it can now,
   files the rest as an observation bead and closes, so beads already filed
   stop blocking too. This is prompt-only; the helper is unchanged.
+
+
+## Push check trees (2026-11-17)
+
+On Beryl, the Beryl 3D shared test build in a push's fast check used a
+median of 134 CPU-seconds (p90 303) on 2026-11-16, against about 20 for the
+same change in a tree that had built the commit before it. A push checks
+in its own tree, and that tree last built whatever staging was when its
+agent started, often 20-30 commits earlier. rustc keys incremental caches to
+the checkout's absolute path, so a fresher build directory cannot be copied
+in: `--remap-path-prefix` puts the path in the flag itself, and
+`trim-paths` and `-Zremap-cwd-prefix` are unstable.
+
+`[push] check_trees = N` runs each push's fast check in one of N reused
+worktrees, `check-1` to `check-N`, instead. Every push is staging's tip
+plus one change, so a tree that only checks pushes stays a commit or two
+behind staging and its incremental caches stay valid.
+
+- `claim_check_tree` takes the first free tree by its OS lock
+  (`<state>/check-N.lock`), most recently used first (`check-N.used`), and
+  checks the pushed head out detached with `checkout_slow_tree`: ignored
+  build directories stay, tracked changes and untracked files go.
+- Busy trees are skipped. When all are busy, or git refuses a checkout,
+  the check runs in the pushing tree, as before, so a push never waits on
+  another push's check.
+- The check gets `ENACT_BRANCH`, the branch it checks, since the tree is
+  detached. Processes the check leaves behind are reaped before the lock is
+  released. The worktree sweep keeps check trees.
+- The merge-queue path (`queue = true`) still checks in the pushing tree.
+

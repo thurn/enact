@@ -34,7 +34,7 @@ import tomllib
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterator
 from typing import Any, BinaryIO, TypeVar
 
 
@@ -292,6 +292,10 @@ class Config:
     push_queue: bool = False
     push_batch: int = DEFAULT_PUSH_BATCH
     push_timeout: int = DEFAULT_PUSH_TIMEOUT
+    # `[push] check_trees = N` runs each push's fast check in one of N reused worktrees,
+    # `check-1` to `check-N` (`claim_check_tree`), instead of the pushing tree; 0 keeps the
+    # pushing tree.
+    push_check_trees: int = 0
     roles: dict[str, Any] = field(default_factory=dict)
     tiers: dict[str, Any] = field(default_factory=dict)
     ticket_backend: str = "beads"
@@ -325,6 +329,7 @@ class Config:
             push_queue=bool(push.get("queue", False)),
             push_batch=max(1, int(push.get("batch") or DEFAULT_PUSH_BATCH)),
             push_timeout=int(push.get("timeout") or DEFAULT_PUSH_TIMEOUT),
+            push_check_trees=max(int(push.get("check_trees") or 0), 0),
             roles=data.get("roles", {}),
             tiers=data.get("tiers", {}),
             ticket_backend=backend,
@@ -3324,6 +3329,63 @@ def is_slot(repo: Repo, path: Path) -> bool:
             and path.resolve().parent == repo.worktree_root().resolve())
 
 
+def is_check_tree(repo: Repo, path: Path) -> bool:
+    """Whether `path` is one of the `check-N` trees that pushes run their fast check in."""
+    match = re.fullmatch(r"check-(\d+)", path.name)
+    return (match is not None and 1 <= int(match[1]) <= repo.config.push_check_trees
+            and path.resolve().parent == repo.worktree_root().resolve())
+
+
+@contextlib.contextmanager
+def claim_check_tree(repo: Repo, head: str) -> Iterator[Path]:
+    """Yield a tree with `head` checked out for the fast check to run in.
+
+    With `[push] check_trees = N`, that is the first free one of the reused trees `check-1`
+    to `check-N`, most recently used first, held under its lock until the check ends.
+    Rust's incremental caches hold the absolute path of the checkout that built them, and
+    rustc discards them in any other directory, so a check in the pushing tree rebuilt every
+    crate that staging changed since that tree last built: on Beryl, a Beryl 3D push's shared
+    test build had a median of 134 CPU-seconds (p90 303), against about 20 for one change
+    in a tree that built the commit before. Every push is staging's tip plus its own change,
+    so a tree that only checks pushes stays a commit or two behind staging and rebuilds
+    little. Ignored files (build directories) stay; tracked changes and untracked files are
+    discarded. When every check tree is busy or none can be checked out, yields the pushing
+    tree, as before.
+    """
+    held: tuple[Path, BinaryIO] | None = None
+    path = repo.top
+    if repo.config.push_check_trees > 0:
+        locks = [repo.state / f"check-{i}.lock" for i in range(1, repo.config.push_check_trees + 1)]
+        # Each lock's stamp file is touched at every claim; the newest tree is nearest staging.
+        def last_used(lock: Path) -> float:
+            stamp = lock.with_suffix(".used")
+            return stamp.stat().st_mtime if stamp.exists() else 0.0
+        locks.sort(key=last_used, reverse=True)
+        for lock in locks:
+            if (guard := try_lock(lock)) is None:
+                continue
+            name = lock.name.removesuffix(".lock")
+            try:
+                lock.with_suffix(".used").touch()
+                path = checkout_slow_tree(repo, name, head, kind="push check")
+                held = (lock, guard)
+            except (Fail, OSError, subprocess.SubprocessError) as error:
+                log(f"push check tree {name} unavailable ({error}); checking in this tree")
+                release_lock(lock, guard)
+                path = repo.top
+            break
+        else:
+            log("every push check tree is busy; checking in this tree")
+    try:
+        if held:
+            log(f"fast check in {path}")
+        yield path
+    finally:
+        if held:
+            reap_processes(path)
+            release_lock(*held)
+
+
 # Git keeps these in a worktree's git dir while an operation waits on the user.
 PAUSED_OPERATIONS = ("rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "MERGE_HEAD",
                      "REVERT_HEAD")
@@ -3677,6 +3739,8 @@ def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
             kept[str(path)] = "current checkout"
         elif path.name == repo.config.slow_tree:
             kept[str(path)] = "slow CI's reused tree"
+        elif is_check_tree(repo, path):
+            kept[str(path)] = "push checks' reused tree"
         elif path.name.startswith("ci-") and "detached" in entry:
             if not ci_trees:
                 kept[str(path)] = "the slow-CI runner sweeps its own trees"
@@ -4542,7 +4606,14 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
                 result["recovered"] = recovered
             break
         if cfg.fast and not args.skip_checks:
-            if run_shell(cfg.fast, repo.top, {"ENACT_CHECKED": checked} if checked else None):
+            # The check may run in another tree (`claim_check_tree`): ENACT_BRANCH names the
+            # branch it checks, which that tree has detached.
+            env = {"ENACT_BRANCH": repo.git("rev-parse", "--abbrev-ref", "HEAD")}
+            if checked:
+                env["ENACT_CHECKED"] = checked
+            with claim_check_tree(repo, head) as tree:
+                failed = run_shell(cfg.fast, tree, env)
+            if failed:
                 raise Fail("fast checks failed; fix them and run `enact push` again", code=2)
             checked = head
         commits = repo.git("rev-list", "--reverse", f"{before}..{head}").split()
@@ -5354,7 +5425,7 @@ def run_bounded(command: str, cwd: Path, timeout: int,
         return 124, f"{output or ''}\n{note}\n"
 
 
-def checkout_slow_tree(repo: Repo, name: str, tip: str) -> Path:
+def checkout_slow_tree(repo: Repo, name: str, tip: str, kind: str = "slow-CI") -> Path:
     """Check `tip` out, detached, in the worktree `name` that every slow-CI run reuses, and
     return its path: creating it if missing, recreating it if git refuses.
 
@@ -5374,7 +5445,7 @@ def checkout_slow_tree(repo: Repo, name: str, tip: str) -> Path:
                      ("clean", "-q", "-fd")):
             done = run(["git", *step], path, check=False)
             if done.returncode != 0:
-                log(f"slow-CI tree {path} not reused ({' '.join(step)}): "
+                log(f"{kind} tree {path} not reused ({' '.join(step)}): "
                     f"{done.stderr.strip()}")
                 break
         else:

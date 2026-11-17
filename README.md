@@ -122,6 +122,7 @@ root = ".worktrees"   # inside the checkout; gitignored
 # slots = 20   # reuse slot-01..slot-20 for worktrees, keeping build directories
 # [push]
 # queue = true   # check in the push's tree, then land batches through a merge queue
+# check_trees = 3   # run each push's fast check in reused check-1..check-3 trees
 [roles.warden.claude]
 effort = "max"
 [tiers.light.claude]  # beads labeled tier:light (mechanical work)
