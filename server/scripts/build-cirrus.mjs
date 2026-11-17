@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 
 const source = new URL("../static/", import.meta.url);
 const output = new URL("../.cirrus/", import.meta.url);
@@ -38,6 +38,10 @@ for (const [extension, content] of [
   await writeIfChanged(new URL(name, assetDirectory), content);
   names.add(name);
   assets[`cirrus.${extension}`] = `assets/${name}`;
+}
+
+for (const name of ["favicon.svg", "favicon-32.png", "apple-touch-icon.png"]) {
+  await copyFile(new URL(name, source), new URL(name, publicFiles));
 }
 
 await writeIfChanged(

@@ -2086,3 +2086,18 @@ route retained scroll positions, replayed live updates after reconnecting,
 and made no idle requests. The 375 px and 1280 px layouts were checked in
 light and dark modes. The existing viewport-prefetch assertion timed out
 on the baseline; the focused route run omitted that assertion.
+
+
+## Ticket site gem icon (2026-11-17)
+
+The ticket pages use the approved faceted purple gem for browser tabs and
+home screen shortcuts. Cirrus accepts optional icon paths, and dashboard
+pages supply the site's shared SVG, 32 px PNG fallback and 180 px Apple
+touch icon. The Apple icon has an opaque background so iOS can apply its
+own corner mask. Home screen shortcuts use the project brand as their name.
+The static asset build copies these files alongside the service worker.
+
+An isolated Worker measured home rendering at 134.8 ms cold and 6.0 ms warm
+before the change, and 152.3 ms cold and 4.5 ms warm afterward. Cold values
+include the first project initialization. Headless browser checks verified
+both icon URLs and layouts at 375 px and 1280 px in light and dark modes.

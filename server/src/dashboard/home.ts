@@ -1,5 +1,5 @@
 import * as c from "../cirrus/components";
-import {brand, childrenProgress, person, statusDot, ticketHeading, ticketUrl} from "./common";
+import {brand, siteIcons, childrenProgress, person, statusDot, ticketHeading, ticketUrl} from "./common";
 import type {HomeCard, homeData} from "./data";
 
 const automatic = [
@@ -67,6 +67,6 @@ export function home(root: string, {cards, counts}: ReturnType<typeof homeData>,
     title: `Tickets · ${brand(root)}`, body: c.title("Tickets", "", "What is in progress, and everything open.")
       + c.withToc(nav, activePart + allPart + status),
     feed: {seq},
-    root, assetRoot: "/", crumbs: [["Tickets", null]], brand: brand(root),
+    root, assetRoot: "/", icons: siteIcons, crumbs: [["Tickets", null]], brand: brand(root),
   };
 }

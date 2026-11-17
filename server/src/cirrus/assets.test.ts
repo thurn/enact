@@ -1,6 +1,7 @@
 import { exports } from "cloudflare:workers";
 import { expect, test } from "vitest";
 import { assets } from "./assets";
+import { siteIcons } from "../dashboard/common";
 import { page } from "./components";
 
 for (const [name, path] of Object.entries(assets)) {
@@ -34,10 +35,36 @@ test("project pages link to the Worker assets and keep their own navigation root
   const html = page({
     title: "Tickets",
     body: "",
-    root: "/by/",
+    root: "/beryl/",
+    icons: siteIcons,
+    brand: "Beryl",
     assetRoot: "/",
   });
-  expect(html).toContain('<meta name="cirrus-root" content="/by/">');
+  expect(html).toContain('<meta name="cirrus-root" content="/beryl/">');
   expect(html).toContain(`href="/${assets["cirrus.css"]}"`);
   expect(html).toContain(`src="/${assets["cirrus.js"]}"`);
+  expect(html).toContain('<link rel="icon" type="image/svg+xml" sizes="any" href="/favicon.svg">');
+  expect(html).toContain('<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">');
+  expect(html).toContain('<meta name="apple-mobile-web-app-title" content="Beryl">');
+});
+
+
+for (const [path, size] of [[siteIcons.png, 32], [siteIcons.apple, 180]] as const) {
+  test(`${path} serves a square PNG at the required size`, async () => {
+    const response = await exports.default.fetch(`https://example.com${path}`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("image/png");
+    const bytes = await response.arrayBuffer();
+    expect([...new Uint8Array(bytes, 0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+    const header = new DataView(bytes);
+    expect(header.getUint32(16)).toBe(size);
+    expect(header.getUint32(20)).toBe(size);
+  });
+}
+
+test("the scalable purple gem favicon is served as SVG", async () => {
+  const response = await exports.default.fetch(`https://example.com${siteIcons.svg}`);
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toContain("image/svg+xml");
+  expect(await response.text()).toContain('viewBox="0 0 256 256"');
 });

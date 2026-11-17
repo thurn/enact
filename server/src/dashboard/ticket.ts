@@ -1,6 +1,6 @@
 import * as c from "../cirrus/components";
 import {render} from "../cirrus/markdown";
-import {brand, childrenProgress, displayTicketId, person, priorityChip, priorityNames, statusDot, ticketHeading, ticketUrl} from "./common";
+import {brand, siteIcons, childrenProgress, displayTicketId, person, priorityChip, priorityNames, statusDot, ticketHeading, ticketUrl} from "./common";
 import {byAttention, type Card, type ticketData} from "./data";
 import {mentions, rewriteTicketPaths} from "../ticket-references";
 import {timeline} from "./history";
@@ -115,7 +115,7 @@ export function ticketPage(root: string, project: string, data: ReturnType<typeo
     title: `${ticket.title} · ${displayId}`,
     body: c.title(ticket.title, eyebrow) + (entries.length >= 3 ? c.withToc(c.toc(entries), layout) : layout)
       + [...templates.values()].join(""),
-    root, assetRoot: "/", brand: brand(root), description: ticket.title,
+    root, assetRoot: "/", icons: siteIcons, brand: brand(root), description: ticket.title,
     crumbs: [["Tickets", root], ...crumbs, [displayId, null]],
   };
 }

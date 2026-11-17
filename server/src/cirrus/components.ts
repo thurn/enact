@@ -51,6 +51,7 @@ export interface PageOptions {
   root: string;
   assetRoot?: string;
   assets?: Assets;
+  icons?: {svg: string; png: string; apple: string};
   crumbs?: ReadonlyArray<readonly [label: string, href: string | null]>;
   brand?: string;
   description?: string;
@@ -81,7 +82,7 @@ ${body}
 }
 
 export function page(options: PageOptions, regions = pageRegions(options)): string {
-  const {root, assetRoot = root, assets = defaultAssets, title, description = "", base} = options;
+  const {root, assetRoot = root, assets = defaultAssets, title, description = "", base, icons} = options;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -90,7 +91,11 @@ ${base ? `<base href="${esc(base)}">` : ""}
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description || title)}">
-<meta name="cirrus-root" content="${esc(root)}">
+<meta name="cirrus-root" content="${esc(root)}">${icons ? `
+<link rel="icon" type="image/png" sizes="32x32" href="${esc(icons.png)}">
+<link rel="icon" type="image/svg+xml" sizes="any" href="${esc(icons.svg)}">
+<link rel="apple-touch-icon" sizes="180x180" href="${esc(icons.apple)}">
+<meta name="apple-mobile-web-app-title" content="${esc(options.brand || title)}">` : ""}
 <link rel="stylesheet" href="${esc(assetRoot + assets["cirrus.css"])}">
 <script src="${esc(assetRoot + assets["cirrus.js"])}" defer></script>
 </head>

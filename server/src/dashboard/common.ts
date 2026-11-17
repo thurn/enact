@@ -12,6 +12,10 @@ const statusDisplay: Record<Ticket["status"], [c.Tone, string]> = {
   closed: ["green", "Closed"],
 };
 
+export const siteIcons = {
+  svg: "/favicon.svg", png: "/favicon-32.png", apple: "/apple-touch-icon.png",
+};
+
 export const priorityNames = ["Critical", "High", "Medium", "Low", "Backlog"];
 const priorityTones: c.Tone[] = ["red", "orange", "neutral"];
 

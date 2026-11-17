@@ -4,7 +4,7 @@ import {ProjectUsage} from "../project-usage";
 import {resolveId} from "../ticket-batch";
 import {ancestors, type BatchChanges} from "../ticket-index";
 import type {TicketRow} from "../ticket-types";
-import {brand, ticketUrl} from "./common";
+import {brand, siteIcons, ticketUrl} from "./common";
 import {homeData, progress, ticketData, type Progress} from "./data";
 import {home} from "./home";
 import {ProjectStatus} from "./status";
@@ -73,7 +73,7 @@ export class Dashboard {
         const body = c.title("Not found", "", "No ticket has this address.")
           + `<p>${c.link(root, "Back to tickets", null, "c-muted")}</p>`;
         return new Response(head ? null : c.page({
-          title: `Not found · ${brand(root)}`, body, root, assetRoot: "/",
+          title: `Not found · ${brand(root)}`, body, root, assetRoot: "/", icons: siteIcons,
           crumbs: [["Tickets", root]], brand: brand(root),
         }), {status: 404, headers: {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}});
       }
