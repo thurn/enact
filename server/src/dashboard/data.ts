@@ -1,3 +1,4 @@
+import type {TicketSql} from "../ticket-runtime";
 import {mentions, ticketPaths} from "../ticket-references";
 import {resolveId} from "../ticket-batch";
 import {byId, decodeTicket, type Edge, type Ticket, type TicketRow} from "../ticket-types";
@@ -22,7 +23,7 @@ export function byAttention(left: Card, right: Card): number {
 
 export type ReadProgress = (ids: Iterable<string>) => Progress[];
 
-export function progress(sql: SqlStorage, ids: Iterable<string>): Progress[] {
+export function progress(sql: TicketSql, ids: Iterable<string>): Progress[] {
   // Read the parent index rather than scanning archived tickets on each page.
   return sql.exec<Progress>(`
     WITH RECURSIVE descendants(root, id, status) AS (
@@ -37,7 +38,7 @@ export function progress(sql: SqlStorage, ids: Iterable<string>): Progress[] {
   `, JSON.stringify([...ids])).toArray();
 }
 
-export function homeData(sql: SqlStorage, readProgress: ReadProgress) {
+export function homeData(sql: TicketSql, readProgress: ReadProgress) {
   const cards = sql.exec<HomeCard>(`
     SELECT ${cardFields}, labels FROM tickets
     WHERE status != 'closed'
@@ -46,7 +47,7 @@ export function homeData(sql: SqlStorage, readProgress: ReadProgress) {
   return {cards, counts: readProgress(cards.map(({id}) => id))};
 }
 
-export function ticketData(sql: SqlStorage, project: string, row: TicketRow, readProgress: ReadProgress) {
+export function ticketData(sql: TicketSql, project: string, row: TicketRow, readProgress: ReadProgress) {
   const ticket = decodeTicket(row);
   const {id} = ticket;
   const comments = sql.exec<Comment>("SELECT author, at, text FROM comments WHERE ticket = ? ORDER BY n", id).toArray();

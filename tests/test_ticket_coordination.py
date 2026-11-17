@@ -1,4 +1,4 @@
-"""Drive Enact and tk against the real Worker in Wrangler's local simulator."""
+"""Drive Enact and tk against a real local SQLite ticket service."""
 
 import concurrent.futures
 import hashlib
@@ -23,15 +23,15 @@ class TicketCoordinationTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        launcher = SCRIPT.parent.parent / "cli" / "tests" / "simulator.mjs"
+        launcher = SCRIPT.parent.parent / "server" / "tests" / "sqlite-fixture.mjs"
         projects = [cls.project_key(name) for name in unittest.defaultTestLoader.getTestCaseNames(cls)]
-        worker = subprocess.Popen(["node", str(launcher), "--coordination", "restore", *projects], text=True,
+        worker = subprocess.Popen(["node", str(launcher), "restore", *projects], text=True,
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         cls.addClassCleanup(worker.stdout.close)
         cls.addClassCleanup(cls.stop_worker, worker)
         cls.address = worker.stdout.readline().strip()
         if not cls.address.startswith("http://"):
-            raise RuntimeError("ticket Worker simulator did not start")
+            raise RuntimeError("SQLite ticket service did not start")
 
     @staticmethod
     def stop_worker(worker):
@@ -69,6 +69,7 @@ class TicketCoordinationTest(unittest.TestCase):
                                "ENACT_TK": os.environ["ENACT_TEST_TK"], "ENACT_HOST": host,
                                "ENACT_SESSION": f"{host}-session", "ENACT_NO_SELF_UPDATE": "1",
                                "TEST_COORDINATION_DIR": str(self.root)}
+            self.envs[host].pop("ENACT_TICKETS_URL", None)
             if host == self.hosts[0]:
                 self.seed_checkout(clone)
         self.addCleanup(self.assert_no_enact_refs)

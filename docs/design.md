@@ -2158,3 +2158,35 @@ An isolated Worker measured home rendering at 134.8 ms cold and 6.0 ms warm
 before the change, and 152.3 ms cold and 4.5 ms warm afterward. Cold values
 include the first project initialization. Headless browser checks verified
 both icon URLs and layouts at 375 px and 1280 px in light and dark modes.
+
+## SQLite hosting on JARVIS
+
+The ticket logic runs in a long-lived Node service with one writer connection
+and one local SQLite WAL database per project. The Worker and the Node service
+share ticket operations, SQL and the change journal. JARVIS clients connect over
+loopback. Tailscale Serve terminates HTTPS for the other clients and proxies
+their existing API and feed. Ticket IDs, optimistic preconditions, lease
+ownership and machine-token registration use the same contracts.
+
+SQLite commits use FULL synchronization. The hot path keeps the live index,
+prepared statements and known machine tokens in memory. Node usage reporting
+uses process-local counters. Quota enforcement remains specific to Cloudflare.
+Online backups use a separate process and versioned SQLite files on the NAS.
+The existing Git export also retains ticket history.
+
+A source freeze and a resumable raw-table import preserve versions, request
+keys, coordination state and the feed journal. A project stays fenced on the
+Worker once JARVIS takes writes. Readiness and lease timers restart from the
+SQLite state. See [SQLite ticket operations](sqlite-tickets.md) for cutover,
+verification, backup and recovery.
+
+An isolated M1 Max rehearsal with 4,000 synthetic tickets and release
+`tk` recorded p95 loopback times of 10.6 ms for show, 17.6 ms for ready,
+12.7 ms for graph revalidation, 14.6 ms for update and 15.0 ms for lease
+renewal across 100 samples each. The full graph was 69.5 ms and
+`enact brief` was 288.9 ms. With four concurrent writers, ready reached
+23.8 ms p95 and graph revalidation often returned a full graph. The small
+dashboard fixture rendered in 3.6 ms cold and 1.2 ms warm over SQLite,
+versus 16.6 ms and 7.8 ms in the local Worker simulator. These measurements
+are from a development machine. Cutover requires measurements on JARVIS with
+a scratch copy of the production dataset and a tailnet peer.

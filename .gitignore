@@ -5,6 +5,7 @@ __pycache__/
 /server/node_modules/
 /server/.wrangler/
 /server/.cirrus/
+/server/.local/
 /server/.dev.vars*
 /server/.env*
 /cli/target/

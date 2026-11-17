@@ -1,27 +1,28 @@
 # Working on Enact
 
 - Enact's skills live in `skills/` and the stdlib-only orchestration helper
-  lives in `scripts/enact.py`. The ticket service is a TypeScript Cloudflare
-  Worker in `server/`. Its ticket store and coordination APIs live in
-  `server/src/`, its schema in `server/contract/` and simulator tests in
-  `server/tests/`. `cli/src/` builds the native ticket client.
+  lives in `scripts/enact.py`. The TypeScript ticket service in `server/`
+  has Cloudflare Worker and local SQLite runtimes. Its ticket store and
+  coordination APIs live in `server/src/`, its schema in `server/contract/`
+  and server tests in `server/tests/`. `cli/src/` builds the native client.
 - Skill and role files are markdown wrapped at 80 columns. Keep
   `skills/enact/SKILL.md` under ~500 lines and each role file around 100.
 - The helper must stay stdlib-only, Python 3.11+, and work on macOS, Linux
   and Windows (no shell-specific syntax, `pathlib` everywhere).
-- Fast and slow check commands live in `.enact.toml`. Both run the Worker
+- Fast and slow check commands live in `.enact.toml`. Both run the server
   and Rust tests. Fast CI compiles the Python helper and runs its unit tests.
-  Slow CI exercises real Git and the isolated ticket Worker.
+  Slow CI exercises real Git and the isolated SQLite ticket service.
   Budget: 2-3 minutes for slow CI; cut or redesign scenarios to stay within it.
 - For focused Worker checks, run `npm ci` and `npm test` in `server/` with
-  Node 22.12 or later. Run Wrangler there with `npx wrangler`. Worker tests
-  use the local simulator and require no Cloudflare login.
+  Node 24.22.3 or later. Run Wrangler there with `npx wrangler`. Worker tests
+  use the local simulator and require no Cloudflare login. The SQLite
+  operator guide is in `docs/sqlite-tickets.md`.
 - For focused Rust checks, run `npm ci` and `npm run pretest` in `server/`, then
   run `cargo test --locked` in `cli/`. The CLI tests launch Wrangler locally.
   Build the release executable with `cargo build --locked --release`.
 - Set `[tickets].project` and `[tickets].url` in the main checkout's
   `.enact.toml`. Linked worktrees inherit enrollment from the main checkout.
-  Use a local Worker in isolated fixtures.
+  Use an isolated ticket service in fixtures.
 - Deliver through Enact's own flow, never by committing or pushing to
   `master`: `python3 scripts/enact.py worktree create <name>` from the main
   checkout, commit in the printed worktree, then

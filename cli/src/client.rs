@@ -86,7 +86,14 @@ impl Client {
         {
             return Err(usage("invalid project key"));
         }
-        let mut base = Url::parse(field("url")?).map_err(usage)?;
+        let override_url = env::var("ENACT_TICKETS_URL")
+            .ok()
+            .filter(|url| !url.is_empty());
+        let endpoint = match override_url.as_deref() {
+            Some(url) => url,
+            None => field("url")?,
+        };
+        let mut base = Url::parse(endpoint).map_err(usage)?;
         if !matches!(base.scheme(), "https" | "http")
             || base.host().is_none()
             || !base.username().is_empty()
@@ -100,11 +107,13 @@ impl Client {
             .expect("HTTP URL")
             .pop_if_empty()
             .extend([project, "api"]);
-        let agent = ureq::Agent::config_builder()
+        let mut config = ureq::Agent::config_builder()
             .http_status_as_error(false)
-            .max_redirects(0)
-            .build()
-            .into();
+            .max_redirects(0);
+        if matches!(base.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")) {
+            config = config.proxy(None);
+        }
+        let agent = config.build().into();
         Ok(Self {
             base,
             agent,

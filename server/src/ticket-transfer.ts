@@ -1,3 +1,4 @@
+import type {TicketSql, SqlValue} from "./ticket-runtime";
 import type {ProjectWrite} from "./project-state";
 import {
   ApiError, array, bad, choice, decodeTicket, edgeKinds, integer, name, object, statuses, string, strings,
@@ -44,7 +45,7 @@ function encode(ticket: Omit<Ticket, "version">): Omit<TicketRow, "version"> {
   return {...ticket, labels: JSON.stringify(ticket.labels), metadata: JSON.stringify(ticket.metadata)};
 }
 
-function related<T extends Record<string, SqlStorageValue>>(
+function related<T extends Record<string, SqlValue>>(
   write: ProjectWrite,
   table: "edges" | "comments" | "history",
   owner: keyof T & string,
@@ -114,7 +115,7 @@ function importRelated(write: ProjectWrite, project: string, id: string, input: 
   }
 }
 
-function checkParents(sql: SqlStorage, parents: Map<string, string | null>): void {
+function checkParents(sql: TicketSql, parents: Map<string, string | null>): void {
   const checked = new Set<string>();
   for (const id of parents.keys()) {
     const path = new Set<string>();
@@ -190,7 +191,7 @@ export function importTickets(write: ProjectWrite, project: string, body: unknow
 
 type ExportRow = TicketRow & {edges: string; comments: string; history: string; aliases: string};
 
-export function exportTickets(sql: SqlStorage, after: string | null): Response {
+export function exportTickets(sql: TicketSql, after: string | null): Response {
   const cursor = after === null ? "" : ticketId(after, "after");
   const rows = sql.exec<ExportRow>(`
     SELECT tickets.*,

@@ -1,6 +1,7 @@
 import {env} from "cloudflare:workers";
 import {evictDurableObject, runDurableObjectAlarm, runInDurableObject} from "cloudflare:test";
 import {expect, test} from "vitest";
+import type {TicketSql} from "./ticket-runtime";
 import type {Ticket} from "./ticket-types";
 
 async function fixture(project: string) {
@@ -8,7 +9,7 @@ async function fixture(project: string) {
   const token = "project-state-test-token";
   const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   const hash = [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  const sql = <T>(action: (sql: SqlStorage) => T) => runInDurableObject(stub, ({store}) => action(store.sql));
+  const sql = <T>(action: (sql: TicketSql) => T) => runInDurableObject(stub, ({store}) => action(store.sql));
   await sql((db) => { db.exec("INSERT INTO meta VALUES ('token_hashes', ?)", JSON.stringify({[hash]: "test-machine"})); });
   const get = (path: string) => stub.fetch(`https://example.com/${project}/api${path}`);
   const post = (path: string, body: unknown, authorization = `Bearer ${token}`) =>

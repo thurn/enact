@@ -30,7 +30,7 @@ stores the task graph and coordinates claims and leases.
 | `skills/enact-sweep/SKILL.md` | Close stale tickets, run the rest: `/enact-sweep` |
 | `scripts/enact.py` | Helper: claims, sync, push, slow CI, locks |
 | `skills/status-dashboard/SKILL.md` | Maintain the live ticket dashboard |
-| `cli/`, `server/` | Native `tk` client and ticket Worker |
+| `cli/`, `server/` | Native `tk` client and ticket service |
 | `templates/AGENTS.md` | Sample AGENTS.md section |
 | `docs/design.md` | Design decisions and rationale |
 
@@ -136,9 +136,11 @@ Requirements are Git, Python 3.11+, and Cargo for the managed `tk` client.
 ### Working with tickets
 
 Configure `[tickets].project` and `[tickets].url` in the main checkout's
-`.enact.toml`. Use the Worker root URL. Linked worktrees inherit the project
-and URL and keep their own check commands. Run `enact setup` from each project
-to register this machine. Run `enact backend` for the managed `tk` path.
+`.enact.toml`. Use the ticket service root URL. Linked worktrees inherit
+the project and URL and keep their own check commands. Run `enact setup` from each project
+to register this machine. Run `enact backend` for the managed `tk` path and
+effective URL. The database host can set `ENACT_TICKETS_URL` to use loopback.
+See [the SQLite operator guide](docs/sqlite-tickets.md) for cutover and recovery.
 
 Ticket writes publish immediately. Use `enact claim`, `start`, `meta`,
 `release` and `close` for assignment and ownership. The CLI and dashboard
@@ -154,8 +156,8 @@ differences from the retired client.
 
 ### Local ticket verification
 
-Use Node 22.12+, Cargo and Python 3.11+ from an Enact checkout. The Worker
-and CLI tests use isolated simulators and require no Cloudflare login.
+Use Node 24.22.3+, Cargo and Python 3.11+ from an Enact checkout. The
+server and CLI tests use isolated fixtures and require no Cloudflare login.
 
 ```sh
 npm --prefix server ci

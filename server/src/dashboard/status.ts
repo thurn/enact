@@ -1,18 +1,18 @@
+import type {TicketSql} from "../ticket-runtime";
 import {storedProject} from "../project-paths";
 import * as c from "../cirrus/components";
 import {cutoverState, events, leases} from "../project-state";
-import type {ProjectUsage} from "../project-usage";
+import type {UsageState} from "../project-usage";
 import {displayTicketId, person, ticketUrl} from "./common";
 
 type Event = ReturnType<typeof events>[number];
-type Usage = ReturnType<ProjectUsage["state"]>;
 
 function field(event: Event, key: string): string | undefined {
   const value: unknown = event.data?.[key];
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function activeSessions(root: string, sql: SqlStorage, entries: Event[]) {
+function activeSessions(root: string, sql: TicketSql, entries: Event[]) {
   const latest = new Map<string, Event>();
   for (const event of entries) {
     const id = field(event, "session") ?? event.actor;
@@ -78,7 +78,7 @@ export class ProjectStatus {
   private sessionsKey?: string;
   private sessions: Event[] = [];
 
-  constructor(private readonly sql: SqlStorage) {}
+  constructor(private readonly sql: TicketSql) {}
 
   private latestSequence(kind: string): number | undefined {
     return this.sql.exec<{seq: number}>(`
@@ -124,7 +124,7 @@ export class ProjectStatus {
     return this.ciMarkup;
   }
 
-  render(root: string, now: number, usage: Usage): string {
+  render(root: string, now: number, usage: UsageState): string {
     const {sql} = this;
     const staging = leases(sql, now).find((lease) => lease.name === "staging");
     const held = staging && Date.parse(staging.expires_at) > now;
@@ -143,8 +143,8 @@ export class ProjectStatus {
       + c.subsection("Cutover", state + (cutover_at ? c.muted(" · ") + c.time(cutover_at) : ""))
       + c.subsection("Daily usage", c.meta([
         ["UTC day", c.esc(usage.day)],
-        ["Requests", c.progress(usage.requests, usage.limits.requests)],
-        ["Rows written", c.progress(usage.rows_written, usage.limits.rows_written)],
+        ["Requests", usage.quota_enforced === false ? c.esc(String(usage.requests)) : c.progress(usage.requests, usage.limits.requests)],
+        ["Rows written", usage.quota_enforced === false ? c.esc(String(usage.rows_written)) : c.progress(usage.rows_written, usage.limits.rows_written)],
       ]));
   }
 }

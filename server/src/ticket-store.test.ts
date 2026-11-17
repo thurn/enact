@@ -541,7 +541,11 @@ test("two commits in one turn share a frame with unique ticket IDs", async () =>
     const message = nextMessage(socket);
     const nextSeq = await runInDurableObject(stub, ({store}, state) => {
       // Both commits happen in the same turn, regardless of simulator speed.
-      const feed = new ChangeFeed(state, store);
+      const feed = new ChangeFeed({
+        sockets: () => state.getWebSockets("change-feed"),
+        upgrade: () => { throw new Error("Unexpected upgrade"); },
+        waitUntil: promise => state.waitUntil(promise),
+      }, store);
       for (const offset of [1, 2]) {
         const change = {previous: seq + offset - 1, seq: seq + offset, tickets: [id]};
         state.storage.transactionSync(() => {

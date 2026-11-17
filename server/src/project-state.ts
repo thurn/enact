@@ -1,3 +1,4 @@
+import type {TicketSql, SqlValue} from "./ticket-runtime";
 import {ApiError, bad, choice, integer, name, object} from "./ticket-types";
 import type {Identity} from "./token-auth";
 
@@ -31,14 +32,14 @@ function liveWaiters(current: Lease, now: number): Waiter[] {
   return current.waiters.filter((waiter) => waiterExpires(waiter) > now);
 }
 
-export function leases(sql: SqlStorage, now: number): Lease[] {
+export function leases(sql: TicketSql, now: number): Lease[] {
   return sql.exec<LeaseRow>("SELECT * FROM leases ORDER BY name").toArray().map((row) => {
     const current = lease(row);
     return {...current, waiters: liveWaiters(current, now)};
   }).filter((current) => Date.parse(current.expires_at) > now || current.waiters.length > 0);
 }
 
-export function events(sql: SqlStorage, query: URLSearchParams) {
+export function events(sql: TicketSql, query: URLSearchParams) {
   const requestedKind = query.get("kind");
   const kind = requestedKind === null ? null : choice(requestedKind, "kind", eventKinds);
   const since = queryInteger(query, "since", 0);
@@ -59,7 +60,7 @@ function queryInteger(query: URLSearchParams, field: string, fallback: number): 
   return integer(Number(value), field);
 }
 
-export function cutoverState(sql: SqlStorage) {
+export function cutoverState(sql: TicketSql) {
   const rows = sql.exec<{key: string; value: string}>(
     "SELECT * FROM meta WHERE key IN ('cutover', 'cutover_at', 'cutover_id')",
   );
@@ -75,7 +76,7 @@ export class ProjectWrite {
   rowsWritten = 0;
   private sequence?: number;
 
-  constructor(readonly sql: SqlStorage, readonly now: number) {}
+  constructor(readonly sql: TicketSql, readonly now: number) {}
 
   get seq(): number {
     return this.sequence ?? Number(
@@ -83,7 +84,7 @@ export class ProjectWrite {
     );
   }
 
-  write(query: string, ...values: SqlStorageValue[]): number {
+  write(query: string, ...values: SqlValue[]): number {
     const rows = this.sql.exec(query, ...values).rowsWritten;
     this.rowsWritten += rows;
     return rows;

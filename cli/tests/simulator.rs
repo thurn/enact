@@ -64,6 +64,7 @@ impl Simulator {
             .current_dir(base.join("repo/subdirectory"))
             .env("HOME", base.join("home"))
             .env("APPDATA", base.join("appdata"))
+            .env_remove("ENACT_TICKETS_URL")
             .args(["--retry-for", "0", "--actor", "test actor"])
             .args(args);
         if let Some(input) = input {
@@ -517,15 +518,15 @@ fn commands_use_the_worker_protocol() {
 }
 
 #[test]
-#[ignore = "runs in slow CI with real Git clones and the Worker simulator"]
-fn enact_coordinates_through_the_real_worker() {
+#[ignore = "runs in slow CI with real Git clones and the SQLite service"]
+fn enact_coordinates_through_sqlite() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let result = Command::new("python3")
         .args(["-m", "unittest", "-q", "tests.test_ticket_coordination"])
         .env("ENACT_TEST_TK", env!("CARGO_BIN_EXE_tk"))
         .current_dir(root.parent().unwrap())
         .output()
-        .expect("run the Enact and Worker integration scenario");
+        .expect("run the Enact and SQLite integration scenario");
     assert!(
         result.status.success(),
         "{}{}",

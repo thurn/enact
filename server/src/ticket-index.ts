@@ -1,3 +1,4 @@
+import type {TicketSql} from "./ticket-runtime";
 import {byId, decodeTicket, type Blocker, type Edge, type Ticket, type TicketRow} from "./ticket-types";
 
 type ParentOf = (id: string) => string | null;
@@ -46,7 +47,7 @@ export class TicketIndex {
   private readonly graphCache = new Map<boolean, GraphCache>();
   private archive?: Archive;
 
-  constructor(private readonly sql: SqlStorage, public seq: number) {
+  constructor(private readonly sql: TicketSql, public seq: number) {
     for (const row of sql.exec<TicketRow>("SELECT * FROM tickets WHERE status != 'closed' ORDER BY id")) {
       this.live.set(row.id, decodeTicket(row));
       this.outgoing.set(row.id, new Map());

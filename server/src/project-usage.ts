@@ -1,20 +1,29 @@
+import type {TicketSql} from "./ticket-runtime";
 import {ApiError} from "./ticket-types";
 
 const limits = {requests: 100_000, rows_written: 100_000};
 const threshold = {requests: limits.requests * 0.9, rows_written: limits.rows_written * 0.9};
 
-type Counts = {day: string; requests: number; rows_written: number};
+export type Counts = {day: string; requests: number; rows_written: number};
 
 // Reserve request counts in groups so a run of reads does not write once per
 // request. A restart treats the unspent part of its previous group as used.
 const requestsPerReservation = 32;
 export type RequestReservation = {day: string; used: number; ceiling: number};
 
-export class ProjectUsage {
+export type UsageState = Counts & {limits: typeof limits; quota_enforced?: false};
+
+export interface UsageMeter {
+  check(rows: number, rowCeiling?: number): void;
+  record(rows?: number, requests?: number): void;
+  state(): UsageState;
+}
+
+export class ProjectUsage implements UsageMeter {
   private counts: Counts;
 
   constructor(
-    private readonly sql: SqlStorage,
+    private readonly sql: TicketSql,
     now: number,
     private readonly requests: RequestReservation = {day: "", used: 0, ceiling: 0},
   ) {

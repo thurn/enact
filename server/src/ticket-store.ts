@@ -1,3 +1,4 @@
+import type {TicketSql, TicketStorage} from "./ticket-runtime";
 import schema from "../contract/schema.sql";
 import {resolveId, TicketBatch} from "./ticket-batch";
 import {readableTicketText} from "./ticket-references";
@@ -5,10 +6,10 @@ import {ancestors, TicketIndex, type BatchChanges} from "./ticket-index";
 import {ApiError, bad, byId, choice, decodeTicket, integer, statuses, ticketTypes, type Edge, type Ticket, type TicketRow} from "./ticket-types";
 
 export class TicketStore {
-  readonly sql: SqlStorage;
+  readonly sql: TicketSql;
   private index?: TicketIndex;
 
-  constructor(private readonly storage: DurableObjectStorage) {
+  constructor(private readonly storage: TicketStorage) {
     this.sql = storage.sql;
     if (!this.sql.exec("SELECT 1 FROM sqlite_master WHERE name = 'meta' AND type = 'table'").toArray().length) {
       storage.transactionSync(() => this.sql.exec(schema));

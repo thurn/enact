@@ -1,4 +1,5 @@
-import type {ProjectUsage} from "./project-usage";
+import type {TicketStorage} from "./ticket-runtime";
+import type {UsageMeter} from "./project-usage";
 import type {TicketStore} from "./ticket-store";
 import {ApiError, bad} from "./ticket-types";
 
@@ -21,8 +22,9 @@ export async function authorizeWrite(request: Request, lookup: TokenLookup): Pro
   throw new ApiError(401, {error: "Missing or unknown token"});
 }
 
-export function registeredMachine(accepted: string | undefined, hash: string): string | null | undefined {
-  const hashes = JSON.parse(accepted ?? "[]") as string[] | Record<string, string>;
+type Tokens = string[] | Record<string, string>;
+
+function registeredMachine(hashes: Tokens, hash: string): string | null | undefined {
   if (Array.isArray(hashes)) return hashes.includes(hash) ? null : undefined;
   return hashes[hash];
 }
@@ -54,28 +56,38 @@ function advertisedTokens(data: Uint8Array): Map<string, string> | undefined {
 
 export class TokenRegistry {
   private pending?: Promise<void>;
+  private accepted?: Tokens;
+  private lastAttempt?: number;
 
   constructor(
-    private readonly storage: DurableObjectStorage,
+    private readonly storage: TicketStorage,
     private readonly store: TicketStore,
-    private readonly usage: () => ProjectUsage,
+    private readonly usage: () => UsageMeter,
+    private readonly writable: () => boolean,
+    private readonly local: boolean,
   ) {}
 
+  private machine(hash: string) {
+    const read = () => JSON.parse(this.store.meta("token_hashes") ?? "[]") as Tokens;
+    return registeredMachine(this.local ? this.accepted ??= read() : read(), hash);
+  }
+
   async lookup(repository: string | undefined, hash: string): Promise<string | null | undefined> {
-    const accepted = registeredMachine(this.store.meta("token_hashes"), hash);
-    if (accepted !== undefined || typeof repository !== "string" || !repository) return accepted;
+    const accepted = this.machine(hash);
+    if (accepted !== undefined || typeof repository !== "string" || !repository || !this.writable()) return accepted;
 
     if (!this.pending) {
       const now = Date.now();
-      const lastAttempt = this.store.meta("token_fetched_at");
+      const lastAttempt = this.local ? this.lastAttempt : this.store.meta("token_fetched_at");
       if (lastAttempt !== undefined && now - Number(lastAttempt) < refreshInterval) return;
       // Record attempts before sending them so even errors or eviction cannot
       // cause a burst of requests to GitHub.
-      this.save("token_fetched_at", String(now));
+      if (this.local) this.lastAttempt = now;
+      else this.save("token_fetched_at", String(now));
       this.pending = this.refresh(repository).finally(() => { this.pending = undefined; });
     }
     await this.pending;
-    return registeredMachine(this.store.meta("token_hashes"), hash);
+    return this.machine(hash);
   }
 
   private async refresh(repository: string): Promise<void> {
@@ -96,6 +108,7 @@ export class TokenRegistry {
   }
 
   private save(key: string, value: string): void {
+    if (!this.writable()) return;
     this.storage.transactionSync(() => {
       const usage = this.usage();
       usage.check(1);
@@ -103,5 +116,6 @@ export class TokenRegistry {
       // The route accounts for the request separately from the cache writes.
       usage.record(1, 0);
     });
+    if (this.local && key === "token_hashes") this.accepted = JSON.parse(value) as Tokens;
   }
 }

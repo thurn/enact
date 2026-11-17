@@ -1,3 +1,4 @@
+import type {TicketSql, SqlValue} from "./ticket-runtime";
 import {eventKinds} from "./project-state";
 import {ancestors, liveDescendants, readiness, TicketIndex, type BatchChanges} from "./ticket-index";
 import {
@@ -62,13 +63,13 @@ function input(value: unknown): TicketInput {
   return result;
 }
 
-function entries(fields: Partial<Ticket>): [string, SqlStorageValue][] {
+function entries(fields: Partial<Ticket>): [string, SqlValue][] {
   return Object.entries(fields).map(([key, value]) =>
-    [key, key === "labels" || key === "metadata" ? JSON.stringify(value) : value as SqlStorageValue],
+    [key, key === "labels" || key === "metadata" ? JSON.stringify(value) : value as SqlValue],
   );
 }
 
-export function resolveId(sql: SqlStorage, project: string, name: string): string {
+export function resolveId(sql: TicketSql, project: string, name: string): string {
   // The uppercase prefix denotes a canonical ticket ID.
   if (name.startsWith("T")) return name.slice(1);
   const stripped = name.startsWith(`${project}-`) ? name.slice(project.length + 1) : name;
@@ -94,7 +95,7 @@ export class TicketBatch {
   private readonly events = new Set<string>();
 
   constructor(
-    private readonly sql: SqlStorage,
+    private readonly sql: TicketSql,
     private readonly index: TicketIndex,
     private readonly project: string,
     private readonly actor: string,
@@ -113,7 +114,7 @@ export class TicketBatch {
     };
   }
 
-  private write(query: string, ...values: SqlStorageValue[]): void {
+  private write(query: string, ...values: SqlValue[]): void {
     this.rowsWritten += this.sql.exec(query, ...values).rowsWritten;
   }
 

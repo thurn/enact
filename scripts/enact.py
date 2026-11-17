@@ -31,7 +31,7 @@ import threading
 import time
 import tomllib
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from collections.abc import Callable, Collection, Iterator
 from typing import Any, BinaryIO, TypeVar
@@ -409,6 +409,8 @@ def find_repo(cwd: Path | None = None) -> Repo:
         if top_path != main and worktree_config.is_file()
         else Config.parse(main_text)
     )
+    if ticket_url := os.environ.get("ENACT_TICKETS_URL"):
+        config = replace(config, ticket_url=ticket_url)
     return Repo(top=top_path, main=main, common=common_path, config=config)
 
 
@@ -961,8 +963,9 @@ def cmd_meta(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def cmd_backend(_args: argparse.Namespace) -> dict[str, Any]:
-    require_ticket_config(find_repo())
-    return {"backend": "server", "tk": str(ticket_binary())}
+    repo = find_repo()
+    require_ticket_config(repo)
+    return {"backend": "server", "tk": str(ticket_binary()), "url": repo.config.ticket_url}
 
 
 def handoff(comments: list[dict[str, Any]]) -> str | None:

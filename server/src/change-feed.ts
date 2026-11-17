@@ -1,3 +1,4 @@
+import type {FeedSocket, FeedTransport, TicketSql} from "./ticket-runtime";
 import type {TicketStore} from "./ticket-store";
 
 export type FeedChange = {
@@ -13,7 +14,6 @@ type ChangeRow = {seq: number; previous: number; changes: string};
 type ChangeItems = Pick<FeedChange, "tickets" | "leases" | "events"> & {resync?: true};
 type ChangeFrame = {seq: number; tickets: string[]; leases: string[]; events: string[]; cutover: string};
 
-const feedTag = "change-feed";
 const coalesceMilliseconds = 100;
 const replayTicketLimit = 500;
 const replayCommitLimit = 1_000;
@@ -38,28 +38,22 @@ function frame(changes: Iterable<FeedChange & ChangeItems>, since: number, seq: 
   return {seq, tickets: [...tickets], leases: [...leases], events: [...events], cutover};
 }
 
+export function ensureFeedJournal(sql: TicketSql): void {
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS feed_changes (
+      slot INTEGER PRIMARY KEY, seq INTEGER NOT NULL, previous INTEGER NOT NULL, changes TEXT NOT NULL
+    )
+  `);
+}
+
 export class ChangeFeed {
   private pending: FeedChange[] = [];
 
-  constructor(private readonly state: DurableObjectState, private readonly store: TicketStore) {
-    // The ticket store can already exist in a local simulator database.
-    store.sql.exec(`
-      CREATE TABLE IF NOT EXISTS feed_changes (
-        slot INTEGER PRIMARY KEY, seq INTEGER NOT NULL, previous INTEGER NOT NULL, changes TEXT NOT NULL
-      )
-    `);
+  constructor(private readonly transport: FeedTransport, private readonly store: TicketStore) {
+    ensureFeedJournal(store.sql);
   }
 
-  upgrade(request: Request): Response {
-    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
-      return Response.json({error: "Expected a WebSocket upgrade"}, {status: 400});
-    }
-    const {0: client, 1: server} = new WebSocketPair();
-    this.state.acceptWebSocket(server, [feedTag]);
-    return new Response(null, {status: 101, webSocket: client});
-  }
-
-  subscribe(socket: WebSocket, message: string | ArrayBuffer): void {
+  subscribe(socket: FeedSocket, message: string | ArrayBuffer): void {
     let since: unknown;
     try {
       if (typeof message === "string" && message.length <= 128) since = JSON.parse(message)?.since;
@@ -131,11 +125,11 @@ export class ChangeFeed {
 
   // Call only once the write has committed. No timers run while the feed is idle.
   publish(change: FeedChange): void {
-    if (!this.state.getWebSockets(feedTag).length) return;
+    if (this.transport.sockets()[Symbol.iterator]().next().done) return;
     const startWindow = this.pending.length === 0;
     this.pending.push(change);
     if (startWindow) {
-      this.state.waitUntil(new Promise<void>((resolve) => setTimeout(resolve, coalesceMilliseconds))
+      this.transport.waitUntil(new Promise<void>((resolve) => setTimeout(resolve, coalesceMilliseconds))
         .then(() => this.flush()));
     }
   }
@@ -148,14 +142,14 @@ export class ChangeFeed {
     const changes = this.pending;
     this.pending = [];
     const seq = changes[changes.length - 1].seq;
-    const cutover = this.cutover();
+    let cutover: string | undefined;
     const frames = new Map<number, string>();
-    for (const socket of this.state.getWebSockets(feedTag)) {
+    for (const socket of this.transport.sockets()) {
       const since = socket.deserializeAttachment() as number | null;
       if (since === null || since >= seq) continue;
       let message = frames.get(since);
       if (message === undefined) {
-        const reply = frame(changes, since, seq, cutover);
+        const reply = frame(changes, since, seq, cutover ??= this.cutover());
         message = reply ? JSON.stringify(reply) : resync;
         frames.set(since, message);
       }
@@ -163,7 +157,7 @@ export class ChangeFeed {
     }
   }
 
-  private send(socket: WebSocket, message: string, seq: number): void {
+  private send(socket: FeedSocket, message: string, seq: number): void {
     try {
       socket.send(message);
       socket.serializeAttachment(seq);

@@ -376,7 +376,8 @@ class TicketBackendTest(unittest.TestCase):
         self.stub = SCRIPT.with_name("tk_stub.py")
         executable = root / ("tk.cmd" if os.name == "nt" else "tk")
         self.env = {
-            **os.environ, "TK_STUB_DB": str(root / "tickets.sqlite"),
+            **os.environ,
+            "ENACT_TICKETS_URL": "", "TK_STUB_DB": str(root / "tickets.sqlite"),
             "TK_STUB_TRACE": str(self.trace), "ENACT_TK": str(executable),
             "ENACT_NO_SELF_UPDATE": "1", "ENACT_PROVIDER": "codex", "ENACT_HOST": "test-host",
         }
@@ -449,11 +450,13 @@ class TicketBackendTest(unittest.TestCase):
 
     def test_backend_requires_project_and_url(self):
         self.assertEqual(self.enact("backend"),
-                         ({"backend": "server", "tk": self.env["ENACT_TK"]}, []))
+                         ({"backend": "server", "tk": self.env["ENACT_TK"], "url": "http://fixture.test"}, []))
         self.config.write_text('[tickets]\nproject = "by"\n')
         failure, requests = self.enact("backend", code=1)
         self.assertIn("requires [tickets].project and [tickets].url", failure["error"])
         self.assertEqual(requests, [])
+        self.env["ENACT_TICKETS_URL"] = "http://127.0.0.1:7345"
+        self.assertEqual(self.enact("backend")[0]["url"], self.env["ENACT_TICKETS_URL"])
 
     def test_run_holds_and_websocket_wait_commands(self):
         epic, child = [r["id"] for r in self.tk("batch", data={"ops": [
