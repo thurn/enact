@@ -151,9 +151,11 @@ See the [task command reference](skills/enact/roles/common.md#task-backend).
 The production coordinates in Enact and Beryl are commented out. With no
 active `[tickets]` table, Enact uses Beads and the optional `bd` shim passes
 through to the original executable. For an enrolled project, configure
-`[tickets].project` and `[tickets].url` in its `.enact.toml`. Use the Worker
-root URL. A worktree’s `.enact.toml` takes precedence over the main
-checkout’s file. Bring existing worktrees up to date before pausing writes.
+`[tickets].project` and `[tickets].url` in the main checkout’s
+`.enact.toml`. Use the Worker root URL. All linked worktrees read this same
+`[tickets]` table, including worktrees created before enrollment. Other
+Enact settings, including check commands, come from the current worktree
+when it has an `.enact.toml`.
 
 Use `install` to obtain the managed `tk` path and pass it to
 `scripts/install_bd_shim.py TK REAL_BD ENTRY`. Pass the actual Beads

@@ -2081,6 +2081,9 @@ idle connection costs nothing.
 
 ### 7. Cutover state and the shim
 
+- The main checkout's `[tickets]` table enrolls the entire Git checkout
+  family. Enact, `tk`, and the shim read it from linked worktrees even when
+  those branches were checked out before enrollment.
 - The shim caches `GET /state` in a file for 5 seconds for calls that only
   read. A call that writes always fetches it first.
 - `before`: run the real `bd`. If the server cannot be reached, also run the

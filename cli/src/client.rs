@@ -56,17 +56,17 @@ impl Reply {
 
 impl Client {
     pub fn load(project: Option<&str>, actor: String, retry_for: Duration) -> Result<Self> {
-        let here = env::current_dir().map_err(usage)?;
-        Self::load_from(&here, project, actor, retry_for)
+        let (path, config) = read_config(&env::current_dir().map_err(usage)?)?;
+        Self::from_config(&path, &config, project, actor, retry_for)
     }
 
-    pub(crate) fn load_from(
-        here: &Path,
+    pub(crate) fn from_config(
+        path: &Path,
+        config: &toml::Table,
         project: Option<&str>,
         actor: String,
         retry_for: Duration,
     ) -> Result<Self> {
-        let (path, config) = read_config(here)?;
         let tickets = config.get("tickets").and_then(toml::Value::as_table);
         let field = |name| {
             tickets
@@ -267,37 +267,57 @@ pub fn http_failure(status: u16, body: &str) -> Failure {
 }
 
 pub fn read_config(here: &Path) -> Result<(PathBuf, toml::Table)> {
+    find_config(here)?.ok_or_else(|| usage("no repository .enact.toml found"))
+}
+
+pub(crate) fn find_config(here: &Path) -> Result<Option<(PathBuf, toml::Table)>> {
     for directory in here.ancestors() {
-        if let Some(config) = config_in(directory)? {
-            return Ok(config);
-        }
         let git = directory.join(".git");
         if git.is_dir() {
-            break;
+            return config_in(directory);
         }
         if git.is_file() {
-            // Match Enact's fallback for a linked worktree without a config.
-            let result = Command::new("git")
-                .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-                .current_dir(directory)
-                .output()
-                .map_err(usage)?;
-            if result.status.success() {
-                let common = String::from_utf8(result.stdout).map_err(usage)?;
-                let common = Path::new(common.trim_end_matches(['\r', '\n']));
-                let main = if common.file_name().is_some_and(|name| name == ".git") {
-                    common.parent().unwrap_or(common)
-                } else {
-                    common
-                };
-                if let Some(config) = config_in(main)? {
-                    return Ok(config);
-                }
-            }
-            break;
+            return linked_config(directory);
         }
     }
-    Err(usage("no repository .enact.toml found"))
+    // The native client also accepts a standalone config outside Git.
+    for directory in here.ancestors() {
+        if let Some(config) = config_in(directory)? {
+            return Ok(Some(config));
+        }
+    }
+    Ok(None)
+}
+
+fn linked_config(directory: &Path) -> Result<Option<(PathBuf, toml::Table)>> {
+    let result = Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(directory)
+        .output()
+        .map_err(usage)?;
+    if !result.status.success() {
+        return Err(usage(String::from_utf8_lossy(&result.stderr).trim()));
+    }
+    let common = String::from_utf8(result.stdout).map_err(usage)?;
+    let common = Path::new(common.trim_end_matches(['\r', '\n']));
+    let main = if common.file_name().is_some_and(|name| name == ".git") {
+        common.parent().unwrap_or(common)
+    } else {
+        common
+    };
+    let enrollment = config_in(main)?;
+    let Some((path, mut config)) = config_in(directory)? else {
+        return Ok(enrollment);
+    };
+    // A branch's config can supply its Git remote, but only the main checkout
+    // enrolls this repository in the ticket service.
+    config.remove("tickets");
+    if let Some((_, mut main_config)) = enrollment
+        && let Some(tickets) = main_config.remove("tickets")
+    {
+        config.insert("tickets".into(), tickets);
+    }
+    Ok(Some((path, config)))
 }
 
 fn config_in(directory: &Path) -> Result<Option<(PathBuf, toml::Table)>> {

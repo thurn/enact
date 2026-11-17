@@ -1,6 +1,6 @@
 use super::{Options, git_config, run};
 use crate::args::{Wait, WaitMode};
-use crate::client::{Client, Result, read_config, token_path, usage};
+use crate::client::{Client, Result, find_config, token_path, usage};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::ffi::{OsStr, OsString};
@@ -39,13 +39,27 @@ pub(super) fn dispatch(
         },
         None => here,
     };
-    let Ok((_, config)) = read_config(&selected) else {
+    let Some((path, config)) = find_config(&selected)? else {
         return real(args);
     };
-    if config.get("tickets").is_none() {
+    let Some(tickets) = config.get("tickets") else {
+        return real(args);
+    };
+    let tickets = tickets
+        .as_table()
+        .ok_or_else(|| usage("expected a [tickets] table"))?;
+    if tickets.get("project").is_none()
+        && tickets.get("backend").and_then(toml::Value::as_str) != Some("server")
+    {
         return real(args);
     }
-    let initial = Client::load_from(&selected, None, "bd-shim".into(), Duration::from_secs(120))?;
+    let initial = Client::from_config(
+        &path,
+        &config,
+        None,
+        "bd-shim".into(),
+        Duration::from_secs(120),
+    )?;
     let mut gate = Gate::open(initial)?;
     loop {
         // Keep the write lock until legacy bd exits, so a drain includes any

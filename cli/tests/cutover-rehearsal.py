@@ -93,7 +93,12 @@ def fixture(tk, legacy, directory, project, address, env):
     source = directory / "source"
     source.mkdir(parents=True)
     checked("git", ["init", "-q", "-b", "master"], source, env)
-    checked("git", ["commit", "-qm", "Initial commit", "--allow-empty"], source, env)
+    config = source / ".enact.toml"
+    config.write_text(f'# [tickets]\n# project = "{project}"\n# url = "{address}"\n')
+    checked("git", ["add", ".enact.toml"], source, env)
+    checked("git", ["commit", "-qm", "Initial commit"], source, env)
+    old = directory / "old-worktree"
+    checked("git", ["worktree", "add", "--detach", str(old)], source, env)
     origin = directory / "origin.git"
     checked("git", ["clone", "-q", "--bare", str(source), str(origin)], directory, env)
     checked(legacy, ["init", "--prefix", project, "--skip-agents", "--skip-hooks",
@@ -107,7 +112,8 @@ def fixture(tk, legacy, directory, project, address, env):
                                   source, env))["id"] for n in range(4)]
     checked(legacy, ["--sandbox", "close", tickets[-1], "--reason", "Complete"], source, env)
     checked("dolt", ["push", "origin", "main"], database, env)
-    (source / ".enact.toml").write_text(f'[tickets]\nproject = "{project}"\nurl = "{address}"\n')
+    assert shim.ok(sys.executable, [SCRIPTS / "enact.py", "backend"], old, env) == {"backend": "beads"}
+    config.write_text(f'[tickets]\nproject = "{project}"\nurl = "{address}"\n')
     environments = []
     for machine in MACHINES:
         home = directory / machine
@@ -118,7 +124,7 @@ def fixture(tk, legacy, directory, project, address, env):
         worker = {**env, "HOME": str(home), "APPDATA": str(home), "USERPROFILE": str(home)}
         shim.ok(tk, ["--json", "event", "machine", '{"enrolled":true}'], source, worker)
         environments.append(worker)
-    return source, database, tickets, environments
+    return source, old, database, tickets, environments
 
 
 def native(tk, source, env, *args):
@@ -126,7 +132,7 @@ def native(tk, source, env, *args):
 
 
 def exercise(tk, legacy, bd, directory, project, address, env, corpus, scenario):
-    source, database, tickets, machines = fixture(tk, legacy, directory, project, address, env)
+    source, old, database, tickets, machines = fixture(tk, legacy, directory, project, address, env)
     operator = machines[0]
     command = [str(SCRIPTS / "cutover.py")]
     if scenario == "success":
@@ -161,7 +167,7 @@ def exercise(tk, legacy, bd, directory, project, address, env, corpus, scenario)
               else ["delete", tickets[0], "--force"])
     with ExitStack() as processes:
         legacy_write = processes.enter_context(running(
-            bd, ["--sandbox", *writer], source, {**operator, "CUTOVER_WRITER": str(directory)}))
+            bd, ["--sandbox", *writer], old, {**operator, "CUTOVER_WRITER": str(directory)}))
         wait_for(lambda: (directory / "entered").exists(), legacy_write)
         cutover = processes.enter_context(running(sys.executable, arguments, source, operator))
         state_path = f"/{project}/api/state"
@@ -170,12 +176,20 @@ def exercise(tk, legacy, bd, directory, project, address, env, corpus, scenario)
         events = f"/{project}/api/events?kind=machine&since={pause['seq']}"
         assert not shim.request(address, events)
         pending = processes.enter_context(running(
-            sys.executable, [SCRIPTS / "enact.py", "backend"], source, machines[1]))
-        peer = processes.enter_context(running(tk, ["--json", "drain"], source, machines[2]))
-        finish(peer)
-        drains = shim.request(address, events)
-        assert all(event["machine"] != MACHINES[0] for event in drains), drains
+            sys.executable, [SCRIPTS / "enact.py", "backend"], old, machines[2]))
+        if scenario == "success":
+            waiting_write = processes.enter_context(running(
+                bd, ["create", "--title", "Created from an old worktree", "--json"], old, machines[1]))
+        else:
+            peer = processes.enter_context(running(tk, ["--json", "drain"], old, machines[1]))
+            finish(peer)
+        def peers_drained():
+            return {event["machine"] for event in shim.request(address, events)} == set(MACHINES[1:])
+
+        wait_for(peers_drained, pending)
         assert legacy_write.poll() is None
+        if scenario == "success":
+            assert waiting_write.poll() is None
         (directory / "release").touch()
         finish(legacy_write)
         out, _ = finish(cutover, expected=0 if scenario == "success" else 1)
@@ -187,13 +201,22 @@ def exercise(tk, legacy, bd, directory, project, address, env, corpus, scenario)
             assert json.loads(backend)["backend"] == "beads"
             print(f"{project}: a mismatch in the final comparison returned the project to Beads")
             return
+        created = json.loads(finish(waiting_write)[0])
 
     assert result["state"]["cutover"] == "after"
     assert result["final_import"]["imported"] == 1
     assert result["comparison"]["differences"] == []
     assert json.loads(backend)["backend"] == "server"
-    shown, = shim.ok(bd, ["show", tickets[0], "--json"], source, operator)
+    shown, = shim.ok(bd, ["show", tickets[0], "--json"], old, operator)
     assert shown["title"] == "Write in flight"
+    assert native(tk, old, operator, "show", created["id"])["title"] == "Created from an old worktree"
+    actor = "worktree-executor"
+    args = [SCRIPTS / "enact.py", "claim", tickets[0], "--actor", actor]
+    assert shim.ok(sys.executable, args, old, operator)["assignee"] == actor
+    assert native(tk, old, operator, "show", tickets[0])["assignee"] == actor
+    legacy_rows = json.loads(checked(legacy, ["list", "--all", "--json"], source, env))
+    assert all(row["title"] != "Created from an old worktree" for row in legacy_rows)
+    assert not next(row for row in legacy_rows if row["id"] == tickets[0]).get("assignee")
 
     # Mimic an old machine publishing after the authority switch. Also make a
     # native edit to a different ticket: unchanged legacy rows must be ignored.

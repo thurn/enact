@@ -299,12 +299,13 @@ class Config:
     ticket_url: str | None = None
 
     @staticmethod
-    def parse(text: str) -> Config:
+    def parse(text: str, *, ticket_text: str | None = None) -> Config:
         data = tomllib.loads(text)
         checks = data.get("checks", {})
         worktree = data.get("worktree", {})
         push = data.get("push", {})
-        tickets = data.get("tickets", {})
+        ticket_data = data if ticket_text is None else tomllib.loads(ticket_text)
+        tickets = ticket_data.get("tickets", {})
         backend = tickets.get("backend", "beads")
         if backend not in ("beads", "server"):
             raise Fail("[tickets] backend must be 'beads' or 'server'")
@@ -403,11 +404,16 @@ def find_repo(cwd: Path | None = None) -> Repo:
     ).stdout.strip()
     top_path, common_path = Path(top), Path(common)
     main = common_path.parent if common_path.name == ".git" else common_path
-    config = Config()
-    for candidate in (top_path / ".enact.toml", main / ".enact.toml"):
-        if candidate.is_file():
-            config = Config.parse(candidate.read_text(encoding="utf-8"))
-            break
+    main_config = main / ".enact.toml"
+    main_text = main_config.read_text(encoding="utf-8") if main_config.is_file() else ""
+    worktree_config = top_path / ".enact.toml"
+    # The main checkout enrolls the whole Git checkout family. The worktree
+    # still sets its own check commands and other branch-specific options.
+    config = (
+        Config.parse(worktree_config.read_text(encoding="utf-8"), ticket_text=main_text)
+        if top_path != main and worktree_config.is_file()
+        else Config.parse(main_text)
+    )
     return Repo(top=top_path, main=main, common=common_path, config=config)
 
 
@@ -515,7 +521,8 @@ def ticket_process(repo: Repo, *args: str, actor: str | None = None,
         cmd += ["--project", repo.config.ticket_project]
     if actor := actor or session_actor():
         cmd += ["--actor", actor]
-    # tk reads the same worktree configuration that find_repo selected.
+    # tk resolves enrollment for the whole checkout family. Use main if the
+    # worktree has no config or was removed during delivery.
     cwd = repo.top if (repo.top / ".enact.toml").is_file() else repo.main
     env = None
     if args == ("drain",):
