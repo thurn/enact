@@ -53,7 +53,9 @@ export class TokenRegistry {
       this.pending = this.refresh(repository).finally(() => { this.pending = undefined; });
     }
     await this.pending;
-    return registeredMachine(this.store.meta("token_hashes"), hash);
+    const machine = registeredMachine(this.store.meta("token_hashes"), hash);
+    console.info("Ticket token lookup", {repository, matched: machine !== undefined});
+    return machine;
   }
 
   private async refresh(repository: string): Promise<void> {
@@ -64,9 +66,16 @@ export class TokenRegistry {
         redirect: "manual",
         signal: AbortSignal.timeout(5_000),
       });
+      console.info("GitHub ticket token refs", {
+        repository,
+        status: response.status,
+        remaining: response.headers.get("x-ratelimit-remaining"),
+        retryAfter: response.headers.get("retry-after"),
+      });
       if (!response.ok) return;
       refs = await response.json();
-    } catch {
+    } catch (error) {
+      console.warn("GitHub ticket token refresh failed", {repository, error: error instanceof Error ? error.name : "unknown"});
       return;
     }
     if (!Array.isArray(refs)) return;
