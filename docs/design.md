@@ -1817,9 +1817,12 @@ the same local append and rotation as the ownership-lock log.
 
 ## Cloudflare ticket system contract
 
-This is the settled design every child ticket builds against. A ticket that
-finds it wrong changes it here, in the same session, and comments on the epic
-with what changed and why; it does not work around it.
+The ticket backend runs alongside the Beads backend. With no active
+`[tickets]` configuration, Beads owns the graph and coordination. An
+enrolled project follows the Worker's per-project cutover state unless
+the helper is explicitly configured to use the server immediately.
+See [local ticket verification](../README.md#local-ticket-verification)
+for the simulator and isolated Git tests.
 
 ### 1. Storage
 
@@ -1980,9 +1983,11 @@ transaction or none of it.
 Enact uses the `all=1` projection to keep closed worker assignments visible
 for archiving and to track their commits through slow CI. Cache each graph
 projection separately by URL, project and query. `tk graph --if-none-match`
-returns `{"unchanged": true}` on HTTP 304. For `wait change --since SEQ`,
-use that sequence in the first feed message so a change between the previous
-read and subscription wakes the caller.
+takes the opaque `etag` from a fresh graph response and returns
+`{"unchanged": true}` on HTTP 304. It belongs to that project and graph
+projection and changes when deferred readiness changes. Use the numeric
+`seq` for batch preconditions and `wait change --since SEQ`. Starting the
+feed at that sequence catches changes between the read and subscription.
 
 Status codes: 200; 304; 400 malformed; 401 missing or unknown token; 404 no
 such ticket; 409 precondition failed, claim or lease lost, or late import
@@ -2086,8 +2091,9 @@ idle connection costs nothing.
   those branches were checked out before enrollment.
 - The shim caches `GET /state` in a file for 5 seconds for calls that only
   read. A call that writes always fetches it first.
-- `before`: run the real `bd`. If the server cannot be reached, also run the
-  real `bd`.
+- `before`: run the real `bd`. The shim can still call it during an outage
+  before it has observed a pause or a switch. The enrolled Enact helper
+  requires a successful state lookup until it has recorded `after`.
 - `paused`: on first seeing it, publish the machine's bead store (`enact
   sync` with `ENACT_SYNC_NOW`) and post a `machine` event `{drained: true}`;
   then wait on the feed for the state to change.
@@ -2163,7 +2169,7 @@ tk show <id> [--comments] [--history]
 tk list [--status S] [--type T] [--parent ID] [--ancestor ID] [--label L]...
         [--assignee A] [--all] [--limit N]
 tk ready [--ancestor ID] [--label L]...
-tk graph [--all] [--if-none-match SEQ]
+tk graph [--all] [--if-none-match ETAG]
 tk create --title T [--type T] [-p N] [--parent ID] [--labels a,b]
           [--body-file F] [--acceptance A] [--design-file F] [--dep ID]... [--last]
 tk update <id> [--title T] [--status S] [-p N] [--assignee A] [--parent ID]
@@ -2231,9 +2237,10 @@ the exporter read. If the server sequence changes during pagination, retry
 the export so all pages come from the same project state.
 
 To restore, configure a checkout to reach an isolated Worker with a fresh
-project key. Give the client a write token registered for that project and
-keep other writers out until verification finishes. With `origin` as the
-backup remote, run:
+project key in its `TICKET_REPOSITORIES` allowlist. Give the client a write
+token registered for that project and keep other writers out until
+verification finishes. Use the allowlisted key in place of `recovery` below.
+With `origin` as the backup remote, run:
 
 ```sh
 git fetch origin refs/heads/ticket-backups
@@ -2290,15 +2297,22 @@ UTC. The usage row itself counts toward the limit. When the per-project row
 counter reaches its 90 percent threshold, accounting stops writing and
 public reads remain available.
 
-Rows read stay far below 5 million because live tickets are served from
-memory. Static assets are not counted as requests. The server refuses writes
-at 90 percent of a limit and the dashboard shows both counters, so a runaway
-caller is seen long before it stops the fleet.
+The combined Beryl and Enact replay model puts a busy day at 4,849,700
+SQLite rows read and 94,429 billed rows written. These are estimates for the
+account. The Worker's write guard and dashboard counters are per project.
+The estimate assumes viewers use the live dashboard and Beryl's legacy
+export pollers have stopped. See the budget evidence in Beryl's
+`by-r61mr.36`.
 
 
 ### 11. Deployment target
 
-Use the existing `tickets` Worker in Cloudflare account `0cc730645e29feff389c14f36cb9cf4c` and its enabled `thurn.workers.dev` account subdomain. Set the Worker name to `tickets` and deploy the server to `https://tickets.thurn.workers.dev/`. The existing dashboard-created version serves `Hello World!`; replace that version when the deployment bead is ready. The account subdomain and Worker route were verified through Cloudflare on 2026-11-16, and the placeholder returned HTTP 200 over HTTPS. The dashboard is at https://dash.cloudflare.com/0cc730645e29feff389c14f36cb9cf4c/workers/services/view/tickets/production. Do not create a second Worker or change the account subdomain.
+`server/wrangler.toml` names the existing `tickets` Worker on the
+`thurn.workers.dev` account subdomain and allowlists Beryl (`by`) and Enact
+(`en`). The Worker rejects unconfigured project routes before it opens
+Durable Object storage. Production activation is tracked in Beryl epic
+`by-vaexw`. The [operator steps](../README.md#ticket-enrollment-and-cutover)
+describe the deployment and enrollment gates.
 
 ## Recording Beads calls for the ticket cutover (2026-11-16)
 

@@ -2,7 +2,11 @@
 
 - Enact's skills live in `skills/` and the stdlib-only orchestration helper
   lives in `scripts/enact.py`. The ticket service is a TypeScript Cloudflare
-  Worker in `server/`. The Rust client in `cli/` builds `tk`.
+  Worker in `server/`. Its ticket store and coordination APIs live in
+  `server/src/`, its schema in `server/contract/` and simulator tests in
+  `server/tests/`. `cli/src/` builds both `tk` and the `bd` shim.
+  `scripts/cutover.py` runs the operator gates. `cli/tests/shim.rs` drives
+  the replay and isolated cutover tests.
 - Skill and role files are markdown wrapped at 80 columns. Keep
   `skills/enact/SKILL.md` under ~500 lines and each role file around 100.
 - The helper must stay stdlib-only, Python 3.11+, and work on macOS, Linux
@@ -17,10 +21,11 @@
 - For focused Rust checks, run `npm ci` and `npm run pretest` in `server/`, then
   run `cargo test --locked` in `cli/`. The CLI tests launch Wrangler locally.
   Build the release executable with `cargo build --locked --release`.
-- Set `[tickets].project` and `[tickets].url` in a project's `.enact.toml`
-  to point `tk` at its ticket server. The URL is the server root, for
-  example `https://tickets.thurn.workers.dev`. Use a local URL with
-  `tk bench` to measure fresh-process reads and writes against Wrangler.
+- Live Enact and Beryl use Beads. For simulator work, set
+  `[tickets].project` and `[tickets].url` to a local Worker in an isolated
+  Git checkout. Linked worktrees inherit enrollment from the main checkout.
+  See [local ticket verification](README.md#local-ticket-verification)
+  for the commands and slow-CI fixtures.
 - Deliver through Enact's own flow, never by committing or pushing to
   `master`: `python3 scripts/enact.py worktree create <name>` from the main
   checkout, commit in the printed worktree, then
@@ -33,8 +38,9 @@
   ends waiting on the user's answer or decision ends on `🔍 <same
   summary>`. Enact users read session state from these emojis; the host's
   activity indicator is not accessible enough to rely on.
-- Slow-CI failures file Steward beads in this repository's own Beads graph
-  (prefix `en`).
+- Slow-CI failures file one Steward task per OS in the active tracker.
+  Run `enact backend` to identify it. The live Enact project's Beads
+  prefix is `en`.
 - Projects and live sessions on every machine use this repository directly,
   so keep changes backward compatible.
 - Record design decisions in `docs/design.md`.

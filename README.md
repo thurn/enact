@@ -146,11 +146,43 @@ with `tk create --last`. The server manages readiness and parent closure.
 Beads plans use review gate epics, and imported gates retain their edges.
 See the [task command reference](skills/enact/roles/common.md#task-backend).
 
+### Local ticket verification
+
+Use Node 22.12+, Cargo and Python 3.11+ from an Enact checkout. The Worker
+and CLI tests start local simulators with isolated state. They require no
+Cloudflare login.
+
+```sh
+npm --prefix server ci
+npm --prefix server test
+cargo test --locked --manifest-path cli/Cargo.toml
+python3 -m unittest -q tests.test_unit
+```
+
+With real `bd` and `dolt` on `PATH`, run the tests normally included in
+slow CI. These exercise frozen Dolt audit history, both project cutovers,
+and Enact coordination and backup/restore with temporary Git remotes.
+
+```sh
+cargo test --locked --manifest-path cli/Cargo.toml -- --ignored
+```
+
 ### Ticket enrollment and cutover
 
-The production coordinates in Enact and Beryl are commented out. With no
-active `[tickets]` table, Enact uses Beads and the optional `bd` shim passes
-through to the original executable. For an enrolled project, configure
+Beads is authoritative for live Beryl and Enact. Both repositories ship
+the Worker coordinates as commented configuration. With no active
+`[tickets]` table, Enact uses Beads and the optional `bd` shim passes
+through to the original executable.
+
+Beryl epic `by-vaexw` tracks production activation. Native Windows
+verification (`by-r61mr.38`) gates Worker deployment and fleet enrollment
+(`by-r61mr.22`). The operator stages Beryl's import (`by-r61mr.24`), then
+switches Beryl (`by-r61mr.25`) and Enact (`by-r61mr.26`) separately.
+The legacy publisher and data stay available through the rollout and
+retention period. Their removal is tracked in `by-r61mr.29` and
+`by-r61mr.31`.
+
+For an enrolled project, configure
 `[tickets].project` and `[tickets].url` in the main checkout’s
 `.enact.toml`. Use the Worker root URL. All linked worktrees read this same
 `[tickets]` table, including worktrees created before enrollment. Other
