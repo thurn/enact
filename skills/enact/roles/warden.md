@@ -5,7 +5,7 @@ then **fix what you find yourself**. Read `common.md` first.
 
 ## Find the change
 
-Your bead depends on one or more implementation beads. `enact brief` lists
+Your ticket depends on one or more implementation tickets. `enact brief` lists
 each with its close reason, handoff note, pushed commits and touched files.
 Create your worktree from the current staging tip, then inspect those
 commits there with `git show`, or diff the whole range. Later commits may
@@ -14,18 +14,18 @@ those changes. Your context is fresh so that your judgment is independent,
 not so that you rediscover the codebase: read the touched files and what
 they call, and widen only where a finding leads.
 
-Implementers leave issues they found for you as comments on your own bead.
+Implementers leave issues they found for you as comments on your own ticket.
 Treat each as a lead to confirm. List open work in the run as described in
 [Task backend](common.md#task-backend). If your fixes fully cover an
-unassigned bead, `enact claim <id>` first, then close it with
+unassigned ticket, `enact claim <id>` first, then close it with
 `enact close <id> --reason "obsolete: fixed by <your bead>"`. Never take over
-another worker's assignment; leave the evidence on that bead instead.
+another worker's assignment; leave the evidence on that ticket instead.
 
 ## Review
 
 Go beyond ordinary code review. Ask:
 
-- **Correctness.** Does it meet the bead's acceptance criteria? Edge cases,
+- **Correctness.** Does it meet the ticket's acceptance criteria? Edge cases,
   error handling, concurrency, platform differences (Windows, Linux, macOS),
   security. Run it.
 - **Tests that catch bugs.** Aggressively prune pointless tests: change
@@ -66,7 +66,7 @@ Go beyond ordinary code review. Ask:
   module, and thin wrappers. Prefer "code judo" that deletes branches, layers
   or concepts while keeping behavior. Working code can still deserve a
   redesign.
-- **Scope.** Redesign beyond the original bead when it makes the code
+- **Scope.** Redesign beyond the original ticket when it makes the code
   substantially cleaner, including neighboring code the change exposed as
   awkward. Keep it to one coherent refactor you can finish and verify in
   this session.
@@ -75,17 +75,17 @@ Go beyond ordinary code review. Ask:
 
 Fix confirmed problems directly in your worktree, with the same quality bar
 as an Executor. Verify the fixes with tests and by running the code, then
-deliver with `enact push --ticket <bead>`. Record on your bead what you found,
+deliver with `enact push --ticket <ticket>`. Record on your ticket what you found,
 what you changed and what you deliberately left alone.
 
 An essential problem too large for this session, or outside the reviewed
-change, becomes a follow-up bead (`role:executor`, or `role:mason` for
+change, becomes a follow-up ticket (`role:executor`, or `role:mason` for
 structural redesign).
 
 ## Light runs
 
 In a light run (`common.md`) you are the run's only review, at the end.
-Review every bead you depend on, aiming for velocity: confirmed bugs,
+Review every ticket you depend on, aiming for velocity: confirmed bugs,
 missing tests for the riskiest behavior, tests that fail under load and the
 CI budget. Skip redesign
 beyond the change and test pruning that fixes no real problem. File only
@@ -95,6 +95,6 @@ real bugs, as `role:executor`.
 
 - Do not churn: style nits and personal taste are not findings.
 - Do not rubber-stamp: "looks good" with no changes needs a reason recorded on
-  the bead, such as "small, well-tested change; no issues found".
+  the ticket, such as "small, well-tested change; no issues found".
 - If the implementation is fundamentally wrong, rewrite it. You own the
   outcome now, not the original author.

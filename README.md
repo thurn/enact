@@ -2,17 +2,17 @@
 
 Enact is a minimal agent orchestration framework for **large, unattended
 project execution** from a desktop agent app (Claude Desktop, Codex
-Desktop). You hand `/enact-plan` a bead, a plan document or a task prompt;
+Desktop). You hand `/enact-plan` a ticket, a plan document or a task prompt;
 it files the work in the
 Enact ticket server and runs each task in a fresh top-level session across
 machines and model providers. Code goes through a shared Git remote.
 
-To clear a backlog, `/enact-sweep` finds stale beads (open work no live
+To clear a backlog, `/enact-sweep` finds stale tickets (open work no live
 run owns), closes the ones that shipped or no longer matter, and runs the
 rest as a vizier in the same turn.
 
-For smaller work, `/enact` runs a bead, an epic or a task prompt inside the
-current session with the same roles, using subagents for an epic's beads,
+For smaller work, `/enact` runs a ticket, an epic or a task prompt inside the
+current session with the same roles, using subagents for an epic's tickets,
 and waits for slow CI before it finishes.
 
 Enact has four skills, role prompts and a stdlib Python helper. The helper
@@ -27,8 +27,9 @@ stores the task graph and coordinates claims and leases.
 | `skills/enact/SKILL.md` | Inline execution in one session: `/enact <bead\|epic\|task>` |
 | `skills/enact/roles/*.md` | Role prompts for spawned sessions and subagents |
 | `skills/enact-setup/SKILL.md` | Machine and project setup: `/enact-setup` |
-| `skills/enact-sweep/SKILL.md` | Close stale beads, run the rest: `/enact-sweep` |
+| `skills/enact-sweep/SKILL.md` | Close stale tickets, run the rest: `/enact-sweep` |
 | `scripts/enact.py` | Helper: claims, sync, push, slow CI, locks |
+| `skills/status-dashboard/SKILL.md` | Maintain the live ticket dashboard |
 | `cli/`, `server/` | Native `tk` client and ticket Worker |
 | `templates/AGENTS.md` | Sample AGENTS.md section |
 | `docs/design.md` | Design decisions and rationale |
@@ -38,49 +39,49 @@ stores the task graph and coordinates claims and leases.
 | Role | Emoji | Started by | Job |
 | --- | --- | --- | --- |
 | Vizier | 🔮 | the user (`/enact-plan`) | Plans, then only spawns, archives and waits |
-| Executor | ⚒️ | bead | Implements a bead and pushes it to staging |
-| Warden | 🛡️ | bead | Fresh review and fixes of pushed work |
-| Steward | 🚒 | slow-CI failure bead | Makes slow CI green again |
-| Mason | 🧱 | bead (milestone gate) | Architecture audit, files beads |
-| Sage | 📖 | bead (milestone gate) | Process and tooling audit, files beads |
-| Archivist | 📜 | bead (end of a plan run) | Retires the plan, updates docs to the shipped state |
+| Executor | ⚒️ | ticket | Implements a ticket and pushes it to staging |
+| Warden | 🛡️ | ticket | Fresh review and fixes of pushed work |
+| Steward | 🚒 | slow-CI failure ticket | Makes slow CI green again |
+| Mason | 🧱 | ticket (milestone gate) | Architecture audit, files tickets |
+| Sage | 📖 | ticket (milestone gate) | Process and tooling audit, files tickets |
+| Archivist | 📜 | ticket (end of a plan run) | Retires the plan, updates docs to the shipped state |
 | Justiciar | 🔥 | `enact justiciar request` | Emergency authority, one per fleet |
 
 ## How a run works
 
 1. `/enact-plan <input> [parallelism]` makes the session the vizier. It checks
    the permission mode and plans according to the input:
-   - a **bead** runs as is (a plain bead is wrapped in an epic of its own);
+   - a **ticket** runs as is (a plain ticket is wrapped in an epic of its own);
    - a **plan document** is audited for anything that would need a human,
      those points are resolved with you, and it is filed as a full graph (an
-     epic, milestones, role-labeled beads, Warden beads, Mason/Sage gate
-     epics and a final Archivist bead);
-   - a **task prompt** becomes one executor bead, reviewed by nobody, by a
-     cold-review subagent inside the executor session, or by a Warden bead
+     epic, milestones, role-labeled tickets, Warden tickets, Mason/Sage gate
+     epics and a final Archivist ticket);
+   - a **task prompt** becomes one executor ticket, reviewed by nobody, by a
+     cold-review subagent inside the executor session, or by a Warden ticket
      for large or risky changes, unless it describes a large work item.
 2. The vizier then loops on `enact next --wait 540` inside the turn you
    started. Claude Desktop only lets a user-started turn start sessions. Each
-   loop reserves the highest-priority ready bead, starts a session for it,
-   records the session ID and archives sessions whose beads have closed.
+   loop reserves the highest-priority ready ticket, starts a session for it,
+   records the session ID and archives sessions whose tickets have closed.
 3. Each session runs `enact start`, works in a worktree cut from
    `origin/staging`, delivers with `enact push` (rebase, fast checks, push to
-   staging), files essential follow-up beads and closes its bead.
+   staging), files essential follow-up tickets and closes its ticket.
 4. `enact push` starts a coalescing slow-CI runner on the machine. A pass
-   fast-forwards `master`; a failure files one P0 Steward bead per OS,
+   fast-forwards `master`; a failure files one P0 Steward ticket per OS,
    which viziers on that OS get first.
    Local `staging` and `master` are fast-forwarded to track the remote.
-   A push outside any run, with no active vizier to pick up a Steward bead,
+   A push outside any run, with no active vizier to pick up a Steward ticket,
    prints `watch_ci`: that session waits with `enact ci --wait` and repairs
    a failure itself.
 
 ## Inline runs
 
 `/enact <input> [parallelism]` never starts another session or a
-Justiciar. A plain bead or task prompt (filed as one executor bead) is
+Justiciar. A plain ticket or task prompt (filed as one executor ticket) is
 implemented by the session itself; a large or risky change then gets a
-Warden subagent. An epic runs each ready bead in a role subagent, one at a
+Warden subagent. An epic runs each ready ticket in a role subagent, one at a
 time by default. Mason, Sage and Archivist run only when the epic already
-contains their beads. The session retitles itself with the working role's
+contains their tickets. The session retitles itself with the working role's
 emoji and waits for its last delivery to reach `master`, running a Steward
 subagent on failure. Plan documents go to `/enact-plan`.
 
@@ -163,12 +164,12 @@ python3 -m unittest -q tests.test_unit
 | Command | Purpose |
 | --- | --- |
 | `next --epic E --parallel N --wait S` | Vizier step: reserve and spawn, archive, wait, done, deadlock |
-| `start BEAD` | Session takes over its reserved bead |
+| `start BEAD` | Session takes over its reserved ticket |
 | `worktree create\|remove NAME` | Worktree from `origin/staging` (hookable) |
 | `worktree prune` | Delete dead worktrees (slow CI does this on each run) |
 | `push [--ticket B]` | Rebase, merge diverged master, fast checks, push to staging, start CI |
 | `close BEAD --reason R [--continue]` | Close the task and any finished epics. With `--continue`, claim the next task in the lane |
-| `brief BEAD` | One-read working context: bead, epics, dependency handoffs, lane |
+| `brief BEAD` | One-read working context: ticket, epics, dependency handoffs, lane |
 | `claim BEAD`, `meta BEAD k=v`, `release BEAD` | Ownership and assignment bookkeeping |
 | `backend` | Report the managed `tk` path |
 | `ci [--detach\|--status\|--wait SHA]` | Coalescing slow-CI runner; watch one delivery |

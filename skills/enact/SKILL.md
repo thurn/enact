@@ -1,7 +1,7 @@
 ---
 name: enact
 description: Execute Enact work inside this session, using subagents for
-  epics. Takes a bead ID or a task prompt and waits for slow CI before
+  epics. Takes a ticket ID or a task prompt and waits for slow CI before
   finishing. Never starts other sessions. User-invoked only. For unattended
   multi-session runs and plan documents, use /enact-plan.
 disable-model-invocation: true
@@ -11,16 +11,16 @@ disable-model-invocation: true
 
 You run Enact work in this session. Tasks, worktrees, `enact push` and slow
 CI work exactly as in `/enact-plan`, but nothing runs outside this session:
-you do bead work yourself, or hand it to subagents and wait for them. Your
+you do ticket work yourself, or hand it to subagents and wait for them. Your
 session title always shows which role is working.
 
 The invocation text is your input. It is one of:
 
-- a **plain bead ID**: you are its Executor;
-- **several bead IDs**: you are their Executor, one at a time
-  ([Several beads](#several-beads));
-- an **epic ID**: you orchestrate its beads, one subagent per bead;
-- a **task prompt**: file one executor bead, then you are its Executor.
+- a **plain ticket ID**: you are its Executor;
+- **several ticket IDs**: you are their Executor, one at a time
+  ([Several tickets](#several-beads));
+- an **epic ID**: you orchestrate its tickets, one subagent per ticket;
+- a **task prompt**: file one executor ticket, then you are its Executor.
 
 A plan document (a path) is not an input: tell the user to use
 `/enact-plan` and stop. The invocation may also give a parallelism level for
@@ -32,7 +32,7 @@ an epic (default **1**), the keyword **light** for a
 - Never start a session of any kind: no `start_session`, `create_thread`,
   scheduled task or automation, and no Justiciar. Those belong to
   `/enact-plan`. Never run `enact run register` or `enact next`.
-- Never file Mason, Sage or Archivist beads. Run those roles only for beads
+- Never file Mason, Sage or Archivist tickets. Run those roles only for tickets
   an epic already contains, and never in a light run.
 - Never end your turn while delivered work is waiting for slow CI.
 
@@ -44,7 +44,7 @@ an epic (default **1**), the keyword **light** for a
 - The helper is `python3 "$ENACT/scripts/enact.py"` (`py -3` on Windows),
   written `enact` below. Every subcommand prints one JSON object.
 - Run all commands from the project's main checkout.
-- Subagents share your session ID, so a bead you claim with `enact claim`
+- Subagents share your session ID, so a ticket you claim with `enact claim`
   is theirs to push and close.
 
 ## Titles
@@ -53,7 +53,7 @@ Title yourself with `set_session_title` on `self` (Claude Desktop; load it
 with ToolSearch first) or `set_thread_title` (Codex), as
 `<emoji> [<id>] <short summary>`:
 
-- your own role while you do bead work yourself: ⚒️ Executor;
+- your own role while you do ticket work yourself: ⚒️ Executor;
 - the running subagent's role while you wait for it: ⚒️ Executor,
   🛡️ Warden, 🚒 Steward, 🧱 Mason, 📖 Sage, 📜 Archivist; with several at
   once, all their emojis (`⚒️🛡️ [<epic>] ...`);
@@ -62,7 +62,7 @@ with ToolSearch first) or `set_thread_title` (Codex), as
 - 🔍 when your turn ends on a question or decision for the user.
 
 Retitle before each subagent starts and after it returns. `<id>` is the
-bead you are working, or the epic for an epic. Title yourself ⚒️ (🔮 for an
+ticket you are working, or the epic for an epic. Title yourself ⚒️ (🔮 for an
 epic) as soon as you start. Every way your turn ends ends on ✅, ⛔ or 🔍
 first, including the early stops below (no setup, a plan document, a
 large task, a lost claim): the user reads run state from the emoji alone.
@@ -78,8 +78,8 @@ large task, a lost claim): the user reads run state from the emoji alone.
    If it finds a task, check whether it is an epic. A file path that does
    not identify a task is a plan document. Treat other text as a task
    prompt. Resolve store access errors before classifying the input.
-5. If the invocation says to start only after other beads close ("once
-   ps-myz closes, ..."), title yourself 🔮 and run `enact wait <bead>...`
+5. If the invocation says to start only after other tickets close ("once
+   ps-myz closes, ..."), title yourself 🔮 and run `enact wait <ticket>...`
    (600000 ms tool timeout) from the project that owns them. Repeat on
    `waiting` until it reports `closed`, then continue.
 
@@ -89,7 +89,7 @@ Every implementation gets one of:
 
 - **Executor only**, for a routine change;
 - **Executor + Warden**, for a change that is large or risky (data loss,
-  concurrency, security, many files), already followed by a Warden bead, or
+  concurrency, security, many files), already followed by a Warden ticket, or
   when the user or `AGENTS.md` asks for one.
 
 A [light run](#light-runs) narrows this to at most one final Warden.
@@ -98,9 +98,9 @@ A `review:inline` label asks for a cold review: you give it yourself before
 pushing when you are the Executor, and a Warden gives it after an Executor
 subagent pushes (subagents do not start subagents).
 
-The Warden always runs in a fresh subagent on its own bead, after the
-Executor has pushed. One Warden covers related beads (several beads, a lane)
-together: most of its cost is learning the code. When no Warden bead exists
+The Warden always runs in a fresh subagent on its own ticket, after the
+Executor has pushed. One Warden covers related tickets (several tickets, a lane)
+together: most of its cost is learning the code. When no Warden ticket exists
 yet, create one with the scope in its description, verifiable
 `--acceptance`, `--labels role:warden` and, within an epic, `--parent <epic>`.
 Add an edge from the Warden to each Executor it reviews. Publish as
@@ -114,14 +114,14 @@ and review policy:
 - No Mason, Sage or Archivist work.
 - At most one review, at the end. Ignore `review:inline` labels and run no
   per-bead Wardens. Unless the whole run is one routine change, file a
-  single final Warden bead depending on every executor bead in the run.
-- Label the input bead or epic `run:light` and include it in `--labels`
+  single final Warden ticket depending on every executor ticket in the run.
+- Label the input ticket or epic `run:light` and include it in `--labels`
   when filing work for the run. Subagents read it to keep follow-ups and the
   final review light.
 - An epic: first close each unclaimed Mason, Sage, Archivist and Warden
-  bead in it (`enact claim <id>`, then `enact close <id> --reason "skipped:
-  light run"`; on exit 3 leave it). The final Warden depends on the beads
-  those Wardens would have reviewed and every open executor bead.
+  ticket in it (`enact claim <id>`, then `enact close <id> --reason "skipped:
+  light run"`; on exit 3 leave it). The final Warden depends on the tickets
+  those Wardens would have reviewed and every open executor ticket.
 
 ## A task prompt
 
@@ -133,97 +133,97 @@ that with the user now. If it
 describes a large work item (several independent pieces, phases, days of
 work), tell the user to use `/enact-plan` and stop.
 
-File one executor bead carrying the whole prompt and the answers, with
+File one executor ticket carrying the whole prompt and the answers, with
 acceptance criteria an agent can verify and `--labels role:executor`.
 Publish as described in [Task backend](roles/common.md#task-backend) and
-continue as for a plain bead.
+continue as for a plain ticket.
 
-## A plain bead
+## A plain ticket
 
 You implement it yourself, in this session.
 
-1. `enact claim <bead>`. Exit 3 means someone else holds it or it is
+1. `enact claim <ticket>`. Exit 3 means someone else holds it or it is
    closed: report that and stop.
 2. Title yourself ⚒️, then read `ROLES/common.md` and `ROLES/executor.md`
    together in one message and follow them as the Executor, with the inline rules in `common.md`.
    Outside a light run, a `review:inline` label means you run that
    cold-review subagent before pushing, as `executor.md` describes; that
    replaces the Warden.
-3. After you close the bead, decide [review](#review). For Executor +
-   Warden, claim the Warden bead and run it as a subagent
+3. After you close the ticket, decide [review](#review). For Executor +
+   Warden, claim the Warden ticket and run it as a subagent
    ([Subagents](#subagents)).
-4. Follow-up beads filed during the work are reported, not executed. Only
+4. Follow-up tickets filed during the work are reported, not executed. Only
    Steward work for slow CI runs here.
 
 Then go to [Slow CI](#slow-ci).
 
-## Several beads
+## Several tickets
 
 You implement them yourself, in the order given, keeping what you learn
 from one for the next. That is the point: do not hand them to subagents.
 
 1. Give them the same `lane:<name>` label unless they share one already.
    Publish as described in [Task backend](roles/common.md#task-backend).
-2. For each bead in turn, as in [A plain bead](#a-plain-bead): claim it,
-   retitle `⚒️ [<bead>] ...`, work it as the Executor (read the role files
-   once) and close it. Skip a bead someone else holds (claim exit 3).
-3. Then decide [review](#review) once for all of them: a Warden bead that
+2. For each ticket in turn, as in [A plain ticket](#a-plain-bead): claim it,
+   retitle `⚒️ [<ticket>] ...`, work it as the Executor (read the role files
+   once) and close it. Skip a ticket someone else holds (claim exit 3).
+3. Then decide [review](#review) once for all of them: a Warden ticket that
    depends on each.
 
 Then go to [Slow CI](#slow-ci).
 
 ## An epic
 
-Every bead in the epic runs in a subagent. You only pick, claim, title,
+Every ticket in the epic runs in a subagent. You only pick, claim, title,
 launch and check. Loop:
 
 1. Check `enact backend`. Use the returned `tk` path to run
    `tk ready --ancestor <epic> --json`. Drop epics, assigned tickets,
-   beads whose `enact_host` or `enact_provider` names another machine or provider,
-   and beads whose `lane:` label is shared by another open, assigned bead
+   tickets whose `enact_host` or `enact_provider` names another machine or provider,
+   and tickets whose `lane:` label is shared by another open, assigned ticket
    (that lane's subagent will reach them). Hold legacy
-   Archivists until every other bead in the epic is closed. The ticket
+   Archivists until every other ticket in the epic is closed. The ticket
    server handles readiness for Archivists with the `last` flag.
 2. Nothing ready: if every descendant is closed, the epic is done. If open
-   beads remain and no subagent of yours is running, the run is
-   deadlocked or held elsewhere: report the open beads and stop (⛔).
-3. Take the highest-priority bead; among equals, the one with the longest
-   chain of open beads waiting on it, then the lowest number. Or take up
-   to the parallelism level of beads that will not edit the same code.
-   `enact claim <bead>` each; on exit 3 skip it.
-4. Title yourself with the running roles and launch one subagent per bead.
-   The role is the bead's `role:` label (`executor` when unlabeled).
-5. When a subagent returns, check its bead and any lane beads it went on
+   tickets remain and no subagent of yours is running, the run is
+   deadlocked or held elsewhere: report the open tickets and stop (⛔).
+3. Take the highest-priority ticket; among equals, the one with the longest
+   chain of open tickets waiting on it, then the lowest number. Or take up
+   to the parallelism level of tickets that will not edit the same code.
+   `enact claim <ticket>` each; on exit 3 skip it.
+4. Title yourself with the running roles and launch one subagent per ticket.
+   The role is the ticket's `role:` label (`executor` when unlabeled).
+5. When a subagent returns, check its ticket and any lane tickets it went on
    to claim with `show --json` on the active CLI. If one is still open, read
-   the subagent's summary and the bead's comments. If the work can continue,
-   launch one fresh subagent for the same bead; if not
-   (or the second one also stops), comment the state on the bead, run
-   `enact release <bead> --reason "..."`, and stop with a report (⛔).
-6. Outside a light run, a closed Executor bead labeled `review:inline` with
-   no Warden bead after it gets one now ([Review](#review)), filed under
+   the subagent's summary and the ticket's comments. If the work can continue,
+   launch one fresh subagent for the same ticket; if not
+   (or the second one also stops), comment the state on the ticket, run
+   `enact release <ticket> --reason "..."`, and stop with a report (⛔).
+6. Outside a light run, a closed Executor ticket labeled `review:inline` with
+   no Warden ticket after it gets one now ([Review](#review)), filed under
    the same parent.
-7. Follow-up beads subagents file under the epic join the loop by
+7. Follow-up tickets subagents file under the epic join the loop by
    themselves. Repeat.
 
-Then go to [Slow CI](#slow-ci). Closing the last bead closes the epic.
+Then go to [Slow CI](#slow-ci). Closing the last ticket closes the epic.
 
 ## Subagents
 
 Use a general-purpose subagent with a fresh context (Claude: the Agent tool;
 Codex: a spawned agent) and this prompt, filled in:
 
-> You are the `<emoji>` `<Role>` for bead `<bead>` in an inline Enact run.
+> You are the `<emoji>` `<Role>` for ticket `<ticket>` in an inline Enact run.
 > Read `<ROLES>/common.md` and `<ROLES>/<role>.md` together in one message
 > and follow them,
 > including the inline-run rules in `common.md`. The helper is
-> `<enact command>`; the project's main checkout is `<path>`. The bead is
+> `<enact command>`; the project's main checkout is `<path>`. The ticket is
 > already claimed for you; if it has a `lane:` label, keep working its lane
 > with `enact close --continue`. Work unattended: nobody will answer
-> questions. End with a short summary: outcome per bead, each `staging` SHA
-> you pushed, and any follow-up beads you filed.
+> questions. End with a short summary: outcome per ticket, each `staging` SHA
+> you pushed, and any follow-up tickets you filed.
 
-Pass nothing else: no opinion of the work, no plan beyond the bead. Note
-each pushed `staging` SHA from the summary or the bead's `enact_commits`.
+Pass nothing else: no opinion of the work, no plan beyond the ticket. Note
+each pushed `staging` SHA from the summary or the ticket's `enact_commits`.
 
 ## Slow CI
 
@@ -233,7 +233,7 @@ one, so the newest SHA covers them all.
 
 1. Title yourself 🔮 and run `enact ci --wait <sha>` (600000 ms tool
    timeout). Repeat on `waiting` until it reports `passed`.
-2. On `failed`: `enact claim <steward bead>` for each listed Steward bead,
+2. On `failed`: `enact claim <steward bead>` for each listed Steward ticket,
    title yourself 🚒 and run it as a Steward subagent. Then wait the same
    way on the SHA its fix pushed.
 
@@ -245,8 +245,8 @@ one, so the newest SHA covers them all.
   core tool broken) stops the run: report the evidence to the user. Never
   request or start a Justiciar.
 - A user stop: let a running subagent finish or interrupt it, leave its
-  bead's state in a comment, release beads nobody is working, and report.
-- Finish with a short report: what shipped (beads, SHAs), follow-ups filed
+  ticket's state in a comment, release tickets nobody is working, and report.
+- Finish with a short report: what shipped (tickets, SHAs), follow-ups filed
   and not run, the slow-CI result, and anything for the user to look at.
 
 ## Reference

@@ -1,4 +1,4 @@
-"""Fast tests: helper behavior that needs no git or Beads."""
+"""Fast tests: helper behavior that needs no git or Tickets."""
 
 import importlib.util
 import datetime as dt
@@ -412,7 +412,7 @@ class ConfigTest(unittest.TestCase):
         self.assertIsNone(cfg.worktree_remove)
         self.assertEqual(cfg.role_settings("warden", "claude"), {"model": "opus", "effort": "max"})
         self.assertEqual(cfg.role_settings("warden", "codex"), {})
-        # A bead's tier overrides its role's model; unknown tiers change nothing.
+        # A ticket's tier overrides its role's model; unknown tiers change nothing.
         self.assertEqual(cfg.role_settings("warden", "claude", "light"),
                          {"model": "sonnet", "effort": "max"})
         self.assertEqual(cfg.role_settings("executor", "claude", "heavy"), {})
@@ -1012,7 +1012,7 @@ class VizierLeaseTest(unittest.TestCase):
         stalled = enact.stalled_workers(inflight)
         self.assertEqual([(s["bead"], s["session"], s["tier"]) for s in stalled],
                          [("a", "s1", 1), ("d", "s4", 2)])
-        self.assertIn("bead a", stalled[0]["nudge"])
+        self.assertIn("ticket a", stalled[0]["nudge"])
 
     def test_a_worker_seen_running_is_not_flagged_again_until_the_long_period(self):
         # The vizier saw this worker's turn running and passed `--running a`.
@@ -1025,9 +1025,9 @@ class VizierLeaseTest(unittest.TestCase):
         quiet = bead(short + 60)
         marks = enact.running_marks(quiet, {"a"})
         self.assertEqual(enact.stalled_workers(quiet, marks), [])
-        # Marks carry over between calls while the bead stays untouched...
+        # Marks carry over between calls while the ticket stays untouched...
         self.assertEqual(enact.running_marks(quiet, marks), marks)
-        # ...and any bead update drops them, back to the short check.
+        # ...and any ticket update drops them, back to the short check.
         self.assertEqual(enact.running_marks(bead(short + 120), marks), set())
         busy = bead(long - 60)
         self.assertEqual(enact.stalled_workers(busy, enact.running_marks(busy, {"a"})), [])
@@ -1066,7 +1066,7 @@ class VizierLeaseTest(unittest.TestCase):
         self.assertIn("stall_notice", first)
         self.assertNotIn("stalled", step(stall))  # already reported
         self.assertEqual(step({**stall, "tier": 2})["stalled"][0]["tier"], 2)
-        step()  # the worker touched its bead: the stall is forgotten
+        step()  # the worker touched its ticket: the stall is forgotten
         self.assertEqual(step(stall)["stalled"], [stall])
 
     def test_a_new_stall_ends_a_background_wait_early(self):
@@ -1224,7 +1224,7 @@ class VizierLeaseTest(unittest.TestCase):
                                                        "enact_run": "e"}}, graph)
         with self.assertRaises(enact.Fail):
             enact.require_running(steward, graph, "o")
-        # The run's own pause, or one on a milestone the bead sits in, holds.
+        # The run's own pause, or one on a milestone the ticket sits in, holds.
         held_epic = self.epic(metadata=paused)
         self.assertEqual([b["id"] for b in enact.run_holds(steward, [held_epic, other, steward],
                                                            "e")], ["e"])
@@ -1254,7 +1254,7 @@ class VizierLeaseTest(unittest.TestCase):
         # The vizier that once ran the run stopped renewing its lease.
         self.lease(enact.VIZIER_LEASE_SECONDS + 1)
         self.assertEqual(self.unowned(self.epic(), self.steward()), ["s"])
-        # The assignee neither holds a lease nor touched the bead lately.
+        # The assignee neither holds a lease nor touched the ticket lately.
         self.assertEqual(self.unowned(self.steward(assignee="gone")), ["s"])
         closed = {**self.steward(), "status": "closed"}
         self.assertEqual(self.unowned(closed), [])
@@ -1289,7 +1289,7 @@ class VizierLeaseTest(unittest.TestCase):
         worker = {"id": "b", "parent": "e", "metadata": {}}
         spawned = {"id": "c", "metadata": {"enact_vizier": "v", "enact_run": "e"}}
         watched = functools.partial(enact.bead_watched, self.repo, [epic, worker, spawned])
-        # An ad hoc push, or a bead whose vizier stopped renewing, is not.
+        # An ad hoc push, or a ticket whose vizier stopped renewing, is not.
         self.assertFalse(watched({}))
         self.assertFalse(watched(worker))
         self.assertFalse(watched(spawned))
@@ -1709,7 +1709,7 @@ class CommandPolicyTest(unittest.TestCase):
 
     def test_pool_vizier_reuses_members_instead_of_starting_sessions(self):
         # Claude Desktop caps a session at ten starts per user message, all
-        # in user-started turns, so a pool vizier hands beads to idle members.
+        # in user-started turns, so a pool vizier hands tickets to idle members.
         epic = self.a.create("pool", type="epic")
         beads = [self.a.create(f"b{i}", parent=epic, priority=i) for i in range(3)]
         self.a.enact("pool", "add", *[f"local_{i}" for i in range(11)], code=3)

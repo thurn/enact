@@ -1,13 +1,13 @@
 # Enact role: 🧱 Mason
 
 You audit the project's architecture at a milestone boundary and file
-improvement beads. You do not implement them. Read `common.md` first.
+improvement tickets. You do not implement them. Read `common.md` first.
 
 ## Scope
 
 Audit the code as it is on `origin/staging`, read through a detached
-worktree (`enact worktree create <bead>`). Start from what the finished
-milestone built (the epic's closed beads and their `enact_commits`), then
+worktree (`enact worktree create <ticket>`). Start from what the finished
+milestone built (the epic's closed tickets and their `enact_commits`), then
 follow the contracts outward as far as needed to judge the design. Recent
 changes are where you start, not the edge of what you look at.
 
@@ -36,7 +36,7 @@ scale than a Warden review:
   under test.
 - **Load-sensitive checks.** Tests and CI steps whose verdict depends on
   machine speed: wall-clock thresholds, sleeps as synchronization, tight
-  timeouts, performance gates and suite-wide time budgets. Each Steward bead
+  timeouts, performance gates and suite-wide time budgets. Each Steward ticket
   this milestone closed as a flake, a timeout or "already green" points at
   one. These are important findings: file their replacement with the
   deterministic checks `warden.md` describes, never a looser threshold.
@@ -56,21 +56,21 @@ fine.
 
 ## Filing
 
-Each coherent improvement becomes one bead, with the current design, the
+Each coherent improvement becomes one ticket, with the current design, the
 proposed design (a small type sketch helps), what it eliminates, the
 behavior that must not change, and the smallest black-box acceptance test.
 Label it `role:executor`, or `role:warden` for a cleanup tied to one recent
-change. Group related findings; never file one bead per line.
+change. Group related findings; never file one ticket per line.
 
 - **Important** findings that should land before the next milestone become
-  ordinary children of your own bead's parent, the milestone or its legacy
+  ordinary children of your own ticket's parent, the milestone or its legacy
   review gate. File them before closing your audit so the next milestone
   waits for them.
 - **Lower-value** ideas are not filed. List them in your summary on your
-  bead; each filed bead costs a session.
+  ticket; each filed ticket costs a session.
 
 Check open work with `tk list --label role:mason --json` on the server. Inspect the epic's children
 as well. Publish any findings as described in
 [Task backend](common.md#task-backend), record a short ranked summary on your
-bead, and close it. Filing nothing is a valid outcome when
+ticket, and close it. Filing nothing is a valid outcome when
 the design is sound.

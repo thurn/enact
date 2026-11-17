@@ -215,7 +215,7 @@ def session_aliases() -> set[str]:
 
 
 def as_owner(actor: str, bead: dict[str, Any]) -> str:
-    """The bead's assignee or bound session when it is another name for actor."""
+    """The ticket's assignee or bound session when it is another name for actor."""
     aliases = session_aliases()
     if actor in aliases:
         for name in (bead.get("assignee"), meta(bead, "enact_session"),
@@ -242,7 +242,7 @@ def require_actor(explicit: str | None) -> str:
 # Worktrees live inside the main checkout, ignored by git.
 DEFAULT_WORKTREE_ROOT = ".worktrees"
 # Tiers every project has without configuring them: a Claude model by name, so a plan can
-# assign beads to models with `tier:fable`, `tier:opus` and `tier:sonnet`. A project's own
+# assign tickets to models with `tier:fable`, `tier:opus` and `tier:sonnet`. A project's own
 # `[tiers.<name>.<provider>]` overrides one; another provider's sessions keep their role's
 # settings unless the project maps the tier for them.
 BUILTIN_TIERS: dict[str, dict[str, dict[str, str]]] = {
@@ -278,7 +278,7 @@ class Config:
     worktree_root: str = DEFAULT_WORKTREE_ROOT
     worktree_create: str | None = None
     worktree_remove: str | None = None
-    # How many fixed `slot-NN` directories bead worktrees are drawn from; 0 gives each bead
+    # How many fixed `slot-NN` directories ticket worktrees are drawn from; 0 gives each ticket
     # a new directory, as before.
     worktree_slots: int = 0
     # `[push] queue = true` lands pushes through the host's merge queue (`run_queue`): one
@@ -330,7 +330,7 @@ class Config:
 
     def role_settings(self, role: str, host_provider: str,
                       tier: str | None = None) -> dict[str, str]:
-        """Model settings for a spawn: the role's, overridden by the bead's
+        """Model settings for a spawn: the role's, overridden by the ticket's
         `tier:<name>` label when that tier is built in or the project configures it."""
         settings: dict[str, str] = {}
         for table, key in ((self.roles, role), (BUILTIN_TIERS, tier), (self.tiers, tier)):
@@ -689,12 +689,12 @@ def role_of(bead: dict[str, Any]) -> str:
     return label_value(bead, "role") or "executor"
 
 
-# Dependency types that keep a bead out of the ready list until the other closes.
+# Dependency types that keep a ticket out of the ready list until the other closes.
 BLOCKING_DEPS = frozenset({"blocks", "conditional-blocks", "waits-for"})
 
 
 def blockers(bead: dict[str, Any]) -> list[str]:
-    """IDs of the beads this one waits on. Ticket list and detail responses spell
+    """IDs of the tickets this one waits on. Ticket list and detail responses spell
     dependency entries differently."""
     return [dep.get("depends_on_id") or dep.get("id")
             for dep in bead.get("dependencies") or []
@@ -702,9 +702,9 @@ def blockers(bead: dict[str, Any]) -> list[str]:
 
 
 def chain_lengths(graph: list[dict[str, Any]]) -> dict[str, int]:
-    """For each open bead, how many open beads the longest chain of blocking
+    """For each open ticket, how many open tickets the longest chain of blocking
     edges starting at it holds, itself included. Starting the longest chain
-    first keeps the run from ending on one bead at a time."""
+    first keeps the run from ending on one ticket at a time."""
     open_ids = {b["id"] for b in graph if b.get("status") not in ("closed", "deferred")}
     dependents: dict[str, set[str]] = {}
     for bead in graph:
@@ -729,8 +729,8 @@ def chain_lengths(graph: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def spawn_order(bead: dict[str, Any], chains: dict[str, int] | None = None) -> tuple[Any, ...]:
-    """Stewards first, then priority, then the longest chain of open beads
-    waiting on it (see `chain_lengths`), then lowest bead number
+    """Stewards first, then priority, then the longest chain of open tickets
+    waiting on it (see `chain_lengths`), then lowest ticket number
     (ps-e8r.9 < .10)."""
     number = [int(p) if p.isdigit() else p for p in re.split(r"(\d+)", bead["id"])]
     chain = (chains or {}).get(bead["id"], 1)
@@ -764,7 +764,7 @@ def targeted_here(bead: dict[str, Any]) -> bool:
 
 
 def stranded(repo: Repo, bead: dict[str, Any], epic: dict[str, Any]) -> bool:
-    """A bead pinned to a host or provider that no vizier registered on the
+    """A ticket pinned to a host or provider that no vizier registered on the
     run serves. Nothing will pick it up, so it must not hold the run. A route
     on this machine serves only while its vizier's lease is fresh; another
     machine's leases cannot be read here, so its routes still count."""
@@ -822,7 +822,7 @@ def reserve_ticket(beads: Tickets, bead: dict[str, Any], actor: str,
 
 
 def claim(repo: Repo, bead_id: str, actor: str, extra_meta: dict[str, str]) -> bool:
-    """Claim a bead fleet-wide. Returns False when another actor won."""
+    """Claim a ticket fleet-wide. Returns False when another actor won."""
     beads = Tickets(repo)
     graph, seq = beads.ticket_graph()
     bead = next((b for b in graph if b["id"] == canonical_ticket_id(repo, bead_id)), None)
@@ -967,7 +967,7 @@ def cmd_backend(_args: argparse.Namespace) -> dict[str, Any]:
 
 
 def handoff(comments: list[dict[str, Any]]) -> str | None:
-    """A finished bead's note for its successors: the latest comment starting
+    """A finished ticket's note for its successors: the latest comment starting
     with "Handoff", else its latest comment."""
     texts = [c.get("text") or "" for c in comments]
     notes = [t for t in texts if t.lower().startswith("handoff")]
@@ -975,7 +975,7 @@ def handoff(comments: list[dict[str, Any]]) -> str | None:
 
 
 def cmd_brief(args: argparse.Namespace) -> dict[str, Any]:
-    """Everything a session needs to start on a bead, in one compact read,
+    """Everything a session needs to start on a ticket, in one compact read,
     instead of several separate ticket reads."""
     repo = find_repo()
     beads = Tickets(repo)
@@ -1044,7 +1044,7 @@ def descendants(graph: list[dict[str, Any]], root: str) -> list[dict[str, Any]]:
 
 
 def archivist_waits(run: list[dict[str, Any]]) -> bool:
-    """Hold legacy Archivist beads until the rest of the run's work closes."""
+    """Hold legacy Archivist tickets until the rest of the run's work closes."""
     return any(
         b.get("status") != "closed" and b.get("issue_type") != "epic" and role_of(b) != "archivist"
         for b in run
@@ -1054,9 +1054,9 @@ def archivist_waits(run: list[dict[str, Any]]) -> bool:
 def bead_runs(bead: dict[str, Any], graph: list[dict[str, Any]],
               by_id: dict[str, dict[str, Any]] | None = None) -> list[str]:
     """Explicit run links also cover unparented Stewards; infer old runs.
-    A caller that asks about many beads of one graph passes `by_id`, the
+    A caller that asks about many tickets of one graph passes `by_id`, the
     graph indexed by id: building it on every call made `run_delivery`
-    quadratic in the graph (3-4.5 s per `next` poll at 4,600 beads, held
+    quadratic in the graph (3-4.5 s per `next` poll at 4,600 tickets, held
     under the ownership lock, and six minutes for `status`)."""
     runs = (meta(bead, "enact_runs") or "").split()
     if meta(bead, "enact_run"):
@@ -1074,14 +1074,14 @@ def bead_runs(bead: dict[str, Any], graph: list[dict[str, Any]],
 
 
 # A lane continuation copies these so the vizier and archive
-# bookkeeping see the next bead as the same session's work.
+# bookkeeping see the next ticket as the same session's work.
 LANE_CARRY = ("enact_run", "enact_vizier", "enact_spawn_host", "enact_spawn_provider",
               "enact_spawn_app", "enact_spawn_project", "enact_session", "enact_actor",
               "enact_pool_session")
 
 
 def same_lane(bead: dict[str, Any], other: dict[str, Any], graph: list[dict[str, Any]]) -> bool:
-    """Another bead with the same `lane:<name>` label in the same run."""
+    """Another ticket with the same `lane:<name>` label in the same run."""
     lane = label_value(bead, "lane")
     return (bool(lane) and other["id"] != bead["id"] and label_value(other, "lane") == lane
             and bool(set(bead_runs(bead, graph)) & set(bead_runs(other, graph))))
@@ -1094,7 +1094,7 @@ def lane_held(bead: dict[str, Any], graph: list[dict[str, Any]]) -> bool:
 
 
 def busy_sessions(graph: list[dict[str, Any]]) -> set[str]:
-    """Sessions still holding an open bead: never archive or reuse them."""
+    """Sessions still holding an open ticket: never archive or reuse them."""
     return {meta(b, key) or "" for b in graph for key in ("enact_session", "enact_pool_session")
             if b.get("status") != "closed" and b.get("assignee")} - {""}
 
@@ -1106,7 +1106,7 @@ def busy_sessions(graph: list[dict[str, Any]]) -> set[str]:
 # message, and only in a turn the user started. Enact cannot tell turns
 # apart, so `pool add`, which records one turn's starts, refuses more than
 # POOL_LIMIT at once; `started` counts every member ever added, for
-# reporting only. A vizier therefore starts a fixed pool in its first turn and hands every bead to an idle member with
+# reporting only. A vizier therefore starts a fixed pool in its first turn and hands every ticket to an idle member with
 # clear_session and send_message, which work from any turn. The pool is
 # machine-local state per vizier; which members are busy comes from the graph.
 
@@ -1136,7 +1136,7 @@ def save_pool(repo: Repo, vizier: str, pool: dict[str, Any]) -> None:
 
 def idle_members(pool: dict[str, Any], graph: list[dict[str, Any]],
                  justiciar: dict[str, Any] | None) -> list[str]:
-    """Members holding no open bead, no Justiciar duty and no rest, in turn."""
+    """Members holding no open ticket, no Justiciar duty and no rest, in turn."""
     busy = busy_sessions(graph)
     if justiciar and justiciar.get("pool_session"):
         busy.add(justiciar["pool_session"])
@@ -1185,7 +1185,7 @@ def cmd_pool(args: argparse.Namespace) -> dict[str, Any]:
 def continue_lane(repo: Repo, beads: Tickets, closed: dict[str, Any], actor: str,
                   snapshot: tuple[list[dict[str, Any]], int, list[str]]
                   ) -> dict[str, Any] | None:
-    """Claim the next ready bead of the closed bead's lane for the same session."""
+    """Claim the next ready ticket of the closed ticket's lane for the same session."""
     if not label_value(closed, "lane"):
         return None
     graph = snapshot[0]
@@ -1231,7 +1231,7 @@ def run_delivery(repo: Repo, graph: list[dict[str, Any]], epic: str,
     members = [b for b in graph
                if b["id"] in scope or epic in bead_runs(b, graph, by_id)]
     # Failure ranges also recover links when delivery metadata arrived after
-    # CI filed the bead. Explicit run links need not be exhaustive.
+    # CI filed the ticket. Explicit run links need not be exhaustive.
     while True:
         commits = list(dict.fromkeys(
             sha for b in members for sha in (meta(b, "enact_commits") or "").split()
@@ -1307,8 +1307,8 @@ def stopped_runs(bead: dict[str, Any], graph: list[dict[str, Any]],
 
 def run_holds(bead: dict[str, Any], graph: list[dict[str, Any]],
               epic: str) -> list[dict[str, Any]]:
-    """What holds `bead` within the run `epic`: a pause or block on the run,
-    on a milestone above the run, or on a milestone the bead sits in. A
+    """What holds `ticket` within the run `epic`: a pause or block on the run,
+    on a milestone above the run, or on a milestone the ticket sits in. A
     Steward that repairs slow CI for several runs links all of them, and
     `stopped_runs` reports a hold on any of them; that hold belongs to the
     other run and must not stop this one (Beryl by-jj37: a shared Steward
@@ -1450,10 +1450,10 @@ def seconds_since(stamp: str | None) -> float | None:
 
 def unowned_stewards(repo: Repo, graph: list[dict[str, Any]],
                      deliveries: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    """Open Steward beads for this machine's slow-CI failures that nobody is
+    """Open Steward tickets for this machine's slow-CI failures that nobody is
     repairing. A live vizier here covers a Steward it would schedule: one
     without a parent, or one in its run's delivery. Otherwise an assignee
-    counts as owner while its own lease is fresh or it touched the bead
+    counts as owner while its own lease is fresh or it touched the ticket
     within a lease's lifetime; an assignee that did neither is presumed gone."""
     live = [b for b in graph if b.get("issue_type") == "epic" and run_live(repo, b, graph)]
     unowned = []
@@ -1476,9 +1476,9 @@ def unowned_stewards(repo: Repo, graph: list[dict[str, Any]],
 
 
 def bead_watched(repo: Repo, graph: list[dict[str, Any]], bead: dict[str, Any]) -> bool:
-    """Fresh evidence that a vizier will repair slow CI for this bead's push:
+    """Fresh evidence that a vizier will repair slow CI for this ticket's push:
     the vizier that spawned it still renews its lease on that run, or some
-    run the bead belongs to is live. Without that evidence the pushing
+    run the ticket belongs to is live. Without that evidence the pushing
     session watches slow CI itself: a needless watch costs it some waiting,
     while a missing one left Beryl's master stuck for hours."""
     vizier, run = meta(bead, "enact_vizier"), meta(bead, "enact_run")
@@ -1513,7 +1513,7 @@ def stale_runs(repo: Repo, graph: list[dict[str, Any]],
     """Unfinished runs whose vizier on this machine stopped renewing its lease:
     every route is on this host and none has a fresh lease. A run with a
     route on another host is left alone, since that host's leases cannot be
-    read here. Each entry has the epic bead and its delivery.
+    read here. Each entry has the epic ticket and its delivery.
 
     Only an epic a vizier registered (`enact run register`) is a run here.
     Routes inferred from workers do not count: slow CI lists every epic a
@@ -1636,7 +1636,7 @@ def spawn_prompt(role: str, bead: dict[str, Any], epic: str, vizier: str) -> str
     start = f"enact start {bead['id']}" + (f" --reservation {token}" if token else "")
     return (
         f"You are an Enact {role} session (emoji {EMOJI.get(role, '')}). "
-        f"Your bead is {bead['id']} ({bead.get('title', '')}) in epic {epic}; "
+        f"Your ticket is {bead['id']} ({bead.get('title', '')}) in epic {epic}; "
         f"you were started by vizier {vizier} on host {host_name()}.\n\n"
         f"Your first message reads {ROLES_DIR / 'common.md'} and "
         f"{ROLES_DIR / (role + '.md')} together and runs `{start}` beside them, "
@@ -1675,7 +1675,7 @@ def spawn_action(repo: Repo, bead: dict[str, Any], epic: str, vizier: str) -> di
 
 
 # Restated on Claude spawns that name a model, so it survives the vizier's
-# context compaction (the 2026-11-10 tier:fable bead ran on Opus).
+# context compaction (the 2026-11-10 tier:fable ticket ran on Opus).
 MODEL_REQUIRED = (
     "settings.model is required, never a hint. Claude Desktop: start_session "
     "silently ignores a model pricier than yours, so start the child with the "
@@ -1691,15 +1691,15 @@ POOL_NOTICE = (
     "batched: clear_session `session`; only once the clear succeeds, "
     "set_session_model (and set_session_effort) to settings, or to your own model "
     "and effort when settings names none, confirming a required model with "
-    "get_session; send `prompt` with send_message; then record `enact meta <bead> "
-    "enact_session=<session> --reservation <token>` (no bead for a Justiciar). If "
+    "get_session; send `prompt` with send_message; then record `enact meta <ticket> "
+    "enact_session=<session> --reservation <token>` (no ticket for a Justiciar). If "
     "clear or send is refused because the session is busy, pinned or open on "
     "screen, run `enact pool rest <session>` and leave its model alone (a model "
     "change before a clear blocks clearing until the session runs a turn; an "
     "idle session refused for live work recovers after you send it 'Reply only "
     "`ok` and end your turn.'); if it is archived or missing, "
     "`enact pool drop <session>`. Then release the reservation: `enact release "
-    "<bead> --reservation <token> --reason \"<refusal>\"` (for a Justiciar, "
+    "<ticket> --reservation <token> --reason \"<refusal>\"` (for a Justiciar, "
     "`enact justiciar break` and request it again)."
 )
 
@@ -1716,7 +1716,7 @@ POOL_REMINDER = (
 LOOP_REMINDER = (
     "Vizier loop: act on this result (archive listed sessions and record "
     "enact_archived=true; start one session per spawn action and record its "
-    "id with `enact meta <bead> enact_session=<id> --reservation <token>` "
+    "id with `enact meta <ticket> enact_session=<id> --reservation <token>` "
     "using that spawn action's reservation), then run `enact next` "
     "again with the same arguments. Never end your turn before action: done, paused or blocked, "
     "including when the epic is closed but delivery or Steward repairs are pending. "
@@ -1736,10 +1736,10 @@ CODEX_LOOP_REMINDER = (
 STALL_NOTICE = (
     "Stalled workers: for each `stalled` entry, check that session (get_session "
     "in Claude Desktop, read_thread in Codex). If its turn is still running, "
-    "leave it and add `--running <bead>` to your next `enact next` call, so it "
+    "leave it and add `--running <ticket>` to your next `enact next` call, so it "
     "is not listed again for 90 minutes. If it is idle, send it `nudge` "
     "verbatim with send_message (a Codex follow-up). If it is archived or "
-    "missing, release the bead with `enact release --inactive` as for any lost "
+    "missing, release the ticket with `enact release --inactive` as for any lost "
     "worker. Each entry is listed once per stall period."
 )
 
@@ -1924,7 +1924,7 @@ def schedule(repo: Repo, epic: str, parallel: int, vizier: str,
     return {**result, "action": "wait", "reason": "scheduled work" if scheduled else "nothing ready"}
 
 
-# A worker bound to an open bead that has not touched it for this long may
+# A worker bound to an open ticket that has not touched it for this long may
 # have ended its turn without finishing (Beryl by-bajq: two workers waited
 # hours on servers that never exit). Only the host knows whether the session
 # is idle, so the vizier checks before nudging.
@@ -1935,9 +1935,9 @@ STALL_SECONDS = 90 * 60
 IDLE_STALL_SECONDS = 15 * 60
 
 STALL_NUDGE = (
-    "Enact: bead {bead} has had no update for {minutes} minutes and your turn "
+    "Enact: ticket {bead} has had no update for {minutes} minutes and your turn "
     "has ended. If you are waiting on a background command that never exits "
-    "(a server, watcher or REPL), stop it and continue the bead. If you were "
+    "(a server, watcher or REPL), stop it and continue the ticket. If you were "
     "waiting on a job that has since finished, read its result and continue. "
     "Otherwise continue it, or close or release it as your role says."
 )
@@ -1949,8 +1949,8 @@ def running_mark(bead: dict[str, Any]) -> str:
 
 def running_marks(inflight: list[dict[str, Any]], running: Collection[str]) -> set[str]:
     """Tickets whose worker the vizier last saw with its turn still running.
-    `running` holds marks kept from earlier calls and bead IDs just reported
-    with `--running`. A mark names the bead's `updated_at`, so any bead
+    `running` holds marks kept from earlier calls and ticket IDs just reported
+    with `--running`. A mark names the ticket's `updated_at`, so any ticket
     update drops it."""
     current = {running_mark(bead) for bead in inflight}
     marks = {mark for mark in running if mark in current}
@@ -1960,7 +1960,7 @@ def running_marks(inflight: list[dict[str, Any]], running: Collection[str]) -> s
 
 def stalled_workers(inflight: list[dict[str, Any]],
                     running: Collection[str] = ()) -> list[dict[str, Any]]:
-    """Bound open beads untouched for IDLE_STALL_SECONDS, or STALL_SECONDS
+    """Bound open tickets untouched for IDLE_STALL_SECONDS, or STALL_SECONDS
     once the vizier has seen the worker's turn running (`running` marks).
     `tier` counts whole periods, so each period is reported once and a nudge
     that did not help surfaces again one period later."""
@@ -2053,7 +2053,7 @@ def next_step(repo: Repo, args: argparse.Namespace, vizier: str) -> dict[str, An
 
 
 def cmd_wait(args: argparse.Namespace) -> dict[str, Any]:
-    """Block until every named bead is closed, for work that must start after."""
+    """Block until every named ticket is closed, for work that must start after."""
     repo = find_repo()
     deadline = time.monotonic() + max(args.timeout, 0)
     beads = Tickets(repo)
@@ -2293,7 +2293,7 @@ def create_worktree(repo: Repo, name: str, branch: str | None, base: str) -> Pat
 
 
 def is_slot(repo: Repo, path: Path) -> bool:
-    """Whether `path` is one of the fixed slot directories that bead worktrees reuse."""
+    """Whether `path` is one of the fixed slot directories that ticket worktrees reuse."""
     return (repo.config.worktree_slots > 0 and re.fullmatch(r"slot-\d+", path.name) is not None
             and path.resolve().parent == repo.worktree_root().resolve())
 
@@ -2422,7 +2422,7 @@ def slot_busy(repo: Repo, path: Path, graph: list[dict[str, Any]] | None) -> str
     A rebase, cherry-pick, merge or revert stopped on conflicts, or unmerged paths, leave
     HEAD detached or the resolution uncommitted, so the slot looks parked. So does a tree
     with uncommitted or untracked files, which a released slot never has, since release
-    resets and cleans it. And a bead that is not closed, records this slot on this host and
+    resets and cleans it. And a ticket that is not closed, records this slot on this host and
     still has its branch is working there even when its session is gone (say, during an
     app restart): delivery and `worktree remove` delete the branch when they release the
     slot. Taking a slot in any of these states would discard that work. Last, a slot
@@ -2440,7 +2440,7 @@ def slot_busy(repo: Repo, path: Path, graph: list[dict[str, Any]] | None) -> str
         if (bead.get("status") != "closed" and meta(bead, "enact_worktree") == str(path)
                 and meta(bead, "enact_worktree_host") == host_name() and branch
                 and repo.git_ok("rev-parse", "--verify", f"refs/heads/{branch}")):
-            return f"the branch of bead {bead['id']}, which is {bead.get('status')}"
+            return f"the branch of ticket {bead['id']}, which is {bead.get('status')}"
     if not slot_released(repo, path):
         return "a detached HEAD that Enact did not release"
     return ""
@@ -2527,7 +2527,7 @@ def released_notice(repo: Repo, path: Path) -> dict[str, str]:
 
 
 def owns_slot(bead: dict[str, Any], path: Path, branch: str) -> bool:
-    """Whether `bead` is the one working in slot `path` now. The bead of a previous
+    """Whether `ticket` is the one working in slot `path` now. The ticket of a previous
     occupant still records the same path, so the slot's branch decides."""
     return meta(bead, "enact_worktree") == str(path) and meta(bead, "enact_branch") == branch
 
@@ -2583,12 +2583,12 @@ def processes_inside(path: Path) -> dict[int, str]:
 def reap_processes(path: Path, grace: float = 3.0) -> list[dict[str, Any]]:
     """End every process using a worktree: SIGTERM, then SIGKILL after `grace` seconds.
 
-    A fuzz run started in a bead's worktree once kept a core busy for hours
-    after the bead closed and the tree was deleted. Never ends this process
+    A fuzz run started in a ticket's worktree once kept a core busy for hours
+    after the ticket closed and the tree was deleted. Never ends this process
     or its ancestors, whose working directory may be the tree itself, nor
     anything in this process's group: `enact push --ticket ID | jq` runs the
     reader in the same group, and ending it breaks the pipe the result is
-    written to. A leftover background run from the bead has its own group.
+    written to. A leftover background run from the ticket has its own group.
     """
     if WINDOWS:
         log(f"not ending processes in {path}: unsupported on Windows")
@@ -2668,17 +2668,17 @@ def rmtree(path: Path) -> None:
 def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
     """Delete worktrees nothing can still need; report what stays and why.
 
-    Bead trees go once their bead is closed and they hold no uncommitted,
+    Ticket trees go once their ticket is closed and they hold no uncommitted,
     untracked or unpublished work. Slow-CI trees go only for the caller
     holding the CI lock, under which none can be live. Directories git no
-    longer tracks go after an hour untouched. Other branches, locked bead
+    longer tracks go after an hour untouched. Other branches, locked ticket
     trees, separate repositories and loose files are never touched.
     """
     root = repo.worktree_root().resolve()
     if not root.is_dir():
         return {"removed": [], "kept": {}}
     repo.git("worktree", "prune", cwd=repo.main, check=False)
-    graph: list[dict[str, Any]] | None = None  # only closed beads release trees
+    graph: list[dict[str, Any]] | None = None  # only closed tickets release trees
     with contextlib.suppress(Fail, OSError, ValueError):
         graph = Tickets(repo).all()
     staging = repo.remote_ref(repo.config.staging)
@@ -2725,9 +2725,9 @@ def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
         elif not (bead := next((b for b in graph or [] if b["id"] == path.name or
                                 (owns_slot(b, path, branch) if is_slot(repo, path)
                                  else meta(b, "enact_worktree") == str(path))), None)):
-            kept[str(path)] = "no bead" if graph is not None else "Tickets unavailable"
+            kept[str(path)] = "no ticket" if graph is not None else "Tickets unavailable"
         elif bead.get("status") != "closed":
-            kept[str(path)] = f"bead {bead['id']} is {bead.get('status')}"
+            kept[str(path)] = f"ticket {bead['id']} is {bead.get('status')}"
         elif repo.git("status", "--porcelain", cwd=path, check=False):
             kept[str(path)] = "uncommitted or untracked files"
         elif not repo.git_ok("merge-base", "--is-ancestor", "HEAD", staging, cwd=path):
@@ -2762,7 +2762,7 @@ def sweep_worktrees(repo: Repo, ci_trees: bool) -> dict[str, Any]:
 
 
 def worktree_bead(repo: Repo, path: Path) -> dict[str, Any] | None:
-    # Includes legacy worktrees named after a bead, created before pointers
+    # Includes legacy worktrees named after a ticket, created before pointers
     # were recorded. Never let omitting --bead bypass ownership checks.
     slot = is_slot(repo, path)
     current = tree_branch(repo, path) if slot and path.is_dir() else ""
@@ -2807,12 +2807,12 @@ def bead_worktree(args: argparse.Namespace) -> dict[str, Any]:
     bead = worktree_bead(repo, path)
     actor = require_actor(None) if bead else None
     if bead:
-        # A bead working in a slot has no directory named after it.
+        # A ticket working in a slot has no directory named after it.
         recorded = Path(meta(bead, "enact_worktree") or "/")
         if (meta(bead, "enact_worktree_host") == host_name() and is_slot(repo, recorded)
                 and recorded.is_dir() and owns_slot(bead, recorded, branch)):
             path = recorded
-        # Retain direct CLI use for never-assigned beads by claiming first.
+        # Retain direct CLI use for never-assigned tickets by claiming first.
         if (not bead.get("assignee") and not recovery_records(bead) and
                 not meta(bead, "enact_reservation") and args.action == "create"):
             if not claim(repo, bead["id"], actor, {}):
@@ -2992,7 +2992,7 @@ def recover_deliveries(repo: Repo, drop_dead: bool = False) -> list[dict[str, An
 # the lock and the next waiting push takes over the entries still without a verdict.
 
 QUEUE_POLL_SECONDS = 1.0
-# Hidden, so no bead's worktree can take the name.
+# Hidden, so no ticket's worktree can take the name.
 QUEUE_TREE = ".merge-queue"
 
 
@@ -3313,7 +3313,7 @@ def land(repo: Repo, tree: Path, entries: list[dict[str, Any]], progress: QueueP
             bead = next((b for b in graph if b["id"] == entry["bead"]), None)
             try:
                 if not bead:
-                    raise Fail(f"bead {entry['bead']} not found")
+                    raise Fail(f"ticket {entry['bead']} not found")
                 require_owner(bead, entry["owner"])
             except Fail as error:
                 decide(repo, entry, {"status": "error", "error": str(error),
@@ -3414,12 +3414,12 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
     if args.bead:
         bead = Tickets(repo).show(args.bead)
         require_owner(bead, require_actor(None))
-        # Another bead's branch checked out here (a slot handed to two beads, say)
-        # would deliver its commits under this bead's name.
+        # Another ticket's branch checked out here (a slot handed to two tickets, say)
+        # would deliver its commits under this ticket's name.
         expected, current = meta(bead, "enact_branch"), tree_branch(repo, repo.top)
         if expected and current != expected:
             raise Fail(f"this worktree has {current} checked out, not {expected}, the "
-                       f"branch of bead {args.bead}; check out {expected} here or push "
+                       f"branch of ticket {args.bead}; check out {expected} here or push "
                        "from its own worktree", code=2)
     cfg = repo.config
     if repo.git("status", "--porcelain", "--untracked-files=no"):
@@ -3494,7 +3494,7 @@ def cmd_push(args: argparse.Namespace) -> dict[str, Any]:
         graph = Tickets(repo).all() if args.bead else []
         bead = next((b for b in graph if b["id"] == args.bead), {})
         if args.bead and not bead:
-            raise Fail(f"bead {args.bead} not found")
+            raise Fail(f"ticket {args.bead} not found")
         data = {"bead": args.bead, "head": head, "commits": commits,
                 "history": list(dict.fromkeys(
                     (meta(bead, "enact_commits") or "").split() + commits)),
@@ -3565,7 +3565,7 @@ def drop_released_branch(repo: Repo, bead: dict[str, Any], branch: str) -> str |
 
     Delivery rebases, so the pushed commits never become ancestors of
     staging; a branch left behind would make a later replacement resume from
-    work already delivered. Only branches a release of this bead recorded
+    work already delivered. Only branches a release of this ticket recorded
     are touched, and the lease leaves a branch alone if it moved since it
     was read. Best effort: a failure is logged and the branch stays.
     """
@@ -3719,7 +3719,7 @@ def ci_status(repo: Repo) -> dict[str, Any]:
 
 
 def vizier_active(repo: Repo, graph: list[dict[str, Any]]) -> bool:
-    """A vizier loop on this machine will pick up a Steward bead this machine
+    """A vizier loop on this machine will pick up a Steward ticket this machine
     files: some run that is not paused or blocked has a route here whose
     vizier renewed its lease recently. Whether the epic is open or its
     delivery complete does not matter; a route alone proves nothing, since
@@ -3732,13 +3732,13 @@ def watch_ci_notice(sha: str) -> str:
     return (
         "No Enact vizier is running to repair a slow-CI failure, so this session "
         f"owns it. Run `enact ci --wait {sha}` (600000 ms tool timeout) until it "
-        "reports `passed`. On `failed`, claim the Steward bead with "
-        f"`enact claim <bead>`, follow {ROLES_DIR / 'steward.md'}, and watch "
+        "reports `passed`. On `failed`, claim the Steward ticket with "
+        f"`enact claim <ticket>`, follow {ROLES_DIR / 'steward.md'}, and watch "
         "your fix the same way. If a result lists `other_os_stewards`, your "
         "commits also failed slow CI on another OS, which a machine on that OS "
-        "repairs first: read its bead's log, and if the cause is plain from it, "
-        "claim the unassigned bead and repair it as a Steward; otherwise comment "
-        "your analysis on the bead and name it in your final reply. "
+        "repairs first: read its ticket's log, and if the cause is plain from it, "
+        "claim the unassigned ticket and repair it as a Steward; otherwise comment "
+        "your analysis on the ticket and name it in your final reply. "
         "Title this session `🔮 <summary>` while waiting, "
         "`🚒 <summary>` while repairing, and `✅ <summary>` once CI passes "
         "(`⛔` if you stop without it)."
@@ -3863,7 +3863,7 @@ def update_enact() -> str:
 UNOWNED_NOTE = (
     "\n\nNo vizier on this machine has a fresh lease on a run this failure "
     "affects, so nobody is repairing it (`enact_unowned=true`). Claim it with "
-    "`enact claim <bead>` and repair it as a Steward; claiming clears the flag."
+    "`enact claim <ticket>` and repair it as a Steward; claiming clears the flag."
 )
 
 
@@ -4362,7 +4362,7 @@ def publish_ci_result(repo: Repo, report: dict[str, Any]) -> dict[str, Any]:
             log(f"pruned run {run['epic']} ({run['state']}): {run['reason']}")
     except Fail as failure:
         log(f"could not prune stale runs: {failure}")
-    log(f"slow CI failed at {tip[:12]} in {seconds} s; steward bead {bead_id}")
+    log(f"slow CI failed at {tip[:12]} in {seconds} s; steward ticket {bead_id}")
     return {"tip": tip, "passed": False, "steward": bead_id, "seconds": seconds}
 
 
@@ -4544,7 +4544,7 @@ def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
     if path and work_host == host_name() and Path(path).exists():
         verified_worktree(repo, Path(path), branch)
         record["head"] = repo.git("rev-parse", "HEAD", cwd=Path(path))
-        # Push before giving up ownership, so a rejected push leaves the bead
+        # Push before giving up ownership, so a rejected push leaves the ticket
         # assigned and the session can fix the cause and release again.
         record.update(publish_released_branch(repo, Path(path), branch))
     records = recovery_records(bead) + [record]
@@ -4560,7 +4560,7 @@ def cmd_release(args: argparse.Namespace) -> dict[str, Any]:
 def publish_released_branch(repo: Repo, path: Path, branch: str) -> dict[str, Any]:
     """Push a released worktree's commits to `branch` on the remote.
 
-    A bead released to wait on another bead is often taken up again on a
+    A ticket released to wait on another ticket is often taken up again on a
     different host, which can only resume from commits it can fetch. Before
     this push, those commits stayed in the releasing host's worktree and the
     next session redid the work. Commits already on staging need no push.
@@ -4602,7 +4602,7 @@ def pushed_branch_head(repo: Repo, bead: dict[str, Any], branch: str) -> str | N
 
     None when no release pushed this branch, or when what it pushed has since
     reached staging. A recorded push whose commit can no longer be fetched is
-    lost work, so it fails rather than starting the bead again from staging.
+    lost work, so it fails rather than starting the ticket again from staging.
     """
     pushed = next((r["pushed"] for r in reversed(recovery_records(bead))
                    if r.get("pushed") and r.get("branch") == branch), None)
@@ -4660,7 +4660,7 @@ def link_dir(target: Path, link: Path) -> str:
     return "linked"
 
 
-SKILLS = ("enact", "enact-plan", "enact-setup", "enact-sweep")
+SKILLS = ("enact", "enact-plan", "enact-setup", "enact-sweep", "status-dashboard")
 # Skills Enact used to ship; install removes their now-dangling links.
 RETIRED_SKILLS = ("enact-intake",)
 
@@ -4781,7 +4781,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--wait", type=int, default=0, help="block up to N seconds for an action")
     p.add_argument("--interval", type=int, default=60)
     p.add_argument("--running", action="append", metavar="TICKET",
-                   help="a stalled bead whose worker's turn you saw still running")
+                   help="a stalled ticket whose worker's turn you saw still running")
 
     p = add("pool", cmd_pool, "Track the sessions a Claude Desktop vizier reuses.")
     p.add_argument("action", choices=["add", "drop", "rest", "status"])
@@ -4826,7 +4826,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("status", cmd_status, "Report this machine's Enact state.")
 
-    p = add("release", cmd_release, "Return an abandoned bead to the queue.")
+    p = add("release", cmd_release, "Return an abandoned ticket to the queue.")
     p.add_argument("bead", metavar="TICKET")
     p.add_argument("--reason", required=True)
     p.add_argument("--actor")

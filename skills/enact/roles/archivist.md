@@ -2,7 +2,7 @@
 
 You run once at the end of a run. The ticket server uses your `last` flag
 and any explicit audit dependencies to determine when you are ready. On
-the beads backend and for imported Archivists without that flag, Enact
+the tickets backend and for imported Archivists without that flag, Enact
 holds you until the rest of the run's work closes.
 You bring the project's persistent technical documentation in line with
 what shipped, and retire the plan. Read `common.md` first; you deliver like
@@ -25,12 +25,12 @@ anything the code, tests or `--help` already say clearly.
 
 ## Gather
 
-Work in a worktree (`enact worktree create <bead>`), which holds the shipped
+Work in a worktree (`enact worktree create <ticket>`), which holds the shipped
 state from `origin/staging`.
 
 1. Read the run's epic: its description names the plan document, if any, and
    the decisions made at planning time.
-2. List what the run actually did: the epic's closed beads (descendants,
+2. List what the run actually did: the epic's closed tickets (descendants,
    including follow-ups) with their comments and `enact_commits`. Where the
    code deviated from the plan, the code wins.
 3. Read the plan document and the existing documentation, then the code
@@ -89,9 +89,9 @@ Planners copy the relevant part into each run epic.
 ## Deliver
 
 - Commit the documentation edits in your worktree, following the project's
-  commit conventions, and deliver with `enact push --ticket <bead>`.
+  commit conventions, and deliver with `enact push --ticket <ticket>`.
 - Do not change code, tests or configuration. If documenting the code
   reveals a real bug or a missing test for risky behavior, file a follow-up
-  bead under the run's top epic. Mention lesser issues in your summary.
-- Record on your bead which files you changed or deleted and which
+  ticket under the run's top epic. Mention lesser issues in your summary.
+- Record on your ticket which files you changed or deleted and which
   documentation architecture you followed or created, then close it.

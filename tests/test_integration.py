@@ -281,7 +281,7 @@ class WorktreeRemovalReapsTest(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("git"), "needs git")
 class WorktreeSweepTest(unittest.TestCase):
-    """Real git and CLI; a harness stands in for the Beads graph and sync."""
+    """Real git and CLI; a harness stands in for the Tickets graph and sync."""
 
     def test_sweep_deletes_only_trees_nothing_needs(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -12,7 +12,7 @@ evidence in your summary.
 explicitly released, or a routed lookup confirmed it inactive. Inspect that
 tree's commits and edits against current staging; preserve useful work and
 finish it. This is the authorized local handoff. On another host, the
-new worktree starts from the commits the release pushed to `enact/<bead>`
+new worktree starts from the commits the release pushed to `enact/<ticket>`
 (`recovered: true` again), or from staging if it pushed none. Uncommitted
 edits never travel: `enact_recovery` records `uncommitted` when some stayed
 behind, with the original host, path, branch, head and chat route. Never
@@ -26,18 +26,18 @@ delete that original work or edit an unassigned tree.
 - **Genuinely impossible acceptance** (access or a decision only the user
   has): preserve the open requirement and request Justiciar recovery with
   the evidence. Do not close it as delivered or repeatedly release it for
-  replacements. The Justiciar drops the bead from the run, open and intact,
+  replacements. The Justiciar drops the ticket from the run, open and intact,
   so the rest of the run goes on (`justiciar.md`).
 - **Emergency** (the task store is gone or corrupt, the remote rejects
   every push, disk is full, a core tool is broken for everyone): run
   `enact justiciar request --reason "<what is broken, evidence>"`. Exit 3
-  prints the existing holder; add your evidence as a comment on its bead if
+  prints the existing holder; add your evidence as a comment on its ticket if
   it names one, or `send_message` to its session if it is on this machine.
   Then keep doing whatever useful work remains, or wait: the vizier starts the
   Justiciar and it may message you. "Tests are broken" is never an emergency.
 - **Resumed after an interruption** (usage limit, crash, a user's nudge):
-  read the bead with the active CLI, then check `enact status` and your
-  worktree. Continue only if you still own the bead and its run is active.
+  read the ticket with the active CLI, then check `enact status` and your
+  worktree. Continue only if you still own the ticket and its run is active.
   Otherwise preserve all files
   and end the turn (⛔). A shared pause lets already running workers finish,
   but never authorizes a stopped worker to restart. Only explicit user

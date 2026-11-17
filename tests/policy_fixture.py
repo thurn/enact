@@ -2,7 +2,7 @@
 
 The real integration suite owns persistence, synchronization, concurrent
 claims, filesystem recovery and delivery. This small store exposes only the
-Beads operations needed by the policy scenarios and rejects unknown calls.
+Tickets operations needed by the policy scenarios and rejects unknown calls.
 """
 
 import contextlib

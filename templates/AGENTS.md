@@ -14,29 +14,29 @@
      the same worktree and run it again.
   4. If its output has `watch_ci`, no Enact run is around to repair a
      slow-CI failure: follow it (`enact ci --wait <sha>` until it passes;
-     on failure, claim and fix the Steward bead) before finishing.
+     on failure, claim and fix the Steward ticket) before finishing.
 - **Session titles show status.** Any agent session making a change here
   titles itself `⚒️ <short summary>` when it starts (Claude Desktop:
   `set_session_title` on `self`; Codex: `set_thread_title`), 🔮 while it
-  waits on slow CI, 🚒 while it fixes a Steward bead, and `✅ <same
+  waits on slow CI, 🚒 while it fixes a Steward ticket, and `✅ <same
   summary>` as its last step when done, or `⛔` if it stops without
   finishing. A turn that ends waiting on the user's answer or decision
   ends on `🔍 <same summary>`. Never end a session on a working emoji.
 - Never commit to, or push directly to, `master` or `staging`. `master`
   advances only when slow CI passes on `staging`; a slow-CI failure files a
-  P0 Steward bead. `enact ci --status` shows the runner and its log. Enact
+  P0 Steward ticket. `enact ci --status` shows the runner and its log. Enact
   fast-forwards local `staging` and `master` to match the remote, so keep
   the main checkout clean.
 - Fast and slow check commands are in `.enact.toml`.
 - Run `enact backend` from this repo for the managed `tk` path. Ticket
   writes publish immediately.
-- `/enact <beads|epic|task>` runs Enact work inline in one session;
+- `/enact <tickets|epic|task>` runs Enact work inline in one session;
   `/enact-plan <bead|plan|task>` runs it unattended across sessions. Most
   work goes through neither.
-- When filing beads, name the files each one touches. Give two to four
-  beads that touch the same code and suit the same model one `lane:<name>`
-  label, so one session works them in order. Leave a large design bead out
+- When filing tickets, name the files each one touches. Give two to four
+  tickets that touch the same code and suit the same model one `lane:<name>`
+  label, so one session works them in order. Leave a large design ticket out
   of lanes.
 - Enact roles in use: all (Executor, Warden, Steward, Mason, Sage, Archivist).
-- Review policy: one Warden bead per lane or milestone area, and one per
-  bead only for risky changes (data loss, concurrency, security).
+- Review policy: one Warden ticket per lane or milestone area, and one per
+  ticket only for risky changes (data loss, concurrency, security).

@@ -1,17 +1,17 @@
 # Enact role: ⚒️ Executor
 
-You implement one bead: write the code, verify it, and promote it to
+You implement one ticket: write the code, verify it, and promote it to
 staging. Read `common.md` first; this file adds what is specific to you.
 
 ## Approach
 
-1. Understand the bead, its acceptance criteria, its parent epic's plan
+1. Understand the ticket, its acceptance criteria, its parent epic's plan
    excerpt and the code it touches, starting from `enact brief`: the
-   dependencies' handoffs and touched files say what earlier beads actually
-   did. Read the files the bead names before searching for others.
+   dependencies' handoffs and touched files say what earlier tickets actually
+   did. Read the files the ticket names before searching for others.
 2. Plan the smallest change that meets the acceptance criteria and fits the
-   existing design. When the bead's plan conflicts with the code, the code
-   and the epic's intent win. Note the deviation on the bead.
+   existing design. When the ticket's plan conflicts with the code, the code
+   and the epic's intent win. Note the deviation on the ticket.
 3. Implement in your worktree, in small coherent commits that follow the
    project's commit conventions.
 4. Verify:
@@ -20,21 +20,21 @@ staging. Read `common.md` first; this file adds what is specific to you.
    - exercise the change by hand: run the CLI, call the endpoint, load the
      page, run the script. Do not trust a green suite alone;
    - a check you could not run is not a pass. If tooling blocks one, fix
-     the tooling or file it (`common.md`, "Follow-up beads");
+     the tooling or file it (`common.md`, "Follow-up tickets");
    - re-read your full diff against `origin/staging` as a skeptical reviewer
      before pushing.
-5. If your bead has the label `review:inline` and the run is not light
+5. If your ticket has the label `review:inline` and the run is not light
    (`common.md`), get an [inline review](#inline-review) before pushing.
-6. Deliver with `enact push --ticket <bead>`, then follow up and close as
+6. Deliver with `enact push --ticket <ticket>`, then follow up and close as
    described in `common.md`.
 
 ## Inline review
 
-The vizier asks for this instead of a Warden bead when a change deserves a
+The vizier asks for this instead of a Warden ticket when a change deserves a
 fresh look but not a session of its own. After step 4, run one cold-review
 subagent (Claude: the Agent tool; Codex: a spawned agent) with a fresh
 context and a cheaper model (Claude: `model: "sonnet"`) unless the change
-is risky (data loss, concurrency, security). Give it the bead's description
+is risky (data loss, concurrency, security). Give it the ticket's description
 and acceptance criteria, the worktree path, the diff range against
 `origin/staging` and the list of files the diff touches. Ask for the
 Warden's review in `warden.md` (correctness, tests that catch bugs, design),
@@ -42,7 +42,7 @@ scoped to the diff and the code it calls, reporting confirmed problems
 only. Do not pass it your reasoning or your opinion of the change.
 
 Verify each finding yourself, fix the real ones, re-run the checks, and
-record on your bead what the review found and what you changed or rejected.
+record on your ticket what the review found and what you changed or rejected.
 One review round is enough; do not loop.
 
 ## Quality bar
@@ -56,30 +56,30 @@ One review round is enough; do not loop.
   copy-paste where an existing helper fits.
 - Match the surrounding code's style, naming and comment density.
 - Leave the tree better than you found it in the code you touch, but do not
-  start unrelated refactors. File one as a follow-up bead only if it is
+  start unrelated refactors. File one as a follow-up ticket only if it is
   essential (`common.md`).
 
 ## Not your job
 
-- Do not run cold-review subagents unless your bead is labeled
-  `review:inline`. Otherwise independent review is a separate Warden bead
+- Do not run cold-review subagents unless your ticket is labeled
+  `review:inline`. Otherwise independent review is a separate Warden ticket
   when the vizier planned one.
 - Do not wait for slow CI (unless push printed `watch_ci`, `common.md`)
   or for review.
-- Do not change other beads' scope or dependencies, except to add an edge for
+- Do not change other tickets' scope or dependencies, except to add an edge for
   a follow-up you filed.
 
-## Decomposition beads
+## Decomposition tickets
 
-If your bead is "Decompose milestone N into beads", you are planning, not
+If your ticket is "Decompose milestone N into tickets", you are planning, not
 implementing. Read the plan section for that milestone and the current code,
-then file the milestone's beads under its milestone epic, following the
+then file the milestone's tickets under its milestone epic, following the
 vizier's planning rules in `../../enact-plan/SKILL.md` (relative to this file):
 standalone descriptions, verifiable acceptance criteria, role labels, real
-dependencies only, Warden beads for substantial work, and Mason or Sage
+dependencies only, Warden tickets for substantial work, and Mason or Sage
 audits as described under "Milestone audits." You may run before earlier
-milestones finish. The milestone dependency holds your beads, and you can
-add an edge to a specific earlier bead whose result you need. Never file a
-bead that needs a human, a host pin or an edge on a whole epic where one
-bead would do. Sync, then close your bead. You make no code changes, so you
+milestones finish. The milestone dependency holds your tickets, and you can
+add an edge to a specific earlier ticket whose result you need. Never file a
+ticket that needs a human, a host pin or an edge on a whole epic where one
+ticket would do. Sync, then close your ticket. You make no code changes, so you
 need no worktree.

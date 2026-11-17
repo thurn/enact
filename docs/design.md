@@ -183,7 +183,7 @@ and tickets writes and unmodified older helpers remain outside that protocol.
   Warden ticket.
 - Milestones are child epics. Mason/Sage audits are "gate" epics blocking the
   next milestone epic (tickets only lets epics block epics; a blocked epic hides
-  its children from `bd ready`). Important findings become children of the
+  its children from `tk ready`). Important findings become children of the
   gate; `enact next` closes eligible epics.
 - Loop runs inside the user's original turn (Claude Desktop refuses
   `start_session` on turns started by automated events or other sessions):
@@ -263,11 +263,6 @@ inspection; uncertainty never authorizes releasing ownership.
   most tools (pytest, unittest discovery, tsc globs) from descending into it;
   projects whose tools do not skip dot-directories should exclude it.
   Projects with an explicit `root` in `.enact.toml` keep it.
-- `enact setup` ignores and untracks bd's audit log,
-  `.beads/interactions.jsonl`. bd appends to it on every claim and close in
-  the main checkout, so tracking it would block fast-forwarding `master`.
-  The issue history it duplicates lives in Dolt. Existing projects pick this
-  up by re-running `enact setup` and committing the result.
 - `.enact.toml`: fast/slow check commands, `[worktree]` root plus optional
   full-replacement `create`/`remove` hooks (env: `ENACT_WORKTREE_PATH`,
   `ENACT_BRANCH`, `ENACT_BASE_SHA`, `ENACT_REPO`), optional
@@ -356,8 +351,8 @@ inspection; uncertainty never authorizes releasing ownership.
 - Skills linked per machine into user-level skill dirs (symlinks; junctions on
   Windows). `enact-setup` per project: ticket project configuration, machine registration, staging
   branch, and AGENTS.md instructions.
-- Four skills: `enact-plan` (the vizier), `enact` (inline),
-  `enact-setup` and `enact-sweep` (backlog sweep). Role files stay in `skills/enact/roles/` so spawn prompts
+- Installed skills: `enact-plan` (the vizier), `enact` (inline),
+  `enact-setup` `enact-sweep` (backlog sweep), and `status-dashboard` (the live ticket UI). Role files stay in `skills/enact/roles/` so spawn prompts
   and Marshal tasks written before the split keep working (the Marshal role
   is now a stub that retires those tasks).
 - Titles: 🔮 Vizier, ⚒️ Executor, 🛡️ Warden, 🔥 Justiciar, 🚒 Steward,
@@ -395,9 +390,8 @@ inspection; uncertainty never authorizes releasing ownership.
 
 - Installation removes only obsolete links owned by this checkout and
   preserves unrelated skills.
-- Validate with stdlib unittest black-box tests (real git/bd/Dolt,
-  file:// origin) and bounded desktop smoke checks. Deliver through
-  `enact worktree create`, commit and `enact push --bead`; slow CI alone
+- Validate with stdlib unittest black-box tests (real Git clones and the Worker simulator) and bounded desktop smoke checks. Deliver through
+  `enact worktree create`, commit and `enact push --ticket`; slow CI alone
   advances master. Record tested hosts and remaining limits explicitly.
 
 ## Durable delivery and final promotion (2026-10-29)
@@ -757,7 +751,7 @@ fast and slow suites.
   are ignored. Plans still get the stoppage audit, which unattended
   execution needs at any pace.
 - The run records the mode as a `run:light` label on the run epic (or on an
-  inline task prompt's tickets). `bd create --parent` inherits parent labels,
+  inline task prompt's tickets). `tk create --parent` inherits parent labels,
   so follow-ups carry it for free, and workers learn the mode from the
   graph rather than from their spawn prompt.
 - In an existing epic, unclaimed Mason, Sage, Archivist and Warden tickets are
@@ -777,7 +771,7 @@ fast and slow suites.
 
 ## Waiting on tickets (2026-11-01)
 
-- `enact wait <bead>...` blocks up to `--timeout` (540 s) until every named
+- `enact wait <ticket>...` blocks up to `--timeout` (540 s) until every named
   ticket is closed and returns `closed`, or `waiting` with the open tickets, so
   `/enact` can honor "start this once ps-myz closes". It syncs tickets each
   poll, like `ci --wait`, because another machine may close the ticket.
@@ -799,7 +793,7 @@ fast and slow suites.
   no check is live, so every `ci-*` tree goes, including ones git left
   locked "initializing". `enact worktree prune` runs the same sweep by hand
   (for projects without slow CI), minus `ci-*` trees.
-- An `enact/<bead>` tree goes only when its ticket is closed and the tree has
+- An `enact/<ticket>` tree goes only when its ticket is closed and the tree has
   no uncommitted, untracked or unpublished (not on `origin/staging`) work.
   An unclosed ticket, a branch outside `enact/` (hand-made, Codex) and a
   locked tree are never touched, nor are loose files.
@@ -865,10 +859,10 @@ fast and slow suites.
   tickets are sized by code locality rather than topic. The Archivist keeps a
   project code map current.
 - **Handoffs and `enact brief`.** Workers leave a `Handoff:` comment before
-  closing. `enact brief <bead>` returns, in one read, the ticket with its
+  closing. `enact brief <ticket>` returns, in one read, the ticket with its
   comments, its epic chain, each blocking dependency's close reason,
   commits, touched files and latest handoff, and its lane. It replaces
-  several verbose `bd show` calls at every session start; it does not sync,
+  several verbose `tk show` calls at every session start; it does not sync,
   since `start` and `claim` just did.
 - **Reviews.** One Warden per lane or milestone area by default, a per-ticket
   Warden only for risky changes. Wardens and inline cold reviewers keep a
@@ -888,11 +882,11 @@ fast and slow suites.
 - `/enact-sweep` triages stale tickets and runs the survivors. A ticket is
   stale when it is open, unassigned and outside every live run. Ownership
   decides, not age: a fresh ticket under a dead run is stale, while an old
-  ticket queued in a live run is not. `bd stale` measures only age, so it
+  ticket queued in a live run is not. An age-only query measures only age, so it
   would close queued work.
 - Verdicts are done, obsolete, keep and human, each with evidence. Read-only
   subagents on the light tier triage large backlogs, and only the sweeper
-  writes to tickets. Closes are reversible (`bd reopen`), so the invocation
+  writes to tickets. Closes are reversible (`tk reopen`), so the invocation
   authorizes them without a confirmation step.
 - Human tickets are settled while the user is present, the same way as the
   stoppage audit, or deferred. An unattended run never starts on one.
@@ -1398,7 +1392,7 @@ instead of adopting it needs the plan's context.
   with a host-tracked background command, never by ending the turn.
 - `enact next` now lists a bound ticket after 15 minutes without an update.
   When the vizier finds that worker's turn still running, it passes
-  `--running <bead>` on its next call; the ticket is then not listed again
+  `--running <ticket>` on its next call; the ticket is then not listed again
   until 90 minutes, as before. The mark is the ticket's ID and `updated_at`,
   kept with the reported keys in the per-vizier `archive-reported` file,
   so any ticket update drops it and the short check starts over.

@@ -29,7 +29,7 @@
   what every machine pulls, so only green changes reach live sessions. If
   push prints `watch_ci`, follow it before finishing.
 - Title every session working here `⚒️ <short summary>` from the start
-  (🔮 while waiting on slow CI, 🚒 while fixing a Steward bead) and end it on
+  (🔮 while waiting on slow CI, 🚒 while fixing a Steward ticket) and end it on
   `✅ <same summary>`, or `⛔` if you stop without finishing. A turn that
   ends waiting on the user's answer or decision ends on `🔍 <same
   summary>`. Enact users read session state from these emojis; the host's

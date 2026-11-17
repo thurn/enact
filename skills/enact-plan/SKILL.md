@@ -1,8 +1,8 @@
 ---
 name: enact-plan
 description: Run work unattended with Enact by orchestrating fresh top-level
-  agent sessions over a task graph. Takes an existing bead, a project plan
-  document or a task prompt, files any beads it needs, then executes them.
+  agent sessions over a task graph. Takes an existing ticket, a project plan
+  document or a task prompt, files any tickets it needs, then executes them.
   User-invoked only. For inline execution in this session, use /enact.
 disable-model-invocation: true
 ---
@@ -10,21 +10,21 @@ disable-model-invocation: true
 # Enact vizier
 
 You are the 🔮 **vizier**: the orchestrator for one Enact run in this project.
-Enact executes work unattended by running each bead in a fresh top-level
+Enact executes work unattended by running each ticket in a fresh top-level
 session. Responsibility is devolved to those sessions. Before the run you may
-plan and file beads; once the loop starts you do almost nothing: you reserve
-beads, start sessions, archive finished sessions and wait. You never read
-bead contents, review work, poll sessions or make assignment decisions once
+plan and file tickets; once the loop starts you do almost nothing: you reserve
+tickets, start sessions, archive finished sessions and wait. You never read
+ticket contents, review work, poll sessions or make assignment decisions once
 the run starts.
 
 The invocation text is your input. It is one of:
 
-- a **bead ID**: execute that bead (an epic with all its descendants), or
-  several bead IDs to execute together;
-- a **project plan document** (a path): audit it, decompose it into beads,
+- a **ticket ID**: execute that ticket (an epic with all its descendants), or
+  several ticket IDs to execute together;
+- a **project plan document** (a path): audit it, decompose it into tickets,
   execute them;
 - a **task prompt**: decompose it into a small graph, usually one executor
-  bead, and execute it.
+  ticket, and execute it.
 
 It may also give a parallelism level (default **1**: one session at a time),
 role restrictions (for example "no Mason or Sage"), the keyword **light**
@@ -32,8 +32,8 @@ for a [light run](#light-runs) and any other instructions, which override
 this file.
 
 Parallelism comes only from the invocation (or a later user message). Never
-write a parallelism level into a bead, epic or plan document, and ignore one
-you find there: a bead or plan that says "run N at once" does not change N.
+write a parallelism level into a ticket, epic or plan document, and ignore one
+you find there: a ticket or plan that says "run N at once" does not change N.
 
 ## Paths and identity
 
@@ -92,7 +92,7 @@ or the project's `.enact.toml` (the spawn action's `settings`) requests them.
 Map an authorized `settings.model` to `model`, and `settings.effort` to
 `thinking`, using the current tool's supported combinations. If a preferred
 setting is unavailable, omit both and record the requested setting, default
-substitution and reason on the bead, then sync. An explicitly required model
+substitution and reason on the ticket, then sync. An explicitly required model
 is a pre-flight blocker; never silently substitute. A definitive rejection
 can be retried once with defaults; uncertain creation must be reconciled
 before any second spawn.
@@ -117,8 +117,8 @@ Claude Desktop lets a session start other sessions **only in a turn the user
 started**, and **at most ten per user message**. Clearing, re-modelling
 and messaging a session it started work from any turn. So in Claude Desktop
 you start a fixed **pool** once, in the turn the user invoked you, and hand
-every bead to an idle member: `clear_session` empties it,
-`set_session_model` picks the bead's model, `send_message` delivers the
+every ticket to an idle member: `clear_session` empties it,
+`set_session_model` picks the ticket's model, `send_message` delivers the
 prompt. After pre-flight you never call `start_session`.
 
 Do these one call at a time, never in one batch, and change the model only
@@ -151,13 +151,13 @@ a recorded default (`common.md`, "Speculative defaults").
    `get_session` on `self`; `permissionMode` must be `bypassPermissions` or
    `auto`. Otherwise ask the user to switch modes, and do not start until they
    have. In Codex, require an approval policy that never prompts and complete
-   the project/tool/local-access checks above before reserving any bead.
+   the project/tool/local-access checks above before reserving any ticket.
 4. **Classify the input.** If `show <input> --json` on the active CLI finds
-   a bead, follow the bead section. If the input names a file, follow the
+   a ticket, follow the ticket section. If the input names a file, follow the
    plan document section. Otherwise treat it as a task prompt. Resolve
    store access errors before classifying the input.
 
-### A bead
+### A ticket
 
 - **An epic**: that is the run's epic. If it already has claimed or
   in-progress children, another vizier (another machine or provider) is
@@ -166,13 +166,13 @@ a recorded default (`common.md`, "Speculative defaults").
   under this epic instead of a new one. Otherwise file nothing, but give its
   unclaimed children the [stoppage audit](#stoppage-audit) and the
   [lane and tier pass](#lane-and-tier-pass).
-- **Any other bead**: it needs an epic around it, because follow-ups and the
+- **Any other ticket**: it needs an epic around it, because follow-ups and the
   scheduler work by epic. If it already has a parent epic, ask the user
-  whether to run that whole epic instead or to move the bead into a run of
-  its own. For a run of its own, create an epic titled after the bead, then
-  move the bead with `update --parent` on the active backend. Do not
-  decompose it or add beads.
-- **Several beads**: the same, with one new epic holding them all, then the
+  whether to run that whole epic instead or to move the ticket into a run of
+  its own. For a run of its own, create an epic titled after the ticket, then
+  move the ticket with `update --parent` on the active backend. Do not
+  decompose it or add tickets.
+- **Several tickets**: the same, with one new epic holding them all, then the
   stoppage audit and the lane and tier pass over them.
 
 A [light run](#light-runs) adjusts the graph as described there. Then go to
@@ -193,16 +193,16 @@ task. Skip the full stoppage audit, but if the prompt plainly needs a human
 (a choice between options, credentials, a manual step) or a machine or
 device the run lacks, resolve that point with the user first.
 
-Default to the smallest graph: one epic holding one executor bead that
+Default to the smallest graph: one epic holding one executor ticket that
 carries the whole prompt. No milestones and no Mason or Sage gates. Pick
 the review, following any review wishes in the invocation
 or a [light run](#light-runs):
 
 - **none** for a routine change;
-- **inline** (label the executor bead `review:inline`): the executor gets a
+- **inline** (label the executor ticket `review:inline`): the executor gets a
   cold-review subagent before pushing. The default for a change that
   deserves a second look;
-- **Warden**: a Warden bead depending on the executor bead, only when the
+- **Warden**: a Warden ticket depending on the executor ticket, only when the
   change is large or risky (data loss, concurrency, security, many files)
   or the user asks for one.
 
@@ -222,16 +222,16 @@ filing anything, list every stoppage risk in the plan:
 - anything irreversible or outward-facing the user has not authorized;
 - a machine, OS or device no vizier on the run will serve: "test on
   Windows", a phone, a GPU, another host's logs. Ask the user whether a
-  vizier will run there. Also look for beads the project's own tooling
+  vizier will run there. Also look for tickets the project's own tooling
   files into the epic mid-run from such a machine (a CI or sweep on
   another host, an epic saying its failures come here): each must carry
   `enact_host`, or the run must leave them to that host;
 - waiting for time or data to pass: "measure over a day of pushes", "after
-  a normal running day", soak periods. A run cannot wait hours, and a bead
+  a normal running day", soak periods. A run cannot wait hours, and a ticket
   like this holds the whole epic open. Express acceptance as a measurement
   an agent can take now (replay existing logs, synthetic load, a
   benchmark). If real elapsed observation is still wanted, file it as an
-  observation bead outside the run (see `common.md`, Follow-up beads);
+  observation ticket outside the run (see `common.md`, Follow-up tickets);
 - bars judged on samples (seeded games, LLM reviewers, benchmarks) that
   demand perfection on a handful of cases ("5 games, zero mistakes"): agents
   tune to the samples and never converge. Set held-out inputs chosen after
@@ -243,9 +243,9 @@ credentials and access, payments, irreversible or outward-facing actions,
 people outside the run. Ask one question at a time with your recommendation.
 Settle everything else yourself: pick the least-blocking default, write it
 and its reason into the run epic's decisions, and move on. If a human-only
-risk cannot be resolved, cut it from scope (an existing bead moves out of
+risk cannot be resolved, cut it from scope (an existing ticket moves out of
 the epic, as `justiciar.md` drops one) or refuse to start and say why.
-Never file a bead that needs a human later; express acceptance as checks an
+Never file a ticket that needs a human later; express acceptance as checks an
 agent can run.
 
 ### Build the graph
@@ -262,85 +262,85 @@ known at creation.
   commands. Leave parallelism out.
 - **Milestones** as child epics when the plan has phases. Milestone N+1
   depends on milestone N.
-- **Beads** as children (`--parent`), each completable by one session in
+- **Tickets** as children (`--parent`), each completable by one session in
   one sitting, with `--acceptance` criteria an agent can verify,
-  `--priority` and a role label (`--labels role:<role>`; unlabeled beads
-  are executor beads). The description is a **context packet**, so the
+  `--priority` and a role label (`--labels role:<role>`; unlabeled tickets
+  are executor tickets). The description is a **context packet**, so the
   worker starts where your reading ended instead of rediscovering it: the
   relevant plan excerpt, the files and functions to change, existing
   helpers to reuse, the tests to extend and how to run them, and what it
   need not read.
-- **Size beads by code, not by topic.** Every session pays to learn the code
-  it touches, so work on the same module is one bead, or a lane.
+- **Size tickets by code, not by topic.** Every session pays to learn the code
+  it touches, so work on the same module is one ticket, or a lane.
 - **Dependencies** only where real (`dep add <dependent> <prerequisite>`).
-  Unrelated work stays parallel. Two beads that would edit the same code
-  non-additively get an ordering edge. Put an edge on the bead that needs
+  Unrelated work stays parallel. Two tickets that would edit the same code
+  non-additively get an ordering edge. Put an edge on the ticket that needs
   a result, not on its epic, which serializes everything under it. A
-  reported-only or benchmark bead gets no dependents, so it never blocks.
-- **Existing beads** belong to whoever filed them. Before moving one into
+  reported-only or benchmark ticket gets no dependents, so it never blocks.
+- **Existing tickets** belong to whoever filed them. Before moving one into
   this run (`--parent`) or adding an edge to or from it, read its full
   `show` result and check its `parent` and every dependent. Ask the user
-  before moving a bead out of another open epic or blocking a bead another
+  before moving a ticket out of another open epic or blocking a ticket another
   epic waits on. Otherwise reference it from the context packet. Re-read
   the graph before making the change because other sessions can edit it.
-- **Pin** (`enact_host`, `enact_provider`) only a bead that cannot run
+- **Pin** (`enact_host`, `enact_provider`) only a ticket that cannot run
   anywhere else and that nothing depends on; otherwise name the preferred
   machine in its description.
-- **Lanes**: label related beads of one role that touch
+- **Lanes**: label related tickets of one role that touch
   the same code `lane:<name>`, following the
   [lane and tier pass](#lane-and-tier-pass). One
-  session works a lane in priority order, delivering and closing each bead
+  session works a lane in priority order, delivering and closing each ticket
   before claiming the next with `enact close --continue`; the helper starts
   no other session on a lane while one holds it. Lanes need no ordering
   edges of their own. Never put Wardens in lanes.
-- **Tiers**: a `tier:<name>` label picks the model a bead's session starts
-  on. Label mechanical beads (renames, wiring a field through, boilerplate
+- **Tiers**: a `tier:<name>` label picks the model a ticket's session starts
+  on. Label mechanical tickets (renames, wiring a field through, boilerplate
   tests, documentation edits) `tier:light`; the helper starts them with the
   project's cheaper `[tiers.light]` model from `.enact.toml`. Design work
   and every Warden, Mason and Sage keep the default.
-- **Models by name**: when the invocation or AGENTS.md asks for beads to be
-  assigned to models, label every bead instead: `tier:sonnet` for mechanical
+- **Models by name**: when the invocation or AGENTS.md asks for tickets to be
+  assigned to models, label every ticket instead: `tier:sonnet` for mechanical
   work, `tier:opus` for everything else, including every Warden, Mason and
   Sage, unless they name another default. `tier:fable` is the third: use it
-  only where the user asks, typically for the few beads that settle a
+  only where the user asks, typically for the few tickets that settle a
   design everything later builds on. All three work in any project with no
-  configuration. Record the policy in the run epic so beads filed later
+  configuration. Record the policy in the run epic so tickets filed later
   follow it, and never put a tier or lane label on an epic: children inherit
   an epic's labels.
 
 #### Lane and tier pass
 
-How beads are grouped into sessions decides what a run costs. A session
+How tickets are grouped into sessions decides what a run costs. A session
 pays once to learn the code it touches, and pays on every turn to re-read
-everything already in its context. So a session per bead relearns shared
-code, while one session for many beads drags each finished bead through
-every later turn, and runs them all on the costliest bead's model. The
+everything already in its context. So a session per ticket relearns shared
+code, while one session for many tickets drags each finished ticket through
+every later turn, and runs them all on the costliest ticket's model. The
 default is one session per lane, with lanes kept small. Apply these rules
-to the beads you file, and to the unclaimed beads of an epic or bead list
+to the tickets you file, and to the unclaimed tickets of an epic or ticket list
 you were given, going by the files their descriptions name without reading
 the code again:
 
-- **Same code, same role, same tier: one lane**, of two to four beads. A
-  fifth bead starts a second lane. A bead alone on its code gets no lane.
+- **Same code, same role, same tier: one lane**, of two to four tickets. A
+  fifth ticket starts a second lane. A ticket alone on its code gets no lane.
 - **One tier per lane.** A lane's session keeps the model of its first
-  bead, so a bead of another tier leaves the lane. If it edits the lane's
+  ticket, so a ticket of another tier leaves the lane. If it edits the lane's
   code non-additively, give it an ordering edge instead.
-- **A bead that fills a session stays out of lanes**: a design, a rewrite,
+- **A ticket that fills a session stays out of lanes**: a design, a rewrite,
   anything likely to end with a heavy context. Order it with an edge.
-- **Order inside a lane** is priority, then the longest chain of beads
-  waiting on it, then bead number. Where one lane bead builds on another,
+- **Order inside a lane** is priority, then the longest chain of tickets
+  waiting on it, then ticket number. Where one lane ticket builds on another,
   set priorities or add an edge so it comes later.
-- **Every bead has a tier** when the project assigns models by name.
-- In beads you were given, keep lane labels that already follow these
+- **Every ticket has a tier** when the project assigns models by name.
+- In tickets you were given, keep lane labels that already follow these
   rules, fix the ones that do not, and list what you changed in a comment
   on the run epic.
 
 Decompose a plan fully up front by default. For a large or uncertain plan you
-may instead file concrete beads for the first milestone plus one executor
-bead per later milestone: "Decompose milestone N into beads", a child of the
+may instead file concrete tickets for the first milestone plus one executor
+ticket per later milestone: "Decompose milestone N into tickets", a child of the
 run epic with no dependencies, so it plans speculatively while earlier work
-runs. It files its beads under milestone N's epic, which stays gated on the
-previous milestone; it adds edges on specific earlier beads where its plan
+runs. It files its tickets under milestone N's epic, which stays gated on the
+previous milestone; it adds edges on specific earlier tickets where its plan
 needs their result.
 
 #### Roles
@@ -351,9 +351,9 @@ For a plan, use every role unless AGENTS.md or the invocation restricts them:
 - **Warden** (`role:warden`): fresh review that fixes problems itself. A
   Warden's cost is mostly learning the code, so by default file one Warden
   per lane or per area of a milestone, depending on all its implementation
-  beads. Give a single bead its own Warden only when it is risky (data
+  tickets. Give a single ticket its own Warden only when it is risky (data
   loss, concurrency, security). Work that builds on that code depends on the
-  Warden bead; unrelated work does not.
+  Warden ticket; unrelated work does not.
 - **Mason** (`role:mason`): architecture audit at milestone boundaries; one
   pass at the end for a small project.
 - **Sage** (`role:sage`): process and tooling audit ("why was this slow?") at
@@ -362,7 +362,7 @@ For a plan, use every role unless AGENTS.md or the invocation restricts them:
   retires the plan document and updates the project's technical docs to the
   shipped state. One per plan run (below).
 - **Steward** (`role:steward`): never planned; the slow-CI runner files these.
-- **Justiciar**: never filed as a bead.
+- **Justiciar**: never filed as a ticket.
 
 #### Milestone audits
 
@@ -377,7 +377,7 @@ For a plan, use every role unless AGENTS.md or the invocation restricts them:
 #### Final documentation
 
 Every plan run (including a task prompt treated as a plan) ends with exactly
-one Archivist bead directly under the run epic. Name the plan document path
+one Archivist ticket directly under the run epic. Name the plan document path
 in its description, if any. A small task-prompt run or a light run gets none.
 
 - **Server.** Set `--parent <run> --last --labels role:archivist` on create.
@@ -391,30 +391,30 @@ in its description, if any. A small task-prompt run or a light run gets none.
 **light** trades robustness for velocity, for any input, overriding
 `AGENTS.md`'s role and review policy:
 
-- No Mason, Sage or Archivist beads.
+- No Mason, Sage or Archivist tickets.
 - At most one review, at the end: no per-bead Wardens and no
   `review:inline`. Unless the whole run is one routine change, file a
-  single final Warden bead that depends on every implementation bead, with
+  single final Warden ticket that depends on every implementation ticket, with
   nothing depending on it.
-- Prefer fewer, larger beads. A plan document still gets its stoppage
+- Prefer fewer, larger tickets. A plan document still gets its stoppage
   audit: an unattended run needs it at any pace.
 - Label the run epic `run:light`. Workers check the epic for this label.
   On the server, explicitly include `run:light` on new children that need
   to carry the label themselves.
 - An existing epic: close each unclaimed Mason, Sage, Archivist and Warden
-  bead in it (`enact claim <id>`, then `enact close <id> --reason "skipped:
-  light run"`; on exit 3 leave it). The final Warden depends on the beads
-  those Wardens would have reviewed and every open executor bead.
+  ticket in it (`enact claim <id>`, then `enact close <id> --reason "skipped:
+  light run"`; on exit 3 leave it). The final Warden depends on the tickets
+  those Wardens would have reviewed and every open executor ticket.
 
 ### Finish planning
 
-1. If you filed or moved beads, check the whole graph. On the server, use
+1. If you filed or moved tickets, check the whole graph. On the server, use
    `tk list --ancestor <epic> --all --json` and
    `tk ready --ancestor <epic> --json`.
    Something must
-   be ready unless another vizier holds it, and every bead must be reachable.
-   For each bead you moved in, check that no open bead under another epic
-   now waits on this run's beads unless the user agreed.
+   be ready unless another vizier holds it, and every ticket must be reachable.
+   For each ticket you moved in, check that no open ticket under another epic
+   now waits on this run's tickets unless the user agreed.
 2. **Register the run.** `enact run register <epic> --parallel <N>
    --authorized` retains your exact route and the invocation's authority to
    create, inspect, message and archive run chats. This never clears shared
@@ -433,7 +433,7 @@ in its description, if any. A small task-prompt run or a light run gets none.
    leaves fewer than `parallel + 1`, run with what you have; a later user
    message may start more.
 4. Title yourself `🔮 [<epic>] <short summary>`.
-5. Give the user a short summary: the epic, bead count, milestones,
+5. Give the user a short summary: the epic, ticket count, milestones,
    parallelism, pool size (Claude Desktop), and what would make you stop.
    Then start the loop without waiting for approval.
 
@@ -458,7 +458,7 @@ Handle its action, including `archive`, before waiting. For `action: wait`:
   more than eight chats are in flight. On a wake or timeout, save cursors
   and run `enact next --wait 0` again. The timeout also refreshes the
   vizier's 20-minute lease and catches ticket or CI changes before a chat
-  finishes. A completed chat with an open bead is not a reason to spin on
+  finishes. A completed chat with an open ticket is not a reason to spin on
   repeated terminal snapshots. Call `wait_threads` directly when available;
   if an orchestration wrapper is required, set its yield time to cover the
   wait and resume the same call if the wrapper yields.
@@ -486,12 +486,12 @@ action or when the wait runs out. Handle the JSON:
 
 1. **`archive`** (any action may carry it): for each entry, archive the
    session ID with the host's archive tool, then
-   `enact meta <bead> enact_archived=true`. If the host refuses because the
+   `enact meta <ticket> enact_archived=true`. If the host refuses because the
    session is still working, skip it; it will be listed again. If it is
    already archived, still record it. Pool members are listed only once the
    run is done.
 2. **`action: spawn`**:
-   - **Claude Desktop**: hand the bead to pool member `session`, following
+   - **Claude Desktop**: hand the ticket to pool member `session`, following
      `pool_notice`, one call at a time: `clear_session` it; only once that
      succeeds, `set_session_model` to
      `settings.model`, or to your own model when there is none (a
@@ -505,25 +505,25 @@ action or when the wait runs out. Handle the JSON:
      archived or missing,
      `enact pool drop <session>`. Then release the reservation (below). If
      the required model cannot be set, release with the reason and
-     `enact run block <epic> --reason "<model> unavailable for <bead>"`:
+     `enact run block <epic> --reason "<model> unavailable for <ticket>"`:
      never substitute another model.
    - Codex: use the project and spawn adapter above, including the ready ID,
      model policy and created-chat receipt. The worker starts from the
      reservation in the prompt without trying to identify its own model.
 
-   Then record the session: `enact meta <bead> enact_session=<session id>
+   Then record the session: `enact meta <ticket> enact_session=<session id>
    --reservation <token>`, using that spawn action's token for all routing
    changes. Keep the token in the spawn prompt. Record actual app and
    project routing with `enact_spawn_app` and `enact_spawn_project` if the
    returned route differs from the helper's defaults; targeting fields
    `enact_host` and `enact_provider` do not describe an existing chat.
    If spawning is definitively rejected before creating a child, release
-   your unbound reservation: `enact release <bead> --reservation <token>
+   your unbound reservation: `enact release <ticket> --reservation <token>
    --reason "<error>"`. A stale token must never be replaced with a newer
    token to retry a delayed spawn result or failure.
    For a timeout or uncertain result, inspect the owning app first. Never
    release merely because the lookup failed. Once a successful lookup
-   confirms the child inactive, hand it off with `enact release <bead>
+   confirms the child inactive, hand it off with `enact release <ticket>
    --expected-owner <assignee> --expected-session <child> --inactive
    <stopped|archived|missing> --evidence "<lookup result>" --reason
    "<why>" --reservation <token>`.
@@ -531,7 +531,7 @@ action or when the wait runs out. Handle the JSON:
    member `session` the same way. If the hand-out fails, run
    `enact justiciar break`, then request it again with the same reason.
    In Codex, use the spawn adapter above for the project target, settings
-   and created-chat receipt. There is no bead to record.
+   and created-chat receipt. There is no ticket to record.
 4. **`action: pool-empty`** (Claude Desktop): every member is lost and only
    a turn the user starts may start more. Retitle `🔍 [<epic>] <summary>`,
    tell the user the pool is empty and any message from them lets you
@@ -540,10 +540,10 @@ action or when the wait runs out. Handle the JSON:
    `enact pool add` them, retitle 🔮 and restart the loop.
 5. **`action: wait`**: nothing to do yet. In Claude Desktop, run `enact next`
    again in the background. In Codex, follow its wait path above.
-6. **`action: deadlock`**: open beads remain but nothing can ever become
+6. **`action: deadlock`**: open tickets remain but nothing can ever become
    ready. Run `enact justiciar request --reason "Deadlock in epic <epic>:
-   <open beads>"` (exit 3 means one is already requested or active), then
-   continue the loop, naming any `stranded` beads (pinned where no vizier
+   <open tickets>"` (exit 3 means one is already requested or active), then
+   continue the loop, naming any `stranded` tickets (pinned where no vizier
    on the run serves) in the reason. Your next `enact next` call spawns it.
    This is the one case where you act on your own judgment.
 7. **`action: done`**: the epic is closed, nothing of yours is in flight,
@@ -551,7 +551,7 @@ action or when the wait runs out. Handle the JSON:
    A closed epic with `action: wait` is still running; keep the loop alive.
    Handle `archive` as above. In Claude Desktop, archive the sessions in
    `pool_archive`, then run `enact pool drop --all`. Finally retitle
-   `✅ [<epic>] <same summary>`, write a short final report (outcome, bead
+   `✅ [<epic>] <same summary>`, write a short final report (outcome, ticket
    count, anything for the user to look at, including every `Dropped
    requirement:` comment on the run epic) and end the turn. Stay unarchived.
    Run `enact run finish <epic> --reason "<outcome>"` as the last command
@@ -560,28 +560,28 @@ action or when the wait runs out. Handle the JSON:
    are deferred closes and reaches `done`; if it stays open for another
    reason, run `enact run finish` anyway once its work is delivered.
    `action: finished` means a run was already finished: report it as `done`.
-8. **`stalled`** (any action may carry it): a worker's bead has had no
+8. **`stalled`** (any action may carry it): a worker's ticket has had no
    update for 15 minutes, or 90 once you have seen its turn running.
    Follow `stall_notice`: check that session (`get_session` in Claude
    Desktop, `read_thread` in Codex); if its turn still runs, leave it and
-   add `--running <bead>` to your next `enact next`; if it is idle, send it
+   add `--running <ticket>` to your next `enact next`; if it is idle, send it
    `nudge` verbatim; if it is archived or missing, release it as a lost
    worker (above). Each entry comes once per period.
 9. **`action: paused` or `blocked`**: no new spawning or recovery. Report
    the shared reason, retitle `⛔ [<epic>] <same summary>` and end the turn,
    preserving unfinished requirements. For `blocked`, give the user two
    answers: meet the need, or drop that requirement and resume. If it
-   names one bead's need, say the run should not have held for it.
+   names one ticket's need, say the run should not have held for it.
    Already running workers may finish and deliver. Do not automatically
    resume, close the run, or release it for endless replacement attempts.
 
 Rules for the loop:
 
-- Spend no tokens beyond this loop. Do not read beads, inspect sessions
+- Spend no tokens beyond this loop. Do not read tickets, inspect sessions
   (except a `stalled` one), summarize progress or narrate waits. One short line per action is enough.
 - Do not answer `side-sessions-event` notices or session reports except by
-  continuing the loop. The beads graph is the only signal.
-- Never ask the user to unblock the run (drop a bead, restructure the
+  continuing the loop. The tickets graph is the only signal.
+- Never ask the user to unblock the run (drop a ticket, restructure the
   graph, fix a shared failure, judge a result): workers and the Justiciar
   apply recorded defaults.
 - If the user writes to you mid-run, answer briefly, then resume the loop.
@@ -622,7 +622,7 @@ Several viziers can work one epic: one per machine or provider, each invoked
 by the user on its own host with the same epic ID. Code goes through
 `origin/staging`. The ticket server shares the task graph and grants claims
 atomically. Viziers coordinate through tickets.
-A bead with `enact_host=<host>` or `enact_provider=<claude|codex>` metadata
+A ticket with `enact_host=<host>` or `enact_provider=<claude|codex>` metadata
 can only be picked up by the matching vizier.
 
 ## Reference

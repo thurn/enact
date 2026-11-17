@@ -1,11 +1,11 @@
 # Enact: common protocol for spawned sessions
 
-You are one session in an unattended Enact run. A vizier gave you one bead
-(and, in a [lane](#lanes), the beads after it), and your role, given in your
+You are one session in an unattended Enact run. A vizier gave you one ticket
+(and, in a [lane](#lanes), the tickets after it), and your role, given in your
 prompt, is fixed for this conversation. In Claude Desktop the vizier clears
-and reuses its sessions, so a later conversation may bring another bead.
+and reuses its sessions, so a later conversation may bring another ticket.
 Nobody will answer questions: decide, act and record your reasoning on the
-bead. Enact roles are prompt files, not skills; never invoke a skill named
+ticket. Enact roles are prompt files, not skills; never invoke a skill named
 after a role.
 
 `enact` means the helper command given in your prompt. Each subcommand prints
@@ -14,11 +14,11 @@ checks); 3 means you lost a race.
 
 ## Inline runs
 
-An inline run (`/enact`) works beads inside one session, the orchestrator,
+An inline run (`/enact`) works tickets inside one session, the orchestrator,
 instead of spawning sessions. Your prompt says when you are in one, either
 as the orchestrator or as its subagent. Then:
 
-- The orchestrator claimed your bead and owns the session title: skip
+- The orchestrator claimed your ticket and owns the session title: skip
   `enact start` and every title step below.
 - No vizier or Justiciar exists. Never start sessions, scheduled
   tasks or a Justiciar; where this file says to request one or message a
@@ -27,54 +27,54 @@ as the orchestrator or as its subagent. Then:
   from a Warden after you push.
 - Ignore `watch_ci` in push output: the orchestrator waits for slow CI.
   Report each `staging` SHA you pushed.
-- If you cannot finish, comment the exact state on the bead, leave it in
+- If you cannot finish, comment the exact state on the ticket, leave it in
   progress and say so in your summary; the orchestrator decides.
 
 ## Light runs
 
-A run is light when your bead or its run epic carries the `run:light`
+A run is light when your ticket or its run epic carries the `run:light`
 label. It trades robustness for velocity: no Mason, Sage or Archivist work,
-no `review:inline` reviews even where a bead has the label, and at most one
+no `review:inline` reviews even where a ticket has the label, and at most one
 final Warden for the whole run. File follow-ups only for real bugs, as
-`role:executor` beads with no review of their own. If the final Warden has
+`role:executor` tickets with no review of their own. If the final Warden has
 not started, make it depend on each follow-up you file
 (`dep add <warden> <follow-up>`) so it still runs last.
 
 ## Start
 
-1. Run the `enact start <bead> --reservation <token>` command in your spawn
+1. Run the `enact start <ticket> --reservation <token>` command in your spawn
    prompt from the project's main checkout. It binds that reservation to your
-   session ID. Older prompts without a token use `enact start <bead>` only
+   session ID. Older prompts without a token use `enact start <ticket>` only
    after the vizier records your exact session ID. Exit 3 means ownership
    changed: stop, report it and end your turn; never overwrite the new owner.
-2. Title your session `<emoji> [<bead>] <short imperative summary>` with
+2. Title your session `<emoji> [<ticket>] <short imperative summary>` with
    `set_session_title` on `self` (Claude Desktop) or `set_thread_title`
    (Codex). The emoji is in your prompt. If step 1 exits 3, still title
-   yourself `✅ [<bead>] ...` before ending your turn.
+   yourself `✅ [<ticket>] ...` before ending your turn.
 
 **Every final turn ends on a status title.** Users read whether a session
 is still running from the emoji alone, so whenever you end your turn for
-good, retitle first: `✅ [<bead>] <same summary>` when your work is done or
+good, retitle first: `✅ [<ticket>] <same summary>` when your work is done or
 there is nothing left for you (closed, obsolete, lost ownership), or
-`⛔ [<bead>] <same summary>` when you stop with work unfinished (released,
+`⛔ [<ticket>] <same summary>` when you stop with work unfinished (released,
 paused, blocked, waiting on recovery). Never end on your role emoji.
-3. Run `enact brief <bead>`: in one read it gives the bead with its
+3. Run `enact brief <ticket>`: in one read it gives the ticket with its
    comments, its epics (the run epic holds the plan summary and code map),
    each dependency's close reason, commits, touched files and handoff note,
-   and the other beads in its lane. Read the project's `AGENTS.md`.
-4. **Re-validate the bead.** It may have been planned days ago. If the code
-   has moved on, adapt the plan to the code as it is now. If the bead is
-   obsolete, close it with `enact close <bead> --reason "obsolete: ..."`. If it
-   is too big, do the first coherent part and file the rest as new beads.
+   and the other tickets in its lane. Read the project's `AGENTS.md`.
+4. **Re-validate the ticket.** It may have been planned days ago. If the code
+   has moved on, adapt the plan to the code as it is now. If the ticket is
+   obsolete, close it with `enact close <ticket> --reason "obsolete: ..."`. If it
+   is too big, do the first coherent part and file the rest as new tickets.
 
 ## Context economy
 
 Every file you read stays in your context and is paid for again on every
 later step, so explore deliberately:
 
-- Start from the brief, the files the bead and its dependencies' handoffs
+- Start from the brief, the files the ticket and its dependencies' handoffs
   name, and any code map in `AGENTS.md` or the epic. Widen only when they
-  are not enough, and note on the bead what the planner missed.
+  are not enough, and note on the ticket what the planner missed.
 - Prefer `grep` and line ranges to whole files, and focused test runs to
   full suites until you verify before pushing.
 - Read only your own role file and the sections of this one you need.
@@ -85,14 +85,14 @@ later step, so explore deliberately:
 
 ## Work
 
-- Create your worktree with `enact worktree create <bead>` and work only in
+- Create your worktree with `enact worktree create <ticket>` and work only in
   the printed `path`. New trees start at `origin/staging`. `recovered: true`
   means you are taking over someone's work: follow `recovery.md` first.
   Never edit the main checkout.
 - Follow `AGENTS.md` for conventions, commit style and test commands.
-- `enact push --ticket <bead>` (run inside the worktree) rebases onto
+- `enact push --ticket <ticket>` (run inside the worktree) rebases onto
   `origin/staging`, merges a diverged `master`, runs the fast checks, pushes,
-  records the commits on your bead, starts slow CI and deletes the worktree.
+  records the commits on your ticket, starts slow CI and deletes the worktree.
   If push succeeds but bookkeeping fails, retry it: its receipt repairs
   metadata and CI. On exit 2, fix what it reports (rebase conflicts, failing
   fast checks) in the same worktree and run it again. A ticket server outage
@@ -105,9 +105,9 @@ later step, so explore deliberately:
 - Slow CI runs after your push without you. Do not wait for it, unless
   push printed `watch_ci`: then your vizier has stopped renewing its lease,
   nobody else will repair a failure, and you follow the notice before
-  finishing. A failure becomes a Steward bead linked to affected runs. The
+  finishing. A failure becomes a Steward ticket linked to affected runs. The
   vizier keeps the run alive until all delivered commits, including
-  repairs, reach green master; closing your bead does not declare the run
+  repairs, reach green master; closing your ticket does not declare the run
   complete.
 - Wait on a long job (a benchmark, a VM or remote run, a sweep, slow CI) in
   the foreground, or as a background command your host tracks and whose
@@ -115,7 +115,7 @@ later step, so explore deliberately:
   job on another machine, a background loop that polls until it ends).
   Never end your turn on a job nothing will report: no notice wakes you
   when it finishes, and the vizier looks at idle sessions only after 15
-  minutes without a bead update. Another bead's work landing is not a job
+  minutes without a ticket update. Another ticket's work landing is not a job
   to wait on: release instead ("Speculative defaults").
 - Staging may be red because of someone else's change. That alone is not
   your problem. Do not stop for it; fast checks still gate your push.
@@ -143,18 +143,18 @@ on `dst`. Record decisions and handoffs on the ticket.
 
 ## Lanes
 
-A `lane:<name>` label groups related beads that one session works one at a
-time, keeping what it learned. Deliver each bead on its own (worktree,
+A `lane:<name>` label groups related tickets that one session works one at a
+time, keeping what it learned. Deliver each ticket on its own (worktree,
 push, handoff, close), closing with `--continue` ([Finish](#finish)). If
-the result has a `next` bead, it is already claimed for you: retitle to
+the result has a `next` ticket, it is already claimed for you: retitle to
 `[<next>]` (outside inline runs), run `enact brief` on it and work it from
-[Start](#start) step 4. When your context is already heavy (several beads
+[Start](#start) step 4. When your context is already heavy (several tickets
 in, or long debugging), close without `--continue`: a fresh session takes
 the rest of the lane.
 
-## Follow-up beads
+## Follow-up tickets
 
-Every follow-up bead costs a whole session, so file only **essential** ones:
+Every follow-up ticket costs a whole session, so file only **essential** ones:
 a real bug, a missing test for risky behavior, a design problem that will
 bite soon, tooling that is broken or badly slow. Do not file nice-to-haves,
 style cleanups or speculative ideas; mention them in your closing summary at
@@ -164,34 +164,34 @@ Use an allowed role, with `review:inline` or a dependent Warden for
 substantial fixes as the run requires; do not introduce a forbidden role or
 quietly expand your scope.
 
-A problem that stops you verifying your own bead is never a nice-to-have.
+A problem that stops you verifying your own ticket is never a nice-to-have.
 When a tool, checker or test harness defect means a check your acceptance
 relies on cannot run (a name mismatch, an unreachable scenario, a broken
-fixture), fix it in your bead if it is within reach, even when it touches
-several call sites. If it is genuinely separate work, file a follow-up bead
+fixture), fix it in your ticket if it is within reach, even when it touches
+several call sites. If it is genuinely separate work, file a follow-up ticket
 whose acceptance includes running the checks it unblocks, and record on your
-bead which checks went unrun and why. Never park it in a handoff or closing
+ticket which checks went unrun and why. Never park it in a handoff or closing
 summary: nothing acts on those, so the gap silently becomes permanent.
 
-Never file a bead whose acceptance needs time to pass ("measure a day of
+Never file a ticket whose acceptance needs time to pass ("measure a day of
 pushes after the change", "over a normal running day"): no session can wait
-hours, and the bead holds its epic and the whole run open. Ship the change
+hours, and the ticket holds its epic and the whole run open. Ship the change
 with a measurement you can take now (existing logs, a replay, a benchmark).
 If real later observation is still worth having, file it as an
-**observation bead**: no `--parent`, label `enact:observe`, the exact
+**observation ticket**: no `--parent`, label `enact:observe`, the exact
 query and threshold in the acceptance, and deferred to the date the data
 will exist (`tk defer <id> --until <date>`
 on the server). It wakes as ordinary open work outside any run, for a sweep
 or a later run to pick up.
 
-If your own bead's acceptance needs time to pass, do not wait for it. Do
+If your own ticket's acceptance needs time to pass, do not wait for it. Do
 the change, take every measurement possible now, file the remaining
-observation as an observation bead, record its ID and what you measured on
-your bead, and close yours.
+observation as an observation ticket, record its ID and what you measured on
+your ticket, and close yours.
 
-If a Warden bead that has not started yet depends on yours, check the
+If a Warden ticket that has not started yet depends on yours, check the
 incoming edges as described in [Task backend](#task-backend). If the Warden
-will review the affected code, comment on its bead instead of filing one.
+will review the affected code, comment on its ticket instead of filing one.
 The Warden fixes it or files it.
 
 Otherwise create it with a description, verifiable `--acceptance`,
@@ -205,13 +205,13 @@ Publish as described in [Task backend](#task-backend) before closing.
 1. Make sure every change is pushed (`enact push`) and essential follow-ups
    are filed.
    If you made no code change, remove your worktree with
-   `enact worktree remove <bead>`.
+   `enact worktree remove <ticket>`.
 2. Leave a comment starting with `Handoff:` for whoever builds on or reviews
    your work. Give the files and functions touched, decisions and what a
-   reviewer should check. `enact brief` shows it to every dependent bead.
-3. `enact close <bead> --reason "<one-line outcome>"`, adding `--continue`
-   in a [lane](#lanes). If it returns a `next` bead, work that one now.
-4. Retitle your session `✅ [<bead>] <same summary>`.
+   reviewer should check. `enact brief` shows it to every dependent ticket.
+3. `enact close <ticket> --reason "<one-line outcome>"`, adding `--continue`
+   in a [lane](#lanes). If it returns a `next` ticket, work that one now.
+4. Retitle your session `✅ [<ticket>] <same summary>`.
 5. End your turn with a short summary: what changed, surprises, follow-ups
    filed. Do not archive yourself; the vizier reuses or archives you.
 
@@ -220,41 +220,41 @@ Publish as described in [Task backend](#task-backend) before closing.
 Enact completes work speculatively: no session, vizier or Justiciar ever
 asks the user to unblock the graph. When a choice is yours to make, take
 the least-blocking default, apply it, and record the choice and its reason
-on the bead and, when it changes the run, on the run epic. Defaults:
+on the ticket and, when it changes the run, on the run epic. Defaults:
 
-- **A bead pinned** (`enact_host`, `enact_provider`) to a host or provider
+- **A ticket pinned** (`enact_host`, `enact_provider`) to a host or provider
   no vizier serves: unpin it if it can run here; otherwise move it out of
   the epic by setting its parent to an empty string. Leave it open for that
   host and drop edges so nothing in the epic waits on it.
-- **A bead only another machine can do or check**: its failure came from
+- **A ticket only another machine can do or check**: its failure came from
   that host (its description, log or CI metadata says so), or it needs that
   OS, a device or hardware this host lacks, or that host's local logs. Do
   not try to reach that machine or wait for it. If the failure is the
   machine's own environment (a broken toolchain, a full disk), say so on
-  the bead. Pin it with `enact meta <bead> enact_host=<host>`, comment
+  the ticket. Pin it with `enact meta <ticket> enact_host=<host>`, comment
   why, and `enact release` it; the pin rule above then applies.
-- **A reported-only or non-gating bead** (benchmark, measurement,
+- **A reported-only or non-gating ticket** (benchmark, measurement,
   exploration) blocking closure or later work: remove its dependents' edges
   so it leaves the critical path; it still runs when it can.
-- **A planning or decomposition bead held only by an epic-level edge** can
-  start early, since the beads it files stay gated: reparent it to the run
+- **A planning or decomposition ticket held only by an epic-level edge** can
+  start early, since the tickets it files stay gated: reparent it to the run
   epic. An epic-level edge that only orders planning is removed.
-- **Several beads failing for one cause** (a shared test fault, a broken
-  helper): file one fix bead, make each affected bead depend on it, release
+- **Several tickets failing for one cause** (a shared test fault, a broken
+  helper): file one fix ticket, make each affected ticket depend on it, release
   or close yours with a pointer, and keep going.
-- **Your bead needs another bead's work that has not reached staging**: its
+- **Your ticket needs another ticket's work that has not reached staging**: its
   change, its fix for a check your push fails, or a Steward's repair. Do not
   wait for it in your session: a watch loop on `origin/staging` holds a run
   slot doing nothing, often for an hour. Commit what you have to your
-  branch, add the edge (`dep add <yours> <theirs>`), comment on your bead
+  branch, add the edge (`dep add <yours> <theirs>`), comment on your ticket
   what you need from it and where you stopped, and
-  `enact release <bead> --reason "waits on <theirs>"`. Release pushes your
-  commits to `enact/<bead>` on the remote, so the next session resumes from
+  `enact release <ticket> --reason "waits on <theirs>"`. Release pushes your
+  commits to `enact/<ticket>` on the remote, so the next session resumes from
   them on any host (`recovery.md`); uncommitted edits stay behind. If
   release fails because that push was rejected, fix the cause it reports
   and release again; never push the branch yourself. The vizier starts
-  your bead again once `<theirs>` closes. If the work you need has no
-  bead, file one first. The exception is a bead that is closed already:
+  your ticket again once `<theirs>` closes. If the work you need has no
+  ticket, file one first. The exception is a ticket that is closed already:
   its commits are on staging, so rebase (`enact push` does) instead of
   waiting.
 - **A performance figure measured on a loaded machine**: report it, never
@@ -264,7 +264,7 @@ on the bead and, when it changes the run, on the run epic. Defaults:
 Change only what the default needs; never take over another worker's
 assignment. Only missing access, credentials, a decision only the user can
 make or an irreversible outward action go to the Justiciar (`recovery.md`),
-which drops that one bead from the run rather than holding the run.
+which drops that one ticket from the run rather than holding the run.
 
 ## When things go wrong
 
@@ -274,8 +274,8 @@ which drops that one bead from the run rather than holding the run.
   every push rejected, disk full, a core tool broken for everyone) **or a
   resume after an interruption**: read `recovery.md` and follow it.
 - Never wait for a human, never end your turn mid-task to ask a question, and
-  never leave your bead in progress when you stop for good. If you truly
+  never leave your ticket in progress when you stop for good. If you truly
   cannot continue in an active run, comment the exact state and run
-  `enact release <bead> --reason "..."`, then retitle ⛔. Paused or blocked
+  `enact release <ticket> --reason "..."`, then retitle ⛔. Paused or blocked
   runs retain their assignments and unfinished acceptance until explicit
   resume.
