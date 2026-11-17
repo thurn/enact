@@ -28,7 +28,29 @@ export function registeredMachine(accepted: string | undefined, hash: string): s
 }
 
 const refreshInterval = 60_000;
-const tokenRef = /^refs\/enact\/tokens\/([a-z0-9][a-z0-9_-]*)\/([a-f0-9]{64})$/;
+const advertisementType = "application/x-git-upload-pack-advertisement";
+const serviceBanner = "001e# service=git-upload-pack\n0000";
+const tokenRef = /^(?:[a-f0-9]{40}|[a-f0-9]{64}) refs\/enact\/tokens\/([a-z0-9][a-z0-9_-]*)\/([a-f0-9]{64})\n?$/;
+
+function advertisedTokens(data: Uint8Array): Map<string, string> | undefined {
+  const decoder = new TextDecoder();
+  if (decoder.decode(data.subarray(0, serviceBanner.length)) !== serviceBanner) return;
+
+  const tokens = new Map<string, string>();
+  // Git's four hex digits count bytes, including the digits themselves.
+  for (let start = serviceBanner.length; start + 4 <= data.length;) {
+    const header = decoder.decode(data.subarray(start, start + 4));
+    if (!/^[a-f0-9]{4}$/.test(header)) return;
+    const length = Number.parseInt(header, 16);
+    if (length === 0) return start + 4 === data.length ? tokens : undefined;
+    if (length < 4 || start + length > data.length) return;
+    const [ref] = decoder.decode(data.subarray(start + 4, start + length)).split("\0", 1);
+    const match = tokenRef.exec(ref);
+    if (match) tokens.set(match[2], match[1]);
+    start += length;
+  }
+  return undefined;
+}
 
 export class TokenRegistry {
   private pending?: Promise<void>;
@@ -53,40 +75,24 @@ export class TokenRegistry {
       this.pending = this.refresh(repository).finally(() => { this.pending = undefined; });
     }
     await this.pending;
-    const machine = registeredMachine(this.store.meta("token_hashes"), hash);
-    console.info("Ticket token lookup", {repository, matched: machine !== undefined});
-    return machine;
+    return registeredMachine(this.store.meta("token_hashes"), hash);
   }
 
   private async refresh(repository: string): Promise<void> {
-    let refs: unknown;
+    let accepted: Map<string, string> | undefined;
     try {
-      const response = await fetch(`https://api.github.com/repos/${repository}/git/matching-refs/enact/tokens`, {
-        headers: {Accept: "application/vnd.github+json", "User-Agent": "enact-tickets"},
+      // GitHub's anonymous REST quota is shared by Cloudflare's egress IP.
+      const response = await fetch(`https://github.com/${repository}.git/info/refs?service=git-upload-pack`, {
+        headers: {Accept: advertisementType},
         redirect: "manual",
         signal: AbortSignal.timeout(5_000),
       });
-      console.info("GitHub ticket token refs", {
-        repository,
-        status: response.status,
-        remaining: response.headers.get("x-ratelimit-remaining"),
-        retryAfter: response.headers.get("retry-after"),
-      });
-      if (!response.ok) return;
-      refs = await response.json();
-    } catch (error) {
-      console.warn("GitHub ticket token refresh failed", {repository, error: error instanceof Error ? error.name : "unknown"});
+      if (!response.ok || response.headers.get("Content-Type") !== advertisementType) return;
+      accepted = advertisedTokens(new Uint8Array(await response.arrayBuffer()));
+    } catch {
       return;
     }
-    if (!Array.isArray(refs)) return;
-
-    const accepted = new Map<string, string>();
-    for (const entry of refs) {
-      if (typeof entry?.ref !== "string") continue;
-      const match = tokenRef.exec(entry.ref);
-      if (match) accepted.set(match[2], match[1]);
-    }
-    this.save("token_hashes", JSON.stringify(Object.fromEntries(accepted)));
+    if (accepted) this.save("token_hashes", JSON.stringify(Object.fromEntries(accepted)));
   }
 
   private save(key: string, value: string): void {

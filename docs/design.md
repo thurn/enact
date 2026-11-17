@@ -2154,9 +2154,11 @@ idle connection costs nothing.
   project's GitHub remote, pointing at the repository's first commit. It
   deletes the machine's older refs.
 - On a write whose token hash is not in `meta.token_hashes`, the server
-  calls GitHub's public `git/matching-refs/enact/tokens` for the project's
-  repository, at most once a minute, replaces the stored set with the ref
-  names, and decides. The repository for each project is a Worker variable.
+  reads the project's public Git upload-pack ref advertisement at most once
+  a minute. It replaces the stored set with the advertised token refs and
+  checks the request again. GitHub's anonymous REST quota was exhausted on
+  the production Worker's egress IP. The repository for each project is a
+  Worker variable.
 
 ### 9. The `tk` command line
 

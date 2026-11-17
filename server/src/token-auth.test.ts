@@ -5,7 +5,19 @@ import {expect, test, vi} from "vitest";
 async function tokenRef(machine: string, token: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   const hex = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  return {ref: `refs/enact/tokens/${machine}/${hex}`};
+  return `refs/enact/tokens/${machine}/${hex}`;
+}
+
+function packet(text: string): string {
+  return (new TextEncoder().encode(text).length + 4).toString(16).padStart(4, "0") + text;
+}
+
+function advertisement(refs: string[]): string {
+  const commit = "a".repeat(40);
+  return packet("# service=git-upload-pack\n") + "0000"
+    + packet(`${commit} HEAD\0symref=HEAD:refs/heads/master\n`)
+    + packet(`${commit} refs/heads/café\n`)
+    + refs.map((ref) => packet(`${commit} ${ref}\n`)).join("") + "0000";
 }
 
 test.each([
@@ -15,19 +27,19 @@ test.each([
   const original = "original-bearer";
   const rotated = "rotated-bearer";
   const machine = "test-machine";
-  const url = `https://api.github.com/repos/${repository}/git/matching-refs/enact/tokens`;
+  const url = `https://github.com/${repository}.git/info/refs?service=git-upload-pack`;
   const stub = env.TICKETS.getByName(project);
-  let refs = [await tokenRef(machine, original)];
+  let body = advertisement([await tokenRef(machine, original)]);
   let status = 200;
   const realFetch = globalThis.fetch;
   const github = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     // Let the Worker runtime validate the outbound options before returning fixture refs.
     new Request(input, init);
-    return Response.json(refs, {status});
+    return new Response(body, {status, headers: {"Content-Type": "application/x-git-upload-pack-advertisement"}});
   });
   vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
     const address = input instanceof Request ? input.url : String(input);
-    return address.startsWith("https://api.github.com/") ? github(input, init) : realFetch(input, init);
+    return address === url ? github(input, init) : realFetch(input, init);
   });
 
   const write = (token?: string) => exports.default.fetch(`https://example.com/${project}/api/events`, {
@@ -57,7 +69,7 @@ test.each([
 
     await allowRefresh();
     status = 302;
-    refs = [await tokenRef(machine, rotated)];
+    body = advertisement([await tokenRef(machine, rotated)]);
     expect((await write(rotated)).status).toBe(401);
     expect((await write(rotated)).status).toBe(401);
     expect((await write(original)).status).toBe(200);
@@ -65,10 +77,15 @@ test.each([
 
     await allowRefresh();
     status = 200;
-    refs = [await tokenRef(machine, rotated), {ref: `${(await tokenRef(machine, original)).ref}/extra`}];
+    body = body.slice(0, -4);
+    expect((await write(rotated)).status).toBe(401);
+    expect((await write(original)).status).toBe(200);
+
+    await allowRefresh();
+    body = advertisement([await tokenRef(machine, rotated), `${await tokenRef(machine, original)}/extra`]);
     expect((await write(rotated)).status).toBe(200);
     expect((await write(original)).status).toBe(401);
-    expect(github).toHaveBeenCalledTimes(3);
+    expect(github).toHaveBeenCalledTimes(4);
   } finally {
     vi.unstubAllGlobals();
   }
